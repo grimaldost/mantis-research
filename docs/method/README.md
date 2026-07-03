@@ -20,7 +20,7 @@ The method (§7) needs these slots filled in any project. Each maps to a templat
 |---|---|
 | DoR gate | `definition-of-ready.md` |
 | Pre-mortem | `pre-mortem-prompt.md` |
-| Wave budget | `series-toml-skeleton.md` (`[budget]` block) |
+| Wave budget | `series-toml-skeleton.md` (convoy `[governance]` budget) |
 
 ## Using the kit in a new project
 
