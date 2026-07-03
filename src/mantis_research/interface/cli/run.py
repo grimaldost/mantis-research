@@ -5,7 +5,7 @@ flags (``--parallel``, ``--dry-run``, ``--force``, ``--only``) and route
 through ``dispatch_stage()``.
 
 Note: this module deliberately does NOT use ``from __future__ import
-annotations`` — typer evaluates annotations at runtime to build option
+annotations`` - typer evaluates annotations at runtime to build option
 metadata, and that requires real types (``Path``, ``list``, ...) in the
 function signature, not strings.
 """
@@ -36,7 +36,7 @@ def claude(
     force: Annotated[bool, typer.Option('--force')] = False,
     only: Annotated[list[str] | None, typer.Option('--only')] = None,
 ) -> None:
-    """Stage 1 — Claude research substrate."""
+    """Stage 1 - Claude research substrate."""
     _exit_with(
         dispatch_stage('claude', config, parallel=parallel, dry_run=dry_run, force=force, only=only)
     )
@@ -50,7 +50,7 @@ def gemini(
     force: Annotated[bool, typer.Option('--force')] = False,
     only: Annotated[list[str] | None, typer.Option('--only')] = None,
 ) -> None:
-    """Stage 2 (legacy) — Gemini research via OAuth CLI."""
+    """Stage 2 (legacy) - Gemini research via OAuth CLI."""
     _exit_with(
         dispatch_stage('gemini', config, parallel=parallel, dry_run=dry_run, force=force, only=only)
     )
@@ -64,7 +64,7 @@ def openrouter(
     force: Annotated[bool, typer.Option('--force')] = False,
     only: Annotated[list[str] | None, typer.Option('--only')] = None,
 ) -> None:
-    """Stage 2 (new) — research via OpenRouter HTTP. Requires OPENROUTER_API_KEY in .env."""
+    """Stage 2 (new) - research via OpenRouter HTTP. Requires OPENROUTER_API_KEY in .env."""
     _exit_with(
         dispatch_stage(
             'openrouter', config, parallel=parallel, dry_run=dry_run, force=force, only=only
@@ -80,7 +80,7 @@ def synthesis(
     force: Annotated[bool, typer.Option('--force')] = False,
     only: Annotated[list[str] | None, typer.Option('--only')] = None,
 ) -> None:
-    """Stage 3 — synthesis + journal (2-turn Claude session)."""
+    """Stage 3 - synthesis + journal (2-turn Claude session)."""
     _exit_with(
         dispatch_stage(
             'synthesis', config, parallel=parallel, dry_run=dry_run, force=force, only=only
@@ -96,7 +96,7 @@ def journal_passes(
     force: Annotated[bool, typer.Option('--force')] = False,
     only: Annotated[list[str] | None, typer.Option('--only')] = None,
 ) -> None:
-    """Stage 3.5 — journal augmentation with focused depth-passes."""
+    """Stage 3.5 - journal augmentation with focused depth-passes."""
     _exit_with(
         dispatch_stage(
             'journal-passes', config, parallel=parallel, dry_run=dry_run, force=force, only=only
@@ -112,7 +112,7 @@ def falsification(
     force: Annotated[bool, typer.Option('--force')] = False,
     only: Annotated[list[str] | None, typer.Option('--only')] = None,
 ) -> None:
-    """Stage 4 (optional) — adversarial counter-evidence pass."""
+    """Stage 4 (optional) - adversarial counter-evidence pass."""
     _exit_with(
         dispatch_stage(
             'falsification', config, parallel=parallel, dry_run=dry_run, force=force, only=only
@@ -128,7 +128,7 @@ def claude_prior(
     force: Annotated[bool, typer.Option('--force')] = False,
     only: Annotated[list[str] | None, typer.Option('--only')] = None,
 ) -> None:
-    """Stage 5-input — topic-title-only Claude baseline (for evaluation Gate 3)."""
+    """Stage 5-input - topic-title-only Claude baseline (for evaluation Gate 3)."""
     _exit_with(
         dispatch_stage(
             'claude-prior', config, parallel=parallel, dry_run=dry_run, force=force, only=only
@@ -144,7 +144,7 @@ def evaluation(
     force: Annotated[bool, typer.Option('--force')] = False,
     only: Annotated[list[str] | None, typer.Option('--only')] = None,
 ) -> None:
-    """Stage 5 (optional) — score the synthesis against the rubric."""
+    """Stage 5 (optional) - score the synthesis against the rubric."""
     _exit_with(
         dispatch_stage(
             'evaluation', config, parallel=parallel, dry_run=dry_run, force=force, only=only

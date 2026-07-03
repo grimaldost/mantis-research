@@ -29,7 +29,7 @@ app = typer.Typer(
     name='mantis',
     no_args_is_help=True,
     help=(
-        'Multi-model research pipeline harness — Claude + Gemini + OpenRouter, '
+        'Multi-model research pipeline harness - Claude + Gemini + OpenRouter, '
         'with synthesis, journal-augmentation, falsification, and evaluation stages.'
     ),
 )
