@@ -29,14 +29,28 @@ research briefs **by path** — read those files for full text. A large sidecar 
 truncated inline (`truncated` reports what was omitted per list); the complete
 sidecar is always on disk at `outputs.sidecar`.
 
-## Requirements
+## Setup (first run)
 
-- The synthesis / journal / falsification / evaluation stages drive the local
-  `claude` CLI, so run this on a machine with an **authenticated Claude Code
-  seat** (ADR-0009 — the tool is local-first).
-- The research substrates use OpenRouter over HTTP — set `OPENROUTER_API_KEY`
-  (see `.env.template`).
-- `uv` must be installed; the server launches via `uv run`.
+If the `research` tool or the `mantis` CLI isn't available yet, bootstrap it from
+scratch — **no clone needed** (`uv` must be installed):
+
+1. **Install** the published wheel as an isolated tool:
+   `uv tool install git+https://github.com/grimaldost/mantis-research`.
+   This puts `mantis` (CLI) and `mantis-mcp` (the stdio MCP server) on your `PATH`.
+2. **OpenRouter key** — the research substrates need `OPENROUTER_API_KEY`. Check
+   `echo $OPENROUTER_API_KEY`; if it's empty, get one at
+   <https://openrouter.ai/settings/keys> and set it in the environment
+   (`export OPENROUTER_API_KEY=sk-or-…`; on Windows `setx OPENROUTER_API_KEY …`,
+   then restart the shell). The installed tool reads the key from the environment;
+   a source clone also reads a local `.env` (see `.env.template`).
+3. **Claude seat** — synthesis / journal / falsification / evaluation drive the
+   local `claude` CLI (`claude --version`), so run on a machine with an
+   authenticated Claude Code seat (ADR-0009, local-first). Research-only runs
+   (OpenRouter substrates) work without it.
+4. **Register as an MCP server** so agents get the `research` tool:
+   `claude mcp add mantis-research --scope user -- mantis-mcp`.
+5. **Verify** with no spend: `mantis research "smoke test" --dry-run` should print
+   a manifest with `"ok": true`.
 
 ## Example
 
