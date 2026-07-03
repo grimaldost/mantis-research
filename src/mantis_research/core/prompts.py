@@ -38,11 +38,11 @@ SYNTHESIS = """You are the synthesis stage of a multi-model research pipeline. Y
 
 ## Sources to read
 
-<source role="primary" model="claude-opus-4-7" effort="max">
+<source role="primary" label="{primary_label}" effort="max">
 {claude_path} ({claude_size_kb:.1f} KB)
 </source>
 
-<source role="secondary" model="gemini-3-flash-preview-via-oauth" count="{gemini_count}">
+<source role="secondary" count="{gemini_count}">
 {gemini_block}
 </source>
 

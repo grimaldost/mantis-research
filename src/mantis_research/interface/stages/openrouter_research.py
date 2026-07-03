@@ -174,6 +174,7 @@ class OpenRouterResearchStage:
                 result=result,
                 out_path=out_path,
                 dry_run=ctx.dry_run,
+                model=resolution.model_id,
             )
             self._upsert_subsession(state, ss)
 
@@ -223,6 +224,7 @@ class OpenRouterResearchStage:
         result: Any,
         out_path: Path,
         dry_run: bool,
+        model: str | None = None,
     ) -> SubsessionResult:
         if not result.success:
             error = (
@@ -235,6 +237,7 @@ class OpenRouterResearchStage:
                 status='failed',
                 duration_s=result.duration_s,
                 error=error,
+                model=model,
             )
         if not dry_run:
             content = result.output.strip()
@@ -244,18 +247,22 @@ class OpenRouterResearchStage:
                     status='failed',
                     duration_s=result.duration_s,
                     error='empty content',
+                    model=model,
                 )
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(content + '\n', encoding='utf-8')
             size = out_path.stat().st_size
         else:
             size = 0
+        # The served model (``model_used`` from the response) is ground truth —
+        # it reflects any provider fallback — so prefer it over the requested id.
         return SubsessionResult(
             subslug=subslug,
             status='done',
             duration_s=result.duration_s,
             output_bytes=size,
             output_path=str(out_path),
+            model=getattr(result, 'model_used', None) or model,
             **OpenRouterResearchStage._usage_fields(result),
         )
 

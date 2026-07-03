@@ -101,6 +101,18 @@ def _openrouter_brief(dirs: RunDirs, topic_id: str, slug: str, subslug: str) -> 
     return None
 
 
+def _openrouter_subslug(path: Path, or_dir: Path, stem: str) -> str | None:
+    """Return the subslug of an OpenRouter brief path, or None if it isn't one.
+
+    Multi-part layout ``outputs/openrouter/<stem>/<subslug>.md`` → ``<subslug>``;
+    single layout ``outputs/openrouter/<stem>.md`` → ``'single'``. A path outside
+    the openrouter output dir (a Claude/Gemini brief) → ``None``.
+    """
+    if or_dir == path.parent or or_dir in path.parents:
+        return path.stem if path.parent.name == stem else 'single'
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class _Briefs:
     """Resolved primary + secondary briefs for a synthesis run (ADR-0005)."""
@@ -455,24 +467,37 @@ class SynthesisStage:
         state: SynthesisState,
     ) -> ResearchSidecar:
         """Merge runner-authored identity + provenance onto the model's sidecar."""
-        sources: list[SourceRef] = []
-        if briefs.primary_path is not None:
-            sources.append(
-                SourceRef(
-                    label=briefs.primary_label,
-                    path=briefs.primary_path.as_posix(),
-                    bytes=briefs.primary_path.stat().st_size,
-                )
-            )
-        sources.extend(
-            SourceRef(label=label, path=p.as_posix(), bytes=p.stat().st_size)
-            for label, p in briefs.secondaries
-        )
-        # Aggregate research cost/usage from the OpenRouter state (empty subsessions
-        # when absent → duration-only provenance, for Claude/Gemini-only runs).
+        # Load the OpenRouter state once: it feeds both the per-source model ids
+        # (empty subsessions when absent → Claude/Gemini-only run) and the cost
+        # aggregation below.
         or_state = OpenRouterResearchState.load_or_create(
             dirs.state('openrouter'), topic.id, topic.slug
         )
+        or_dir = dirs.output('openrouter')
+        stem = topic_stem(topic.id, topic.slug)
+        model_by_subslug = {s.subslug: s.model for s in or_state.subsessions}
+
+        def _source_ref(label: str, path: Path) -> SourceRef:
+            # An OpenRouter brief carries an `openrouter:<subslug>` label and the
+            # resolved model id, so an agent can attribute the brief to the model
+            # that produced it (was: label collapsed to a bare 'openrouter',
+            # model_id null). Claude/Gemini briefs keep their stage label; their
+            # model is not tracked in state, so model_id stays None.
+            subslug = _openrouter_subslug(path, or_dir, stem)
+            if subslug is not None:
+                return SourceRef(
+                    label=f'openrouter:{subslug}',
+                    path=path.as_posix(),
+                    model_id=model_by_subslug.get(subslug),
+                    bytes=path.stat().st_size,
+                )
+            return SourceRef(label=label, path=path.as_posix(), bytes=path.stat().st_size)
+
+        sources: list[SourceRef] = []
+        if briefs.primary_path is not None:
+            sources.append(_source_ref(briefs.primary_label, briefs.primary_path))
+        sources.extend(_source_ref(label, p) for label, p in briefs.secondaries)
+
         provenance = Provenance.from_subsessions(
             or_state.subsessions, synthesis_duration_s=state.turn_1_duration_s
         )

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import httpx
 import structlog
@@ -270,7 +270,7 @@ class OpenRouterHttpAdapter:
                 raw_output=raw_text,
             )
         msg = choices[0].get('message') or {}
-        content = msg.get('content') or ''
+        content = _coerce_content(msg.get('content'))
         finish_reason = choices[0].get('finish_reason')
         if not content.strip():
             return OpenRouterHttpResult(
@@ -291,6 +291,32 @@ class OpenRouterHttpAdapter:
             model_used=data.get('model') or options.model,
             usage=data.get('usage'),
         )
+
+
+def _coerce_content(content: object) -> str:
+    """Normalize an OpenRouter message ``content`` to a string.
+
+    Most providers return a string, but some return OpenAI-style content parts
+    (a list of ``{"type": "text", "text": ...}`` dicts) for multimodal/tool
+    responses. Concatenate the text parts so a non-string ``content`` never
+    reaches ``content.strip()`` as a list — which would raise ``AttributeError``
+    and crash the parse. Anything unrecognized coerces to an empty string, which
+    the caller treats as an empty (failed) response.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, dict):
+                d = cast('dict[str, Any]', part)
+                text = d.get('text') or d.get('content')
+                if isinstance(text, str):
+                    parts.append(text)
+            elif isinstance(part, str):
+                parts.append(part)
+        return ''.join(parts)
+    return ''
 
 
 def _pretty_json(obj: dict[str, Any]) -> str:

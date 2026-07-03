@@ -185,6 +185,64 @@ class TestSidecarEmission:
         assert prov.per_source_cost_usd == {'gpt-5-exa': 0.02, 'gemini-3-pro': 0.03}
         assert prov.synthesis_duration_s is not None  # runner still fills timing
 
+    async def test_sources_carry_openrouter_model_and_subslug_label(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # META fix: each OpenRouter source gets an `openrouter:<subslug>` label and
+        # its resolved model_id, so an agent can attribute a brief to the model
+        # that produced it (was: model_id null, every brief labeled 'openrouter').
+        monkeypatch.setattr('mantis_research.core.paths.outputs_root', lambda: tmp_path)
+        monkeypatch.setattr('mantis_research.core.paths.state_root', lambda: tmp_path / 'state')
+        or_out = tmp_path / 'sc' / 'openrouter' / '01-t'
+        or_out.mkdir(parents=True, exist_ok=True)
+        (or_out / 'openai.md').write_text('openai brief', encoding='utf-8')
+        (or_out / 'deepseek.md').write_text('deepseek brief', encoding='utf-8')
+        or_state_dir = tmp_path / 'state' / 'sc' / 'openrouter'
+        or_state_dir.mkdir(parents=True, exist_ok=True)
+        (or_state_dir / '1.json').write_text(
+            json.dumps(
+                {
+                    'id': '1',
+                    'slug': 't',
+                    'status': 'done',
+                    'subsessions': [
+                        {'subslug': 'openai', 'status': 'done', 'model': 'openai/gpt-5.5-pro'},
+                        {
+                            'subslug': 'deepseek',
+                            'status': 'done',
+                            'model': 'deepseek/deepseek-v4-pro',
+                        },
+                    ],
+                }
+            ),
+            encoding='utf-8',
+        )
+        cfg = load_batch_config(
+            {
+                'schema_version': 2,
+                'batch_name': 'sc',
+                'runner': {'layout': 'batch'},
+                'models': {
+                    'claude': {'model': 'claude-opus-4-7', 'effort': 'max'},
+                    'primary': 'openrouter:openai',
+                },
+                'topics': [
+                    {'id': '1', 'slug': 't', 'title': 'T', 'stages': {'claude': {'prompt': ''}}}
+                ],
+            }
+        )
+        synthesis_path = tmp_path / 'sc' / 'synthesis' / '01-t.md'
+        sidecar_path = tmp_path / 'sc' / 'synthesis' / '01-t.sidecar.json'
+        journal_path = tmp_path / 'sc' / 'journals' / '01-t-journal.md'
+        adapter = ScriptedAdapter(synthesis_path, sidecar_path, journal_path, [_VALID])
+        result = await _run(adapter, cfg, tmp_path, SynthesisState(id='1', slug='t'))
+        assert result.success
+        sc = ResearchSidecar.from_model_json(sidecar_path.read_text(encoding='utf-8'))
+        by_label = {s.label: s for s in sc.sources}
+        assert set(by_label) == {'openrouter:openai', 'openrouter:deepseek'}
+        assert by_label['openrouter:openai'].model_id == 'openai/gpt-5.5-pro'
+        assert by_label['openrouter:deepseek'].model_id == 'deepseek/deepseek-v4-pro'
+
     async def test_invalid_then_valid_reasks_without_second_brief(
         self, paths, tmp_path: Path
     ) -> None:

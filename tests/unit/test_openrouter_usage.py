@@ -64,3 +64,57 @@ class TestUsagePersistence:
         assert rec.tokens_prompt == 10
         assert rec.tokens_reasoning is None
         assert rec.cost_usd == 0.001
+
+
+class TestModelPersistence:
+    """The resolved/served model id lands on the subsession record (META fix), so
+    the synthesis stage can fill the sidecar's ``sources[].model_id``."""
+
+    def test_served_model_wins_over_requested(self, tmp_path: Path) -> None:
+        result = SimpleNamespace(
+            success=True,
+            output='a brief',
+            raw_output='',
+            duration_s=1.0,
+            status_code=200,
+            error=None,
+            usage=None,
+            model_used='openai/gpt-5.5-pro',  # what the provider actually served
+        )
+        rec = OpenRouterResearchStage._build_subsession_result(
+            subslug='openai',
+            result=result,
+            out_path=tmp_path / 'o.md',
+            dry_run=True,
+            model='auto:openai',  # the requested (sentinel) value
+        )
+        assert rec.model == 'openai/gpt-5.5-pro'  # served id, not the sentinel
+
+    def test_requested_model_used_when_response_omits_it(self, tmp_path: Path) -> None:
+        rec = OpenRouterResearchStage._build_subsession_result(
+            subslug='openai',
+            result=_result(None),  # no model_used attribute
+            out_path=tmp_path / 'o.md',
+            dry_run=True,
+            model='openai/gpt-5.5-pro',
+        )
+        assert rec.model == 'openai/gpt-5.5-pro'  # falls back to the requested id
+
+    def test_failed_subsession_records_attempted_model(self, tmp_path: Path) -> None:
+        result = SimpleNamespace(
+            success=False,
+            output='',
+            raw_output='oops',
+            duration_s=0.5,
+            status_code=500,
+            error='HTTP 500',
+        )
+        rec = OpenRouterResearchStage._build_subsession_result(
+            subslug='openai',
+            result=result,
+            out_path=tmp_path / 'o.md',
+            dry_run=False,
+            model='openai/gpt-5.5-pro',
+        )
+        assert rec.status == 'failed'
+        assert rec.model == 'openai/gpt-5.5-pro'

@@ -131,6 +131,35 @@ class TestTopicStateRoundTrip:
         assert loaded.status is TopicStatus.PENDING
 
 
+class TestAtomicSave:
+    """``save`` writes via a temp file + replace so a crash can't truncate an
+    existing state file (resumability, I5)."""
+
+    def test_save_leaves_no_temp_file(self, tmp_state_dir: Path) -> None:
+        ClaudeResearchState(id='1', slug='t', status=TopicStatus.DONE).save(tmp_state_dir)
+        assert (tmp_state_dir / '1.json').exists()
+        assert not (tmp_state_dir / '1.json.tmp').exists()
+
+    def test_failed_replace_preserves_existing_state(
+        self, tmp_state_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        path = tmp_state_dir / '1.json'
+        ClaudeResearchState(id='1', slug='t', status=TopicStatus.DONE).save(tmp_state_dir)
+        good = path.read_text(encoding='utf-8')
+
+        def boom(self: Path, target: Path) -> None:
+            raise OSError('simulated crash during replace')
+
+        monkeypatch.setattr(Path, 'replace', boom)
+        with pytest.raises(OSError, match='simulated crash'):
+            ClaudeResearchState(id='1', slug='t', status=TopicStatus.FAILED).save(tmp_state_dir)
+        # The prior DONE file is intact and still parses — not truncated.
+        assert path.read_text(encoding='utf-8') == good
+        assert (
+            ClaudeResearchState.load_or_create(tmp_state_dir, '1', 't').status is TopicStatus.DONE
+        )
+
+
 class TestTopicStateTransitions:
     def test_mark_in_flight_increments_attempts_and_sets_started_at(self) -> None:
         s = ClaudeResearchState(id='1', slug='x')

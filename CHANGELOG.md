@@ -7,6 +7,43 @@ under **Unreleased** until the first tag.
 
 ## [Unreleased]
 
+Pre-launch review round: fixes from a fresh-eyes review plus the P6 follow-ups.
+
+### Security — pre-launch review
+
+- **Scrubbed personal absolute paths from tracked files**: three
+  `tests/data/golden_state/*.json` fixtures and `docs/method/method-bindings.md`
+  embedded `C:\Users\…` paths (a username + a private project's location).
+  Fixtures now use neutral relative paths.
+- **Trimmed the private-tool method scaffolding** from `docs/method/`: removed the
+  files that bound the templates to private tooling (`method-bindings.md`,
+  `reflection-triage.md`) and the `pr-series/` orchestrator artifacts; the
+  remaining ADR / spec / DoR / DoD / pre-mortem templates are now tool-agnostic.
+
+### Fixed — pre-launch review
+
+- **Blocked-upstream topics no longer report success** (`interface/orchestrator.py`):
+  `_final_summary` counted only FAILED / RATE_LIMITED as failures, so a live run
+  whose synthesis blocked (e.g. a single-substrate request → no secondary brief)
+  exited 0 and the `research` tool / CLI returned `ok: true` with no synthesis and
+  no sidecar. A blocked topic now fails a live run; a dry run (whose adapters
+  legitimately produce no artifacts) still passes.
+- **Sidecar sources now carry the model id + a substrate label**
+  (`core/state.py`, `interface/stages/{openrouter_research,synthesis}.py`): the
+  resolved/served OpenRouter model is persisted per subsession and threaded into
+  `sources[].model_id`, and each brief is labelled `openrouter:<subslug>` instead
+  of a bare `openrouter`. The synthesis prompt no longer hard-codes stale model
+  names (`claude-opus-4-7` / a Gemini id) that mislabelled every Path-B brief.
+- **OpenRouter list-typed message content no longer crashes the parse**
+  (`interface/adapters/openrouter_http.py`): a provider returning OpenAI-style
+  content parts (a list) is concatenated rather than hitting `AttributeError` on
+  `content.strip()`.
+- **State writes are atomic** (`core/state.py`): `save()` writes a temp file then
+  `replace`s it into place, so a crash mid-write can no longer truncate an existing
+  state file and break resume (I5).
+
+## Agent-serving
+
 Agent-serving via MCP server + plugin (`docs/specs/0002-agent-serving-mcp-plugin.md`).
 
 ### Added — agent-serving

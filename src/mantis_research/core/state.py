@@ -86,12 +86,20 @@ class TopicState(BaseModel):
         return cls(id=topic_id, slug=slug)
 
     def save(self, state_dir: Path) -> None:
-        """Persist this state to ``state_dir/<id>.json`` (atomic-ish overwrite)."""
+        """Persist this state to ``state_dir/<id>.json`` atomically.
+
+        Write a sibling temp file then ``replace`` it into place, so a crash
+        mid-write leaves the previous state file intact rather than a truncated
+        one an interrupted run could no longer parse (resumability, I5).
+        ``Path.replace`` is atomic on the same filesystem on POSIX and Windows.
+        """
         state_dir.mkdir(parents=True, exist_ok=True)
         path = state_dir / f'{self.id}.json'
         # use mode='json' so enums serialize as their values
         payload = self.model_dump(mode='json')
-        path.write_text(json.dumps(payload, indent=2), encoding='utf-8')
+        tmp = path.with_name(f'{self.id}.json.tmp')
+        tmp.write_text(json.dumps(payload, indent=2), encoding='utf-8')
+        tmp.replace(path)
 
     # ── transition helpers (immutable updates by reassignment) ──
 
@@ -147,6 +155,12 @@ class SubsessionResult(BaseModel):
     output_bytes: int | None = None
     output_path: str | None = None
     error: str | None = None
+    # Resolved/served model id for this subsession (OpenRouter routes by model
+    # id). Additive optional field (I4); None for the Gemini CLI path and for a
+    # subsession that never reached a provider. The synthesis stage threads this
+    # into the sidecar's ``sources[].model_id`` so an agent can attribute each
+    # brief to the substrate that produced it.
+    model: str | None = None
     # Usage/cost (OpenRouter) — additive optional fields (I4); None when the
     # provider returned no usage block or for the Gemini CLI path.
     tokens_prompt: int | None = None
