@@ -3,9 +3,9 @@
 Injected into the reviewer and blocking: any unchecked item is `REQUEST_CHANGES`.
 Start from these project-agnostic items and add project-specific ones.
 
-This file is also the **promotion target for reflection triage** (Upgrade 3):
-when a trap recurs across rounds, add a line here so it is caught mechanically
-next time. That is how "a bug bites once" actually holds.
+This file is also the **promotion target for recurring traps**: when a trap
+recurs across rounds, add a line here so it is caught mechanically next time.
+That is how "a bug bites once" actually holds.
 
 ## Generic items
 
@@ -48,7 +48,7 @@ next time. That is how "a bug bites once" actually holds.
 - [ ] **Release notes in-wave** — behavior-changing PR carries its `CHANGELOG.md` entry
       (once §1 lands).
 - [ ] **Windows invocation** — no gate/script/doc introduced by the PR depends on a bare
-      `.exe` shim (`pytest`, `mantis`, `keel`); use `uv run python -m …` forms.
+      `.exe` shim (`pytest`, `mantis`); use `uv run python -m …` forms.
 
 ---
 *Keep this file in version control with the project. Each promoted reflection

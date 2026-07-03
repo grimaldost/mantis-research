@@ -1,7 +1,7 @@
 # series.toml skeleton (with wave budget)
 
-The full `series.toml` schema is owned by the series orchestrator (e.g.
-pr-pilot's `docs/series-toml-reference.md`) — this skeleton does not restate
+The full `series.toml` schema is owned by the series-orchestrator schema —
+this skeleton does not restate
 it. What it adds is the **`[budget]` block** (Upgrade 4): a wave-level forecast
 and a drift gate, extending per-PR scoring to the whole wave. Without an
 orchestrator, the skeleton still serves as the series' manual checklist.

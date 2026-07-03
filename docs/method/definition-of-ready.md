@@ -10,7 +10,7 @@ claim it is. DoD checks behaviour against an executable oracle (tests, types); D
 has no oracle for "is this approach right?". So DoR splits in two: a deterministic
 **Part A** (well-formedness — a script asserts it) and an externalized **Part B**
 (correctness — certified by a fresh reviewer, a judgment moved to a different
-context, not a machine verdict). `keel check-ready` enforces both halves: it passes
+context, not a machine verdict). The check-ready gate enforces both halves: it passes
 only when the spec is well-formed AND a blind pre-mortem certification is recorded
 (ADR-0002). It never green-lights a spec on structure alone.
 
@@ -40,7 +40,7 @@ is Part B's job).
       `artifact:line` row per finding (R1); when rows are present each anchor resolves (A12); a clean
       certify (folded in: none) dozes.
 
-### Reference: what `check_spec_ready` asserts
+### Reference: what the well-formedness checker asserts
 
 ```
 A1 fail unless >=1 "### §N" heading under "Numbered sections", all numbered
@@ -71,8 +71,8 @@ are stateless.
 
 - [ ] A pre-mortem pass has been run by a non-author reviewer, and the certification
       block records `Verdict: CERTIFIED` — or `CONDITIONAL-CERTIFY` with a named `Operator:`
-      (operator-accepted, ready modulo a named fix; `check-ready` passes with a WARN, not EXIT 1).
-      *(`keel check-ready` enforces this — B1.)*
+      (operator-accepted, ready modulo a named fix; the check-ready gate passes with a WARN, not EXIT 1).
+      *(The check-ready gate enforces this — B1.)*
 - [ ] Every invariant the work touches is named in "Invariants touched", each with an ADR.
 - [ ] Every concept maps to a module in the concept→module map.
 - [ ] Every non-obvious design choice has an ADR (alternatives recorded).
@@ -110,7 +110,7 @@ are stateless.
       chosen after (the spec-template advertises this axis as DoR-gated; this is that gate).
 
 **Gate result:** Ready ✅ only when Part A is well-formed **and** the Part B
-pre-mortem certification is recorded. `keel check-ready` enforces both halves; the
+pre-mortem certification is recorded. The check-ready gate enforces both halves; the
 remaining Part B items are the reviewer's evidence-backed certification, not a
 self-signed checkbox. The gate verifies the certification was *recorded* by a named
 non-author reviewer — not that the reviewer was truly blind or right; that residual

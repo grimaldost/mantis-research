@@ -14,7 +14,7 @@ externalized into a blocking checklist. Fail closed — nothing green-lights its
       halt), not just that error count ≤ baseline — a tool that bails early emits *fewer*
       errors than baseline and would otherwise pass green while checking nothing.
 
-*(Bind the concrete commands per project in `method-bindings.md`.)*
+*(Bind the concrete gate commands per project.)*
 
 ## Review gate
 

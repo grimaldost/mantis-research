@@ -52,3 +52,6 @@ claude-prior-baselines/
 comparison/
 archive/
 .claude/settings.local.json
+
+# Development scaffolding (series-orchestrator artifacts — not for the public tree)
+pr-series/

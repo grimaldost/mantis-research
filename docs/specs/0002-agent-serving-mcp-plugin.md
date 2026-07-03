@@ -28,7 +28,7 @@ distributed as a Claude Code plugin.
 
 ## Gate commands
 
-All must exit 0 (the mantis-research gate battery, `docs/method/method-bindings.md`):
+All must exit 0 (the mantis-research gate battery, `docs/method/definition-of-done.md`):
 
 - `uv run ruff format --check src tests`
 - `uv run ruff check src tests`
