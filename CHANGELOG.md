@@ -2,10 +2,15 @@
 
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project is
-pre-1.0 and does not yet publish versioned releases, so changes accumulate
-under **Unreleased** until the first tag.
+pre-1.0, so changes accumulate under **Unreleased** and are cut into tagged
+releases (starting with 0.1.0).
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-07-03
+
+First tagged release, bundling everything to date: the agent-researcher pivot,
+agent-serving (MCP server + Claude Code plugin), and this pre-launch review round.
 
 Pre-launch review round: fixes from a fresh-eyes review plus the P6 follow-ups.
 
