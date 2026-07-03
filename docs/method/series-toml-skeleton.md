@@ -1,10 +1,10 @@
 # series.toml skeleton (with wave budget)
 
-The full `series.toml` schema is owned by the series-orchestrator schema —
+The full `series.toml` schema is owned by [convoy](https://github.com/grimaldost/convoy) —
 this skeleton does not restate
 it. What it adds is the **`[budget]` block** (Upgrade 4): a wave-level forecast
-and a drift gate, extending per-PR scoring to the whole wave. Without an
-orchestrator, the skeleton still serves as the series' manual checklist.
+and a drift gate, extending per-PR scoring to the whole wave. Without convoy,
+the skeleton still serves as the series' manual checklist.
 
 ```toml
 [series]

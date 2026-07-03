@@ -10,8 +10,8 @@ Part A passes and before execution.
   The spec and its PR↔section manifest already exist; this runs before the spec
   becomes a runnable series and before any code.
 - **Who:** a fresh agent that has not authored the spec (a stateless pass, so the
-  judgment is externalized, not the author's own). A blind pre-mortem agent (a
-  stateless subagent with Read/Grep/Glob only) can execute it, or run it as an
+  judgment is externalized, not the author's own). [keel](https://github.com/grimaldost/keel)'s bundled `pre-mortem-review` agent (a
+  blind subagent, Read/Grep/Glob only) can execute it, or run it as an
   orchestrator pre-series hook, or a manual pass.
 
 ## Prompt
@@ -129,5 +129,5 @@ survives in another — nothing else reviews the delta. The re-read also hunts t
 The caller records the verdict in the spec's `## Pre-mortem certification` block: `CERTIFIED` once no
 blocking failure mode remains (else leave it uncertified and list the outstanding modes),
 with a `Reviewer:` and a `Post-fold coherence:` line. The pre-mortem is **required** — DoR
-does not pass without a recorded certification by a non-author reviewer (the check-ready gate
+does not pass without a recorded certification by a non-author reviewer (keel's `check-ready` gate
 checks for it, B1). Its findings frequently become new DoR checks — the loop closing again.

@@ -94,5 +94,5 @@ distribution layer over it.
 - Depends on ADR-0004 (the seam), ADR-0003 (the sidecar as the return payload),
   and the Windows-Application-Control note in ADR-0004 (wrap in-process Python,
   never a blocked `.exe` shim). Implementation is specified and built as a
-  separate governed change (a keel spec), where the tool schema, result shape,
+  separate governed change (a [keel](https://github.com/grimaldost/keel) spec), where the tool schema, result shape,
   error mapping, and dry-run/timeout behavior are pinned and pre-mortemed.

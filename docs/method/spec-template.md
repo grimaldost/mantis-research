@@ -35,7 +35,7 @@ the ADR first. *Naming these is a DoR requirement.*
 |---|---|---|
 | <invariant key> | enforced \| review-only \| planned \| absent | <the gate, when enforced> |
 
-*The check-ready gate (A10): no prose may claim an invariant is "enforced" / "guaranteed" unless its
+*[keel](https://github.com/grimaldost/keel)'s `check-ready` gate (A10): no prose may claim an invariant is "enforced" / "guaranteed" unless its
 row here is `enforced`. Checked only when this table is present; a claim inside backticks, or
 one negated ("not enforced", "to be enforced later"), does not fire.*
 
@@ -63,14 +63,14 @@ What changes. **Acceptance criterion:** <...>.
 both a DoR check and each PR's exit gate.)*
 
 *Ground factual claims with `path:line` anchors (optionally followed by a quoted line in
-backticks) — the check-ready gate verifies they resolve and match. Cite a new ADR as
+backticks) — keel's `check-ready` gate verifies they resolve and match. Cite a new ADR as
 `docs/adr/NNNN-slug.md` using the next free number on your base, never a hardcoded guess.*
 
 *Reuse notation: pin a reuse target as `**Model-on:** <backticked path>` or
-`**Reuse:** <backticked path::symbol>`; the check-ready gate (A9) resolves the path, and the symbol
+`**Reuse:** <backticked path::symbol>`; keel's `check-ready` gate (A9) resolves the path, and the symbol
 when given — so a spec cannot say "model-on / reuse X" without X actually existing.*
 
-*Anchor ranges: a multi-line citation is `` `path:lo-hi` ``; the check-ready gate (A11) flags a range that
+*Anchor ranges: a multi-line citation is `` `path:lo-hi` ``; keel's `check-ready` gate (A11) flags a range that
 opens a bracket/brace/paren it does not close, so a citation cannot silently truncate a collection
 literal mid-structure. Quote a literal complete or not at all.*
 
@@ -109,7 +109,7 @@ docs-sync check) verifies cross-references, not completeness.*
 
 *(Measurement / experiment specs only — delete this whole section for a code spec. The eval/experiment DoR
 items (`definition-of-ready.md`, Part B) gate these axes; the reviewer certifies the design, the
-check-ready gate the certification. Fill the `<...>` placeholders; this is a `##` section, so it needs no
+keel's `check-ready` gate the certification. Fill the `<...>` placeholders; this is a `##` section, so it needs no
 acceptance criterion and carries no anchors.)*
 
 - **Estimand + unit of analysis:** <the effect measured, at what grain — per-item delta vs aggregate>
@@ -123,7 +123,7 @@ acceptance criterion and carries no anchors.)*
 ## Pre-mortem certification
 
 *The externalized correctness pass (`pre-mortem-prompt.md`), signed by a fresh
-reviewer who did NOT author this spec. The check-ready gate does not pass until the
+reviewer who did NOT author this spec. keel's `check-ready` gate does not pass until the
 verdict is `CERTIFIED` (ADR-0002). A freshly-scaffolded spec is, correctly, not Ready.*
 
 - **Reviewer:**
@@ -137,7 +137,7 @@ verdict is `CERTIFIED` (ADR-0002). A freshly-scaffolded spec is, correctly, not 
 ### Fold ledger
 
 *Required when the certification claims a non-trivial fold (R1); a clean certify dozes: one row per folded finding so the post-fold delta is
-reviewable. The check-ready gate (A12) holds each `artifact:line` to a resolving anchor — it verifies the
+reviewable. keel's `check-ready` gate (A12) holds each `artifact:line` to a resolving anchor — it verifies the
 fold was recorded against a real line, not that it is correct (that is the reviewer's job). Leave the
 header only (no data rows) and A12 dozes. The ledger must be the FIRST table under this `### Fold ledger`
 heading — A12 reads only the first contiguous table, so a round-history / disposition table belongs in

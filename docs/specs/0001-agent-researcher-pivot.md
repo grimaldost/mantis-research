@@ -628,7 +628,7 @@ it reaches the layout through the §18 seam (PR11 → PR18 → PR16).
 
 *The externalized correctness pass (`docs/method/pre-mortem-prompt.md`), signed by a fresh
 reviewer who did NOT author this spec. `keel check-ready` does not pass until the
-verdict is `CERTIFIED` (ADR-0002 of keel). A freshly-scaffolded spec is, correctly, not Ready.*
+verdict is `CERTIFIED` (ADR-0002 of [keel](https://github.com/grimaldost/keel)). A freshly-scaffolded spec is, correctly, not Ready.*
 
 - **Reviewer:** keel `pre-mortem-review` blind agent — non-author, three
   independent passes: round 1 DESIGN (NEEDS-REVISION, 10 findings), round 2
