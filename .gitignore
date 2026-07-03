@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# uv / venv
+.venv/
+.python-version-local
+uv.lock.local
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+.env.local
+
+# Pipeline state and outputs (large; user re-creates per batch)
+state/
+state-*/
+logs/
+transcripts/
+outputs/
+research-outputs/
+research-outputs-*/
+journals/
+evaluations/
+claude-prior-baselines/
+
+# Type checker caches
+.mypy_cache/
+.ty_cache/
+.ruff_cache/
+
+# Session-local / data snapshots
+.hypothesis/
+.remember/
+comparison/
+archive/
+.claude/settings.local.json

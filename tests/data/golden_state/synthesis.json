@@ -1,0 +1,14 @@
+{
+  "id": "1",
+  "slug": "c4-structurizr-adrs",
+  "status": "done",
+  "attempts": 1,
+  "started_at": "2026-05-03T20:48:35.465560+00:00",
+  "completed_at": "2026-05-03T21:16:44.776993+00:00",
+  "last_error": null,
+  "session_id": "68749037-5164-4441-84c4-5f4155bbba53",
+  "turn_1_duration_s": 1076.808685200056,
+  "turn_2_duration_s": 612.4993628000375,
+  "synthesis_bytes": 67639,
+  "journal_bytes": 81175
+}

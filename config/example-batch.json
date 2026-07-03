@@ -1,0 +1,85 @@
+{
+  "schema_version": 2,
+  "batch_name": "example",
+  "description": "Example batch demonstrating the config schema: two topics researched via Path B (four OpenRouter substrates fan out, then a Claude synthesis cross-checks them). Copy this file, edit the topics, and run `mantis run openrouter config/<your>.json` then `synthesis`, or use `mantis research \"<question>\"` for a one-shot run. See prompts/playbooks/ for prompt-authoring guidance.",
+  "runner": {
+    "layout": "batch"
+  },
+  "models": {
+    "claude": {
+      "model": "claude-opus-4-8",
+      "effort": "max"
+    },
+    "primary": "openrouter:openai"
+  },
+  "topics": [
+    {
+      "id": "1",
+      "slug": "columnar-vs-row-storage",
+      "title": "Columnar vs row-oriented storage engines",
+      "research_prompt": "Research the trade-offs between columnar and row-oriented storage engines for analytical vs transactional workloads. Cover compression, vectorized execution, and when hybrid (HTAP) designs win. Cite primary sources (papers, engine docs).",
+      "stages": {
+        "claude": {
+          "prompt": ""
+        },
+        "openrouter": [
+          {
+            "subslug": "openai",
+            "model": "auto:openai",
+            "web_search": true,
+            "web_search_engine": "native"
+          },
+          {
+            "subslug": "deepseek",
+            "model": "auto:deepseek",
+            "web_search": true,
+            "web_search_engine": "exa"
+          },
+          {
+            "subslug": "google",
+            "model": "auto:google",
+            "web_search": true,
+            "web_search_engine": "exa"
+          },
+          {
+            "subslug": "perplexity",
+            "model": "auto:perplexity",
+            "web_search": true,
+            "web_search_engine": "native"
+          }
+        ],
+        "journal": {
+          "enabled": false
+        }
+      }
+    },
+    {
+      "id": "2",
+      "slug": "vector-index-tradeoffs",
+      "title": "Approximate nearest-neighbour index trade-offs (HNSW vs IVF-PQ)",
+      "research_prompt": "Compare HNSW and IVF-PQ approximate nearest-neighbour indexes for vector search: recall/latency/memory trade-offs, build cost, and when each is the right default. Cite benchmarks and the original papers.",
+      "stages": {
+        "claude": {
+          "prompt": ""
+        },
+        "openrouter": [
+          {
+            "subslug": "openai",
+            "model": "auto:openai",
+            "web_search": true,
+            "web_search_engine": "native"
+          },
+          {
+            "subslug": "deepseek",
+            "model": "auto:deepseek",
+            "web_search": true,
+            "web_search_engine": "exa"
+          }
+        ],
+        "journal": {
+          "enabled": false
+        }
+      }
+    }
+  ]
+}

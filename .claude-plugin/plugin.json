@@ -1,0 +1,18 @@
+{
+  "name": "mantis-research",
+  "description": "Agent-facing deep research: fan out one question to several models, cross-check them into a single synthesis, and return an epistemic sidecar (claims, cross-model divergences, a verification queue) via a `research` MCP tool. The synthesis stages drive the local `claude` CLI, so run this co-located with an authenticated Claude Code seat.",
+  "version": "0.1.0",
+  "mcpServers": {
+    "mantis-research": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--project",
+        "${CLAUDE_PLUGIN_ROOT}",
+        "python",
+        "-m",
+        "mantis_research.interface.mcp"
+      ]
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": "1",
+  "slug": "auto-topic",
+  "status": "done",
+  "attempts": 1,
+  "started_at": "2026-06-27T11:42:22.991156+00:00",
+  "completed_at": "2026-06-27T11:42:23.395806+00:00",
+  "last_error": null,
+  "subsessions": [
+    {
+      "subslug": "openai",
+      "status": "done",
+      "duration_s": 0.0,
+      "output_bytes": 0,
+      "output_path": "C:\\Users\\grima\\Documents\\mantis-research\\research-outputs-openrouter\\01-auto-topic\\openai.md",
+      "error": null
+    },
+    {
+      "subslug": "deepseek",
+      "status": "done",
+      "duration_s": 0.0,
+      "output_bytes": 0,
+      "output_path": "C:\\Users\\grima\\Documents\\mantis-research\\research-outputs-openrouter\\01-auto-topic\\deepseek.md",
+      "error": null
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "id": "601",
+  "slug": "repo-map-mechanisms",
+  "status": "done",
+  "attempts": 1,
+  "started_at": "2026-06-27T00:38:38.563842+00:00",
+  "completed_at": "2026-06-27T00:48:01.747186+00:00",
+  "last_error": null,
+  "session_id": "eea11015-8601-4917-9679-df21d318ee79",
+  "duration_s": 563.18178730004,
+  "falsification_bytes": 37073
+}

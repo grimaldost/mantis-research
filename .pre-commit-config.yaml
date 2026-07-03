@@ -1,0 +1,31 @@
+# Pre-commit hooks. Local `language: system` hooks drive the project's own
+# uv-pinned tools, so no hook downloads a second copy of ruff and the versions
+# always match the project's. Run all hooks with:
+#     uv run python -m pre_commit run --all-files
+#
+# (On this machine, bare `.exe` shims are blocked by Application Control — invoke
+# pre-commit via `uv run python -m pre_commit`, not the `pre-commit` shim.)
+repos:
+  - repo: local
+    hooks:
+      # Scoped to `src tests` to match the project's canonical gate command
+      # (CLAUDE.md); `notes/` and `scripts/` helpers are not linted (the latter
+      # is `ALL`-ignored in pyproject anyway).
+      - id: ruff-format
+        name: ruff format (check)
+        entry: uv run ruff format --check src tests
+        language: system
+        pass_filenames: false
+
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check src tests
+        language: system
+        pass_filenames: false
+
+      - id: core-purity
+        name: core purity (invariant I1 — no I/O in core/)
+        entry: uv run python scripts/check_core_purity.py
+        language: system
+        pass_filenames: false
+        files: ^src/mantis_research/core/.*\.py$

@@ -1,0 +1,19 @@
+{
+  "id": "1",
+  "slug": "c4-structurizr-adrs",
+  "status": "done",
+  "attempts": 1,
+  "started_at": "2026-05-02T00:31:13.059966+00:00",
+  "completed_at": "2026-05-02T00:58:08.906541+00:00",
+  "last_error": null,
+  "subsessions": [
+    {
+      "subslug": "single",
+      "status": "done",
+      "duration_s": 1615.8434669971466,
+      "output_bytes": 81474,
+      "output_path": "C:\\Users\\grima\\Documents\\mantis-research\\research-outputs-gemini\\01-c4-structurizr-adrs.md",
+      "error": null
+    }
+  ]
+}
