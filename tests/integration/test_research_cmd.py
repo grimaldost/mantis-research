@@ -10,11 +10,20 @@ import typer
 
 from mantis_research.core.config import load_batch_config
 from mantis_research.interface.cli.research import (
+    _DEFAULT_SUBSTRATES,
     _TIER_STAGES,
     build_config,
     research_cmd,
     run_research,
 )
+
+
+def test_default_substrates_exclude_dead_perplexity() -> None:
+    # perplexity's auto pick (sonar-pro-search) 404s, and one dead substrate nukes
+    # the whole paid topic — it must not be a default (fresh-test finding).
+    assert 'perplexity' not in _DEFAULT_SUBSTRATES
+    assert _DEFAULT_SUBSTRATES == ('openai', 'deepseek', 'google')
+
 
 if TYPE_CHECKING:
     from pathlib import Path

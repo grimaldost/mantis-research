@@ -78,8 +78,9 @@ Assurance tiers select how far the pipeline runs:
 | `standard` (default) | + adversarial falsification |
 | `high` | + claude-prior baseline + gated evaluation |
 
-Other flags: `--substrates openai,deepseek,google,perplexity` (the default Path
-B set, each resolved to the vendor's newest frontier model), `--primary
+Other flags: `--substrates openai,deepseek,google` (the default Path B set, each
+resolved to the vendor's newest frontier model; add `,perplexity` with a working
+Sonar model for real-time-search coverage), `--primary
 openrouter:openai` (which brief anchors the synthesis), `--journal` (also emit
 a mantis-ingestion journal), `--batch-name`, `--dry-run`.
 

@@ -28,7 +28,12 @@ from mantis_research.core.state import OpenRouterResearchState
 
 # Default Path B substrate set (model-recommendations.md): each vendor resolves
 # to its newest frontier model via the `auto:<vendor>` sentinel at run time.
-_DEFAULT_SUBSTRATES = ('openai', 'deepseek', 'google', 'perplexity')
+# `perplexity` is intentionally NOT a default: its `auto:` pick
+# (`sonar-pro-search`) 404s on the completions endpoint, and because a topic
+# fails if any one substrate fails, a dead default would nuke the whole (paid)
+# run. Add it explicitly (`--substrates …,perplexity`) with a working Sonar
+# model for real-time-search coverage.
+_DEFAULT_SUBSTRATES = ('openai', 'deepseek', 'google')
 # Providers with a native web-search plugin; everyone else routes through Exa.
 _NATIVE_SEARCH = frozenset({'openai', 'perplexity', 'anthropic', 'x-ai'})
 

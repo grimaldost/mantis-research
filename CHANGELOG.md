@@ -31,6 +31,24 @@ Agent-serving via MCP server + plugin (`docs/specs/0002-agent-serving-mcp-plugin
 - **Logs now go to stderr, not stdout** (`core/logging.py`): stdout is reserved
   for program output — the `mantis research` manifest and, critically, the stdio
   MCP server's JSON-RPC stream, which structured logs on stdout would corrupt.
+- **Default substrate set drops `perplexity`** (`interface/research_service.py`):
+  its `auto:` pick (`sonar-pro-search`) 404s on the completions endpoint, and a
+  topic fails if any one substrate fails — so a dead default nuked the whole paid
+  run. Add it back explicitly with a working Sonar model if you want it.
+
+### Fixed — agent-serving
+
+- **The installed tool can now run from anywhere** (`core/paths.py`): `project_root()`
+  derived every runtime data dir from the package's `__file__`, so an isolated
+  `uv tool install` (no project tree) crashed with `project root not found` on the
+  first stage — the documented install path (and the MCP server / plugin) could
+  not run. It now falls back to the current working directory when there is no
+  project tree; a source checkout is unchanged.
+- **`--dry-run` no longer needs an API key** (`interface/adapters/openrouter_http.py`):
+  the adapter checked `OPENROUTER_API_KEY` eagerly in `__init__`, and the stage is
+  constructed even for a dry run, so the credential-free plumbing check the docs
+  advertise actually failed without a key. The key is now resolved lazily, at the
+  first real request only.
 
 ---
 

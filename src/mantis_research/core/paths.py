@@ -13,18 +13,31 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-def project_root() -> Path:
-    """Return the project root (containing pyproject.toml).
+def _find_project_root(start: Path) -> Path:
+    """Walk up from ``start`` to the directory containing pyproject.toml.
 
-    Walks up from this module until a directory containing pyproject.toml
-    is found. Raises if the layout has been moved.
+    Falls back to the current working directory when no such directory exists —
+    the case for an **installed** wheel (``uv tool install``), whose package lives
+    in an isolated venv with no project tree. Runtime data dirs then live under
+    the caller's CWD, the intuitive location for an installed CLI (git/npm do the
+    same). A source checkout still resolves to the repo root, so dev behaviour is
+    unchanged.
     """
-    here = Path(__file__).resolve()
-    for parent in here.parents:
+    for parent in start.parents:
         if (parent / 'pyproject.toml').exists():
             return parent
-    msg = f'project root not found above {here}'
-    raise RuntimeError(msg)
+    return Path.cwd()
+
+
+def project_root() -> Path:
+    """Return the project root (the dir containing pyproject.toml), or CWD.
+
+    In a source checkout this is the repo root; for an installed package there is
+    no project tree, so it falls back to the current working directory rather than
+    raising (which would make the installed CLI / MCP server unable to run — the
+    ``project root not found`` failure the isolated-tool install used to hit).
+    """
+    return _find_project_root(Path(__file__).resolve())
 
 
 def outputs_root() -> Path:

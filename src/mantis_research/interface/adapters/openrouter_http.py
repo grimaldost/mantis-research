@@ -81,18 +81,11 @@ class OpenRouterHttpAdapter:
         http_referer: str | None = None,
         app_title: str | None = None,
     ) -> None:
-        key = api_key or (
-            settings.OPENROUTER_API_KEY.get_secret_value()
-            if settings.OPENROUTER_API_KEY is not None
-            else None
-        )
-        if not key:
-            msg = (
-                'OPENROUTER_API_KEY not set. Add it to .env (see .env.template) or '
-                'export it in your shell before invoking the openrouter stage.'
-            )
-            raise RuntimeError(msg)
-        self._api_key = key
+        # Do NOT require the key at construction: the stage is built even for a
+        # --dry-run (which never hits the network), so an eager check here made
+        # dry-run demand a key it doesn't use. The key is resolved lazily at the
+        # first real request (see _require_key / _headers).
+        self._explicit_key = api_key
         self._base_url = base_url or settings.OPENROUTER_BASE_URL
         self._http_referer = http_referer or settings.MANTIS_HTTP_REFERER
         self._app_title = app_title or settings.MANTIS_APP_TITLE
@@ -169,9 +162,29 @@ class OpenRouterHttpAdapter:
 
     # ── helpers ────────────────────────────────────────────────────
 
+    def _require_key(self) -> str:
+        """Resolve the API key at call time, raising only when one is needed.
+
+        Construction stays key-free so a dry-run (which never reaches the network)
+        works before a key is set; the key is required only at an actual request
+        (``preflight`` and a non-dry-run ``run``, both via ``_headers``).
+        """
+        key = self._explicit_key or (
+            settings.OPENROUTER_API_KEY.get_secret_value()
+            if settings.OPENROUTER_API_KEY is not None
+            else None
+        )
+        if not key:
+            msg = (
+                'OPENROUTER_API_KEY not set. Add it to .env (see .env.template) or '
+                'export it in your shell before invoking the openrouter stage.'
+            )
+            raise RuntimeError(msg)
+        return key
+
     def _headers(self) -> dict[str, str]:
         return {
-            'Authorization': f'Bearer {self._api_key}',
+            'Authorization': f'Bearer {self._require_key()}',
             'HTTP-Referer': self._http_referer,
             'X-OpenRouter-Title': self._app_title,
             'Content-Type': 'application/json',

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from mantis_research.core.paths import (
     LEGACY_OUTPUT_DIRS,
     RunDirs,
+    _find_project_root,
     legacy_output_dir,
     legacy_state_dir,
     outputs_root,
@@ -19,6 +22,9 @@ from mantis_research.core.paths import (
     topic_stem,
     transcripts_root,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class TestRunLayoutResolvers:
@@ -88,6 +94,29 @@ class TestLayout:
 
     def test_state_root_under_project(self) -> None:
         assert state_root() == project_root() / 'state'
+
+
+class TestProjectRootResolution:
+    """`_find_project_root` (the installed-vs-clone fix)."""
+
+    def test_finds_pyproject_walking_up(self, tmp_path: Path) -> None:
+        (tmp_path / 'pyproject.toml').write_text('', encoding='utf-8')
+        pkg = tmp_path / 'src' / 'mantis_research' / 'core'
+        pkg.mkdir(parents=True)
+        assert _find_project_root(pkg / 'paths.py') == tmp_path
+
+    def test_falls_back_to_cwd_when_no_project_tree(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Installed wheel: __file__ lives in an isolated venv with no pyproject
+        # anywhere above it → resolve to CWD (never raise). This is the bug the
+        # fresh-install acceptance test caught.
+        cwd = tmp_path / 'workdir'
+        cwd.mkdir()
+        monkeypatch.chdir(cwd)
+        installed = tmp_path / 'venv' / 'site-packages' / 'mantis_research' / 'core'
+        installed.mkdir(parents=True)
+        assert _find_project_root(installed / 'paths.py') == cwd
 
 
 class TestLegacyPaths:
