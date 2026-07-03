@@ -28,6 +28,7 @@ dependencies = [
 
 [project.scripts]
 mantis = "mantis_research.interface.cli:app"
+mantis-mcp = "mantis_research.interface.mcp.__main__:main"
 
 [dependency-groups]
 dev = [

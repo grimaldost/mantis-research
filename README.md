@@ -33,20 +33,42 @@ into structured data.
   is **local-first**: run it where an authenticated `claude` lives.
   Research-only runs (OpenRouter substrates) work without it.
 
+## Install
+
+Install the wheel as an isolated CLI tool — **no clone needed**:
+
+```bash
+uv tool install git+https://github.com/grimaldost/mantis-research
+```
+
+This puts two commands on your `PATH`: **`mantis`** (the CLI) and **`mantis-mcp`**
+(the stdio MCP server agents connect to). Or run it without installing:
+
+```bash
+uvx --from git+https://github.com/grimaldost/mantis-research mantis research "…"
+```
+
+Or add it as a dependency of another project
+(`uv add git+https://github.com/grimaldost/mantis-research`), or work from a
+clone for development (`git clone … && uv sync`, then `uv run mantis …`). The
+installed tool reads `OPENROUTER_API_KEY` from the environment; a clone also
+reads a local `.env`.
+
 ## Quickstart — one question
 
 ```bash
-uv sync
+# After `uv tool install …` (above), set your OpenRouter key in the environment:
+export OPENROUTER_API_KEY=sk-or-...      # Windows: setx OPENROUTER_API_KEY sk-or-...
 
-# Set your OpenRouter key (the default research substrates route through it)
-cp .env.template .env && $EDITOR .env    # OPENROUTER_API_KEY=...
+# Research a question end-to-end; prints a result manifest (JSON) to stdout:
+mantis research "How does ISO 20022 migration work for correspondent banking?"
 
-# Research a question end-to-end; prints a result manifest (JSON) to stdout
-uv run python -m mantis_research research "How does ISO 20022 migration work for correspondent banking?"
-
-# Validate the plumbing offline first (no model calls)
-uv run python -m mantis_research research "…" --dry-run
+# Validate the plumbing offline first (no model calls):
+mantis research "…" --dry-run
 ```
+
+(From a clone instead of an install: `uv run mantis research "…"`, with the key
+in a local `.env` copied from `.env.template`.)
 
 Assurance tiers select how far the pipeline runs:
 
@@ -71,10 +93,15 @@ Agents consume the tool through a local **stdio MCP server** exposing a
 ([ADR-0009](docs/adr/0009-agent-serving-via-mcp-plugin.md)):
 
 ```bash
-# Install the plugin for local testing (from a clone of this repo):
+# Register the installed server in your Claude Code stack (after `uv tool install`):
+claude mcp add mantis-research --scope user \
+  --env OPENROUTER_API_KEY=$OPENROUTER_API_KEY -- mantis-mcp
+
+# …or install the bundled plugin from a clone (per session):
 claude --plugin-dir /path/to/mantis-research
 
-# …or run the stdio MCP server directly:
+# …or run the stdio server directly — installed, or from a clone:
+mantis-mcp
 uv run python -m mantis_research.interface.mcp
 ```
 
