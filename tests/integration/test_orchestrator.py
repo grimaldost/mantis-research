@@ -213,11 +213,51 @@ class TestUpstreamGate:
         orch = _make_orchestrator(stage, config, tmp_path)
         rc = await orch.run()
 
-        assert rc == 0  # blocked is not a failure
+        # A blocked topic produced no output; in a live run that is a failure —
+        # a downstream agent must not read ok:true then find nothing (spec 0002).
+        assert rc == 1
         state = ClaudeResearchState.load_or_create(orch.state_dir, '1', 'topic-1')
         assert state.status is TopicStatus.BLOCKED_UPSTREAM
         assert state.last_error == 'missing claude brief'
         assert stage.calls == []  # never called run_attempt
+
+    @pytest.mark.asyncio
+    async def test_blocked_among_done_still_fails_the_run(self, tmp_path: Path) -> None:
+        # One blocked topic fails the whole live run even when others succeed.
+        stage = FakeStage(
+            results={'1': [AttemptResult.ok()], '3': [AttemptResult.ok()]},
+            upstream={'2': (False, 'missing brief')},
+        )
+        config = _config_with_topics(3)
+        orch = _make_orchestrator(stage, config, tmp_path)
+        rc = await orch.run()
+
+        assert rc == 1
+        s2 = ClaudeResearchState.load_or_create(orch.state_dir, '2', 'topic-2')
+        assert s2.status is TopicStatus.BLOCKED_UPSTREAM
+        s1 = ClaudeResearchState.load_or_create(orch.state_dir, '1', 'topic-1')
+        assert s1.status is TopicStatus.DONE
+
+    @pytest.mark.asyncio
+    async def test_blocked_upstream_is_not_a_failure_in_dry_run(self, tmp_path: Path) -> None:
+        # A dry run's upstream stages write no artifacts (adapters short-circuit),
+        # so a downstream block is expected there, not a failure: dry-run stays 0.
+        stage = FakeStage(upstream={'1': (False, 'missing brief')})
+        config = _config_with_topics(1)
+        orch = Orchestrator(
+            stage=stage,
+            state_class=ClaudeResearchState,
+            config=config,
+            state_dir=tmp_path / 'state',
+            output_dir=tmp_path / 'outputs',
+            transcript_dir=tmp_path / 'transcripts',
+            dry_run=True,
+        )
+        rc = await orch.run()
+
+        assert rc == 0
+        state = ClaudeResearchState.load_or_create(orch.state_dir, '1', 'topic-1')
+        assert state.status is TopicStatus.BLOCKED_UPSTREAM
 
 
 class TestStageDisabled:

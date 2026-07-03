@@ -288,6 +288,17 @@ class Orchestrator:
                 ids=ids,
                 resume_command=f'mantis run {self.stage.name} <config> --only {ids}',
             )
+        # A blocked-upstream topic produced no output. In a live run that is a
+        # failure the exit code must report: a downstream consumer (the agent
+        # contract, spec 0002) must never see ok:true then find no synthesis.
+        # A dry run legitimately produces no upstream artifacts (adapters
+        # short-circuit), so a downstream block is expected there, not a failure.
+        blocked = [s for s in states if s.status is TopicStatus.BLOCKED_UPSTREAM]
+        blocked_is_failure = bool(blocked) and not self.dry_run
+        if blocked_is_failure:
+            ids = ' '.join(s.id for s in blocked)
+            log.warning('topics blocked upstream — run the upstream stage first', ids=ids)
+        if failed or blocked_is_failure:
             return 1
         return 0
 

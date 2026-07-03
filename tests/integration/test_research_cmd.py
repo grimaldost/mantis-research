@@ -152,3 +152,28 @@ class TestRunResearch:
         # run_research raises no typer.Exit — the CLI wrapper maps it (FM-4).
         with pytest.raises(ValueError, match='invalid assurance'):
             run_research('q', assurance='bogus')
+
+    def test_live_run_reports_failure_when_synthesis_blocks(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # BUG-1 regression: a live run where research succeeds but synthesis
+        # blocks (e.g. a single substrate → no secondary brief) must break after
+        # synthesis and report ok:False — never ok:true with no synthesis written.
+        for fn in ('state_root', 'outputs_root', 'transcripts_root', 'logs_root'):
+            monkeypatch.setattr(f'mantis_research.core.paths.{fn}', lambda fn=fn: tmp_path / fn)
+        calls: list[str] = []
+
+        def fake_dispatch(stage: str, cfg: object, *, dry_run: bool, log_level: str) -> int:
+            calls.append(stage)
+            return 0 if stage == 'openrouter' else 1  # synthesis blocks → exit 1
+
+        monkeypatch.setattr(
+            'mantis_research.interface.cli.dispatch.dispatch_stage_config', fake_dispatch
+        )
+        manifest = run_research(
+            'q', assurance='standard', substrates=['openai'], batch_name='b', log_level='CRITICAL'
+        )
+        assert manifest['ok'] is False
+        assert manifest['stages']['synthesis']['exit_code'] == 1
+        assert 'falsification' not in manifest['stages']  # broke after synthesis
+        assert calls == ['openrouter', 'synthesis']
