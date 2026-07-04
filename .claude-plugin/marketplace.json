@@ -1,0 +1,18 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/claude-code/main/schemas/marketplace.schema.json",
+  "name": "mantis-research",
+  "owner": {
+    "name": "Grimaldo Stanzani",
+    "email": "grimaldosj93@gmail.com"
+  },
+  "metadata": {
+    "description": "Agent-facing deep research: fan one question across several models, cross-check them into a single synthesis, and return an epistemic sidecar (claims, cross-model divergences, a verification queue)."
+  },
+  "plugins": [
+    {
+      "name": "mantis-research",
+      "source": ".",
+      "description": "A `research` MCP tool that runs one question through several research models, cross-checks them into a single synthesis, and returns an epistemic sidecar. Synthesis stages drive the local `claude` CLI, so run co-located with an authenticated Claude Code seat."
+    }
+  ]
+}

@@ -25,9 +25,10 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
+from pydantic import Field
 
 from mantis_research.core.sidecar import ResearchSidecar, project_for_agent
 from mantis_research.interface.research_service import run_research
@@ -84,21 +85,76 @@ def _run_and_assemble(
 
 
 async def research(
-    question: str,
-    assurance: str = 'standard',
-    substrates: list[str] | None = None,
-    primary: str = '',
-    journal: bool = False,
-    dry_run: bool = False,
+    question: Annotated[str, Field(description='The research question to investigate.')],
+    assurance: Annotated[
+        str,
+        Field(
+            description=(
+                'How far the pipeline runs: "fast" (research + synthesis), '
+                '"standard" (+ a falsification pass), or "high" (+ a Claude-prior '
+                'baseline and an evaluation pass).'
+            )
+        ),
+    ] = 'standard',
+    substrates: Annotated[
+        list[str] | None,
+        Field(
+            description=(
+                'OpenRouter research vendor slugs to fan the question across, each '
+                'run as its newest frontier model. Accepted: openai, google, '
+                'anthropic, deepseek, perplexity, qwen, x-ai, meta-llama, mistralai. '
+                'None uses the default Path B set: openai, deepseek, google.'
+            )
+        ),
+    ] = None,
+    primary: Annotated[
+        str,
+        Field(
+            description=(
+                'Which research brief the synthesis anchors on: "claude" or '
+                '"openrouter:<slug>" (e.g. "openrouter:openai"). Empty string '
+                'anchors on the first substrate.'
+            )
+        ),
+    ] = '',
+    journal: Annotated[
+        bool,
+        Field(
+            description=(
+                'Also emit a mantis-ingestion journal via a second synthesis turn '
+                '(slower). Off by default.'
+            )
+        ),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        Field(description='Validate orchestration without spending any model calls.'),
+    ] = False,
 ) -> dict[str, Any]:
     """Research a question across multiple models and return a cross-checked result.
 
     Runs OpenRouter research substrates plus a Claude synthesis, returning the run
     manifest (output paths, per-stage exit codes, cost) together with the epistemic
     sidecar's claims, cross-model divergences, and verification queue. The
-    synthesis/journal stages require a local authenticated ``claude`` CLI
-    (ADR-0009). ``assurance`` is ``fast`` | ``standard`` | ``high``; ``dry_run``
-    validates orchestration without spending model calls.
+    synthesis / falsification / evaluation / journal stages drive a local
+    authenticated ``claude`` CLI (ADR-0009); research-only runs need only an
+    ``OPENROUTER_API_KEY``.
+
+    Parameters:
+      - ``assurance`` (``fast`` | ``standard`` | ``high``) chooses depth: ``fast``
+        runs research + synthesis, ``standard`` adds a falsification pass, ``high``
+        adds a Claude-prior baseline and an evaluation pass.
+      - ``substrates`` overrides the OpenRouter research vendors (slugs such as
+        ``openai``, ``deepseek``, ``google``, ``anthropic``, ``qwen``, ``x-ai``,
+        ``meta-llama``, ``mistralai``, ``perplexity``); each runs as its newest
+        frontier model. ``None`` uses the default Path B set: openai, deepseek,
+        google.
+      - ``primary`` selects which research brief the synthesis anchors on —
+        ``claude`` or ``openrouter:<slug>`` (e.g. ``openrouter:openai``); the empty
+        default anchors on the first substrate.
+      - ``journal`` also emits a mantis-ingestion journal via a second synthesis
+        turn (slower); off by default.
+      - ``dry_run`` validates orchestration without spending model calls.
     """
     # dispatch_stage_config nests asyncio.run per stage, so the synchronous
     # pipeline must run OFF this event loop or it raises RuntimeError (FM-1).

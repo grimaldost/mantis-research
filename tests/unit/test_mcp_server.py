@@ -20,6 +20,23 @@ async def test_build_server_registers_research_tool() -> None:
     assert 'research' in [t.name for t in tools]
 
 
+async def test_research_tool_schema_documents_every_parameter() -> None:
+    # Agent-discoverability guard: every parameter must carry a description in the
+    # tool inputSchema — the agent's first-glance surface. Bare typed slots (no
+    # description) are what left `primary` / `journal` / the substrate vocabulary
+    # undiscoverable to a fresh agent before 0.1.1.
+    server = build_server()
+    tools = await server.list_tools()
+    tool = next(t for t in tools if t.name == 'research')
+    props = tool.inputSchema['properties']
+    expected = {'question', 'assurance', 'substrates', 'primary', 'journal', 'dry_run'}
+    assert set(props) == expected
+    for name in expected:
+        assert props[name].get('description', '').strip(), f'{name} has no description'
+    # The substrate vocabulary + default set must actually reach the agent.
+    assert 'deepseek' in props['substrates']['description']
+
+
 async def test_research_tool_projects_sidecar_and_paths(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

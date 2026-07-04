@@ -7,6 +7,45 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-07-04
+
+Agent-discoverability: document the full agent-facing surface so a fresh agent
+can use every feature, not just the basics. A blind-agent probe of the plugin's
+two surfaces (the `research` tool schema + `skills/research/SKILL.md`) found that
+`primary` and `journal` were live tool arguments carrying no description anywhere,
+the `substrates` vocabulary was unstated, and cost/latency, negative triggers, the
+assurance-tier stage sequences, and the deeper sidecar fields were undocumented.
+
+### Documentation
+
+- **Per-parameter descriptions in the `research` MCP tool schema**
+  (`interface/mcp/server.py`): every argument now carries a description in the tool
+  `inputSchema` — the agent's first-glance surface — via `Annotated[…, Field(…)]`,
+  and the docstring covers `substrates` / `primary` / `journal` (previously
+  omitted).
+- **`skills/research/SKILL.md` now documents the whole surface**: `primary` and
+  `journal`; the accepted substrate vendor slugs and the default Path B set; what
+  each assurance tier's extra stages do; cost/latency expectations; a "When not to
+  use it" section; and the deeper sidecar fields (`agreements_worth_verifying`,
+  `coverage_notes`, `truncated`, and the on-disk `sources[].model_id` /
+  `provenance`).
+- README's served-tool argument list now names `primary` / `journal`.
+- Regression guard `test_research_tool_schema_documents_every_parameter` asserts
+  every parameter carries a schema description and the substrate vocabulary reaches
+  the agent.
+
+No behavior or contract change: the MCP tool contract is additive (spec 0002), so
+these arguments and fields already shipped in 0.1.0 — this release documents them.
+
+### Packaging
+
+- **The repository is now a Claude Code plugin marketplace**
+  (`.claude-plugin/marketplace.json`): the production plugin installs straight from
+  GitHub (`/plugin marketplace add grimaldost/mantis-research` →
+  `/plugin install mantis-research@mantis-research`), pinned to the published repo
+  and decoupled from a local working tree — so local development no longer
+  perturbs a production install.
+
 ## [0.1.0] - 2026-07-03
 
 First tagged release, bundling everything to date: the agent-researcher pivot,

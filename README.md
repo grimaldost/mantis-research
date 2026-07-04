@@ -107,9 +107,9 @@ uv run python -m mantis_research.interface.mcp
 ```
 
 The agent calls the `research` tool (`question`, `assurance`, optional
-`substrates` / `dry_run`) and gets back the run manifest plus the sidecar's
-`claims` / `divergences` / `verification_queue` (bounded to the MCP result-size
-budget), with synthesis and briefs referenced by path. Because the server runs
+`substrates` / `primary` / `journal` / `dry_run`) and gets back the run manifest
+plus the sidecar's `claims` / `divergences` / `verification_queue` (bounded to the
+MCP result-size budget), with synthesis and briefs referenced by path. Because the server runs
 locally, its synthesis stages inherit your authenticated `claude` seat (see
 Requirements). Reference skill: `skills/research/SKILL.md`.
 
