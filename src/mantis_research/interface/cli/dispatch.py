@@ -173,7 +173,7 @@ async def _run_stage_async(
 
 
 def _check_stage_allowed(name: str) -> None:
-    """Guard: reject an unknown stage or one disabled via MANTIS_DISABLED_STAGES.
+    """Guard: reject an unknown stage or one disabled via DISABLED_STAGES.
 
     Runs before any config is read so a disabled/unknown stage fails fast
     without needing a valid config on disk.
@@ -183,7 +183,7 @@ def _check_stage_allowed(name: str) -> None:
         raise ValueError(msg)
     if name in settings.disabled_stages:
         msg = (
-            f'stage {name!r} is disabled via MANTIS_DISABLED_STAGES in your .env '
+            f'stage {name!r} is disabled via DISABLED_STAGES in your .env '
             f'(current value: {settings.DISABLED_STAGES!r}). '
             f'Remove it from that list to re-enable, or pick a different stage. '
             f'See prompts/playbooks/research-path-recommendation.md for the '
@@ -206,7 +206,7 @@ def dispatch_stage_config(
     """Run one stage from an already-built ``BatchConfig`` (no path read).
 
     This is the seam ``mantis research`` calls once per stage (ADR-0004). It
-    carries the same unknown-stage and ``MANTIS_DISABLED_STAGES`` guards and
+    carries the same unknown-stage and ``DISABLED_STAGES`` guards and
     logging setup the subcommands get, so the request-level path enforces the
     same gating as the batch subcommands. One top-level ``asyncio.run`` per
     call (invoked sequentially by the façade — no nested event loop).

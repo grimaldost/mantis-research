@@ -115,8 +115,8 @@ def legacy_output_dir(stage_name: str) -> Path:
 
 # ── layout-aware run directories (ADR-0006) ──────────────────────────
 # Two layouts, selected per config (``runner.layout``). ``'legacy'`` reproduces
-# the flat directories above exactly (byte-identical paths — the 44 committed
-# configs stay here by default). ``'batch'`` scopes every run under its own
+# the flat directories above exactly (byte-identical paths — historical
+# batches resume there by default). ``'batch'`` scopes every run under its own
 # ``<batch_name>`` subtree so request-level runs (``mantis research``) and
 # reruns never collide. A run resolves ALL its directories through one layout —
 # there is no cross-layout fallback.

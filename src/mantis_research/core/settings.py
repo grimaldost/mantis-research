@@ -34,12 +34,12 @@ class Settings(BaseSettings):
     # Interface gating — comma-separated list of stage names that are
     # disabled at the CLI dispatch level. Used to enforce e.g. "no Gemini
     # subscription, the OAuth CLI is not available on this machine" by
-    # setting MANTIS_DISABLED_STAGES=gemini. The CLI will then fail-fast
+    # setting DISABLED_STAGES=gemini. The CLI will then fail-fast
     # with a helpful pointer when a user tries `mantis run gemini`.
     #
     # Valid stage names match the keys of STAGE_REGISTRY in
     # interface/cli/dispatch.py: claude, gemini, openrouter, synthesis,
-    # journal-passes, falsification.
+    # journal-passes, falsification, evaluation, claude-prior.
     DISABLED_STAGES: str = ''
 
     model_config = SettingsConfigDict(

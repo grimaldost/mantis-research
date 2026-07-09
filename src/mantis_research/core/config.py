@@ -4,13 +4,12 @@ The config JSON is the canonical input that drives a batch run. Validating
 on load catches structural errors at startup (fail fast principle) instead
 of mid-run when a missing field surfaces inside an async task.
 
-The schema mirrors the v2 layout produced by ``author_batch_*.py`` scripts
-and the ``migrate_config_v1_to_v2.py`` migration. Backward-compatibility
-guarantees:
+The schema is documented for humans in ``docs/batch-config.md`` — the two
+change together. Backward-compatibility guarantees (invariant I4):
 
 - Top-level shape: ``schema_version``, ``batch_name``, ``description``,
   ``models``, ``runner``, ``default_prompts``, ``topics`` — must accept
-  configs produced by the existing batches (10, 11) without modification.
+  configs produced by historical batches without modification.
 - Per-topic shape: ``id``, ``slug``, ``tier``, ``title``, ``stages.*``.
 """
 

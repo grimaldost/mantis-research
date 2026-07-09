@@ -81,7 +81,7 @@ class Stage(Protocol):
     Property attributes (constants per stage):
 
     - ``name`` — short identifier (``'claude'``, ``'gemini'``, ``'openrouter'``,
-      ``'synthesis'``, ``'journal-augment'``, ``'falsification'``,
+      ``'synthesis'``, ``'journal-passes'``, ``'falsification'``,
       ``'evaluation'``, ``'claude-prior'``).
     - ``state_subdir`` — directory under ``state/`` holding per-topic state.
     - ``output_subdir`` — directory under ``outputs/`` holding generated artifacts.
@@ -105,7 +105,7 @@ class Stage(Protocol):
     def is_enabled(self, topic: TopicConfig, config: BatchConfig) -> bool:
         """Return True if this stage should run for this topic.
 
-        Stages that are unconditional (Claude/Gemini/OpenRouter/Synthesis/Journal-augment)
+        Stages that are unconditional (Claude/Gemini/OpenRouter/Synthesis/Journal-passes)
         return True. Optional stages (falsification, evaluation) check
         ``topic.high_stakes`` or ``topic.stages.<name>.enabled``.
         """
@@ -114,8 +114,9 @@ class Stage(Protocol):
     def upstream_ready(self, topic_id: str, slug: str, ctx: RunContext) -> tuple[bool, str | None]:
         """Return (ready, reason_if_blocked).
 
-        Used as the gate for ``BLOCKED_UPSTREAM``. For Stage 3 (synthesis),
-        upstream-not-ready means missing Claude+Gemini briefs.
+        Used as the gate for ``BLOCKED_UPSTREAM``. For synthesis,
+        upstream-not-ready means the primary brief (``models.primary``) or
+        every secondary brief is missing.
         """
         ...
 
