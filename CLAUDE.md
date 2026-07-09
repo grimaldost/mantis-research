@@ -2,9 +2,17 @@
 
 ## Project shape
 
-Multi-model research pipeline harness. Drives Claude Code CLI, Gemini CLI,
-and OpenRouter HTTP through staged batch runs. Outputs reference material
-for downstream agentic-memory ingestion.
+Deep-research tool for agents (ADR-0002): one question fans out across
+substrate-diverse models, the synthesis preserves their disagreements, and
+every run emits a machine-readable epistemic sidecar. Drives Claude Code CLI,
+Gemini CLI (legacy), and OpenRouter HTTP through staged runs; outputs also
+double as reference material for downstream agentic-memory ingestion (an
+optional sink, not the primary purpose).
+
+Docs map: `docs/README.md` — architecture (`docs/architecture.md`), operator
+guide (`docs/running-batches.md`), config reference (`docs/batch-config.md`),
+contributor guide (`CONTRIBUTING.md`). When this file and those disagree, the
+docs are the home — fix this file.
 
 **Layout** — application layout (functional core + imperative shell):
 
@@ -26,7 +34,7 @@ uv run pytest                # run tests
 uv run ruff check src tests  # lint
 uv run ruff format src tests # format (single-quotes for code, double for docstrings)
 uv run ty check src          # type check (Astral's ty, primary)
-uv run mypy src              # type check (mypy, secondary CI fallback)
+uvx mypy src                 # mypy cross-check (not in the dev group; no hosted CI)
 uv run python scripts/check_core_purity.py  # invariant I1: no I/O imports in core/
 uv run pip-audit             # CVE scan
 uv run python -m pre_commit run --all-files  # all hooks (ruff-format, ruff, core-purity)
@@ -52,23 +60,28 @@ uv run python -m pre_commit run --all-files  # all hooks (ruff-format, ruff, cor
 4. **State files on disk are stage-specific JSON.** The on-disk schema must be
    stable across releases — new fields default-Optional, never rename.
 5. **Resumability is a feature.** Every stage must be idempotent on `--force`
-   and resumable from `state/<stage>/*.json` after interruption.
+   and resumable from its state directory after interruption.
+6. **Legacy artifacts stay readable.** Output/state trees from past batches are
+   never migrated in place; new layouts are opt-in (ADR-0006).
 
 ## Pipeline stages
 
-| Stage | Subcommand | Outputs to | State at |
+| Stage | Subcommand | Outputs to (legacy layout) | State at (legacy) |
 |---|---|---|---|
-| 1 | `mantis run claude` | `outputs/claude/` | `state/claude/` |
-| 2a | `mantis run gemini` | `outputs/gemini/` | `state/gemini/` |
-| 2b | `mantis run openrouter` | `outputs/openrouter/` | `state/openrouter/` |
-| 3 | `mantis run synthesis` | `outputs/synthesis/` + `outputs/journals/` | `state/synthesis/` |
-| 3.5 | `mantis run journal-passes` | `outputs/journals/*-augmented.md` | `state/journal-passes/` |
-| 4 | `mantis run falsification` | `outputs/falsification/` | `state/falsification/` |
-| 5 | `mantis run evaluation` | `outputs/evaluations/` | `state/evaluation/` |
-| 5-input | `mantis run claude-prior` | `outputs/claude-prior/` | n/a |
+| 1 | `mantis run claude` | `research-outputs/` | `state/` |
+| 2a | `mantis run gemini` | `research-outputs-gemini/` | `state-gemini/` |
+| 2b | `mantis run openrouter` | `research-outputs-openrouter/` | `state-openrouter/` |
+| 3 | `mantis run synthesis` | `research-outputs-synthesis/` + `journals/` | `state-synthesis/` |
+| 3.5 | `mantis run journal-passes` | `journals/*-augmented.md` | `state-journal-passes/` |
+| 4 | `mantis run falsification` | `research-outputs-falsification/` | `state-falsification/` |
+| 5 | `mantis run evaluation` | `evaluations/` | `state-evaluation/` |
+| 5-input | `mantis run claude-prior` | `claude-prior-baselines/` | `state-claude-prior/` |
 
 All stages are packaged `mantis run <stage>` subcommands (see
-`interface/cli/dispatch.py` `STAGE_REGISTRY`).
+`interface/cli/dispatch.py` `STAGE_REGISTRY`). Paths above are the default
+`legacy` layout; `runner.layout: 'batch'` scopes them under
+`state|outputs/<batch_name>/<stage>/` plus `transcripts/<batch_name>/`
+(full table: `docs/running-batches.md` § Where files land).
 
 ### Operating a batch
 
@@ -80,7 +93,7 @@ re-run in isolation with `--only`:
 ```bash
 uv run python -m mantis_research run claude config/<batch>.json --dry-run
 uv run python -m mantis_research run claude config/<batch>.json
-uv run python -m mantis_research run claude config/<batch>.json --only 42 31
+uv run python -m mantis_research run claude config/<batch>.json --only 42 --only 31
 ```
 
 Rate-limit backoff (30 min) and generic-failure backoff (5 min) are
@@ -91,11 +104,13 @@ in-flight ones, saves state, and exits with a per-status summary.
 
 Settable in `.env`:
 
-- `DISABLED_STAGES=<comma,separated>` — refuses to dispatch listed stages.
-  Used to declare which provider CLIs are unavailable on this machine.
-  As of 2026-05-04, **`gemini` is disabled by default** because the Gemini
-  Advanced subscription was dropped; use Gemini-via-OpenRouter via
-  `google/gemini-3.1-pro-preview` in batch configs instead.
+- `DISABLED_STAGES=<comma,separated>` — refuses to dispatch listed stages,
+  fail-fast at the CLI before any config is read. Valid names are the
+  `STAGE_REGISTRY` keys: claude, gemini, openrouter, synthesis,
+  journal-passes, falsification, evaluation, claude-prior. **This machine's
+  `.env` sets `DISABLED_STAGES=gemini`** (Gemini Advanced subscription dropped
+  2026-05-04) — use Gemini-via-OpenRouter (`auto:google`) in batch configs
+  instead. The package default disables nothing.
 
 Other env vars: `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`,
 `MANTIS_HTTP_REFERER`, `MANTIS_APP_TITLE`, `LOG_LEVEL`. See `.env.template`.
@@ -164,5 +179,5 @@ Key playbooks:
 ## Examples
 
 - `config/example-batch.json` — a two-topic Path B batch demonstrating the
-  config schema. Copy and edit for your own runs, or use `mantis research
-  "<question>"` for a one-shot request.
+  config schema (full reference: `docs/batch-config.md`). Copy and edit for
+  your own runs, or use `mantis research "<question>"` for a one-shot request.

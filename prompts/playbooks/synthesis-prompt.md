@@ -4,13 +4,15 @@ How to author the `topics[].stages.synthesis.prompt` field — or use the
 project default in `default_prompts.synthesis`. Most topics use the
 default; per-topic override is for unusual cases.
 
-The synthesis stage is **Claude two-turn** running the synthesis model
-(`claude-opus-4-7` max-effort by default). Turn 1 reads all sources
-(Claude brief + 1+ Gemini sub-briefs), produces a merged document with
-explicit divergence flagging and meta-observations, saves to
-`research-outputs-synthesis/NN-slug.md`. Turn 2 invokes the
-chat-session-journal skill on the synthesis (see
-`journal-prompt.md`).
+The synthesis stage is **Claude multi-turn** running the synthesis model
+(`models.synthesis`, falling back to `models.claude`; unpinned configs
+resolve to the newest Opus — max effort by default). Turn 1 reads all
+sources (the primary brief plus every secondary, per `models.primary`),
+produces a merged document with explicit divergence flagging and
+meta-observations, saved to `research-outputs-synthesis/NN-slug.md`
+(legacy layout). A dedicated follow-up turn emits the epistemic sidecar
+(`NN-slug.sidecar.json`), and the optional journal turn (see
+`journal-prompt.md`) runs when `stages.journal.enabled` allows it.
 
 This playbook governs Turn 1. Validated empirically on the topic-1
 (semiconductor) test: 65 KB Claude + 5.6 KB Gemini → 91.8 KB synthesis

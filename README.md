@@ -129,8 +129,10 @@ when it needs the prose.
 
 ## Batch mode
 
-For a curated set of topics, author a v2 batch config (see `config/*.json`) and
-run stages explicitly:
+For a curated set of topics, author a v2 batch config
+([reference](docs/batch-config.md); example: `config/example-batch.json`) and
+run stages explicitly — the full operator guide is
+[docs/running-batches.md](docs/running-batches.md):
 
 ```bash
 uv run python -m mantis_research run openrouter    config/<batch>.json
@@ -141,7 +143,8 @@ uv run python -m mantis_research monitor synthesis
 ```
 
 Every stage is resumable: re-run the same command and topics already `done` are
-skipped. `--only <ids>` re-runs a subset; `--force` clears state and re-runs.
+skipped. `--only <id> --only <id>` re-runs a subset (repeat the flag per id);
+`--force` clears state and re-runs.
 
 | Stage | Subcommand |
 |---|---|
@@ -196,12 +199,24 @@ uv run python scripts/check_core_purity.py
 uv run python -m pre_commit run --all-files
 ```
 
-(`mypy` is a CI-only secondary fallback and is not installed locally.)
+(`mypy` is a secondary cross-check and is not in the dev group — run it as
+`uvx mypy src` when you want the second opinion. There is no hosted CI; the
+pre-commit hooks and the commands above are the gate.)
+
+Setup, gates, style, and how to land common changes: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 This project is developed under a governed method — decisions are ADRs
-(`docs/adr/`), changes are specified and pre-mortem-certified before
-implementation, and the pipeline is decomposed into a reviewed PR series. See
-`docs/method/` and `docs/specs/`.
+([docs/adr/](docs/adr/README.md)), larger changes are specified and
+pre-mortem-certified before implementation ([docs/specs/](docs/specs/README.md)),
+with templates in [docs/method/](docs/method/README.md).
+
+## Documentation
+
+[docs/README.md](docs/README.md) is the map: [architecture](docs/architecture.md),
+[running batches](docs/running-batches.md), the
+[batch-config reference](docs/batch-config.md), [ADRs](docs/adr/README.md), the
+[prompt playbooks](prompts/playbooks/README.md), and the plugin's
+[reference skill](skills/research/SKILL.md).
 
 ## Cost and subscription notes
 

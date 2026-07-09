@@ -3,13 +3,15 @@
 How to author the `topics[].stages.claude.prompt` field for a topic.
 
 The Claude research turn is the **primary substrate** for the topic. It
-runs on `claude-opus-4-7` with `--effort max` and web search enabled,
-single-turn, ~15–30 min wall clock, typical output 50–100 KB markdown
-saved to `research-outputs/NN-slug.md`. Downstream synthesis treats this
-as the comprehensive base; Gemini's output is an independent pass from
-different training data and different web crawl coverage, useful as
-cross-check / alternative framing rather than equal-weight depth — so
-this prompt has to do most of the substantive lifting.
+runs on the configured `models.claude` model (unpinned configs resolve
+to the newest Opus via the CLI's `opus` alias) at max effort with web
+search enabled, single-turn, ~15–30 min wall clock, typical output
+50–100 KB markdown saved to `research-outputs/NN-slug.md`. Downstream
+synthesis treats this as the comprehensive base; the secondary
+substrates are independent passes from different training data and
+search coverage, useful as cross-check / alternative framing rather
+than equal-weight depth — so this prompt has to do most of the
+substantive lifting.
 
 Distilled from the *Research Brief Authoring Playbook (Claude)* and
 *Prompting Claude's Advanced Research Mode for Technical and Quantitative

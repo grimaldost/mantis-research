@@ -7,6 +7,43 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+### Documentation
+
+- **A docs information architecture**: `docs/README.md` maps all documentation
+  by task and directory; new homes for the architecture
+  (`docs/architecture.md`), batch operation (`docs/running-batches.md`), and
+  the batch-config schema (`docs/batch-config.md`); index READMEs for
+  `docs/adr/`, `docs/specs/`, and `docs/feedback/`; a root `CONTRIBUTING.md`
+  (setup, gates, style, invariants, common changes, release steps). The README
+  gains a Documentation section and links into the new homes.
+- **`prompts/playbooks/README.md` rewritten to the shipped pipeline**: its
+  header still described the pre-pivot world — removed `run_batch*.py` /
+  `evaluate_synthesis.py` runners, Claude+Gemini-only stage gating, a stale
+  copy of the config schema. It now reflects Path B and the `mantis run
+  <stage>` surface, and links `docs/batch-config.md` instead of duplicating
+  the schema. The D1–D10 disciplines and the methodology references are kept.
+- **Truth fixes against the code**:
+  - The stage-disabled error message and nearby comments misnamed the env var
+    as `MANTIS_DISABLED_STAGES`; the real name is `DISABLED_STAGES`
+    (`interface/cli/dispatch.py`, `core/settings.py`). The valid-stage lists
+    in `.env.template` and `settings.py` now also include `evaluation` and
+    `claude-prior`.
+  - `CLAUDE.md`'s stage table advertised `outputs/<stage>/` + `state/<stage>/`
+    paths that matched neither run layout; it now shows the real legacy
+    directories and notes the batch-layout scoping. Its invariants list gains
+    I6 (adopted in ADR-0001 but never copied back), and the `--only` example
+    uses the syntax that actually parses (`--only 42 --only 31` — the
+    space-separated form is rejected by the CLI).
+  - `mypy` guidance corrected everywhere: a secondary cross-check, not in the
+    dev dependency group, and there is no hosted CI — run it as `uvx mypy src`.
+  - `pyproject.toml`'s `description` updated from the pre-pivot framing to
+    the agent-researcher one (ADR-0002).
+  - Stale docstrings: `core/config.py` (cited removed authoring/migration
+    scripts), `core/stage.py` (`journal-augment`; synthesis gating described
+    as Claude+Gemini), `core/paths.py` ("the 44 committed configs"); three
+    playbooks no longer claim `claude-opus-4-7` as the default model
+    (unpinned configs resolve to the newest Opus via the `opus` alias).
+
 ## [0.1.1] - 2026-07-04
 
 Agent-discoverability: document the full agent-facing surface so a fresh agent

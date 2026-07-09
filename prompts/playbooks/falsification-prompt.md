@@ -7,7 +7,8 @@ wrong is expensive (regulatory, financial, model-validation, decision-
 relevant work).
 
 The falsification stage is **Claude single-turn** running the synthesis
-model (`claude-opus-4-7` max-effort by default). It takes the synthesis
+model (`models.synthesis`/`models.claude`; unpinned configs resolve to
+the newest Opus — max effort by default). It takes the synthesis
 document as input and produces a counter-evidence document at
 `research-outputs-falsification/NN-slug.md` challenging the synthesis's
 headline claims.
