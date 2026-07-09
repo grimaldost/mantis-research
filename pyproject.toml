@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "mantis-research"
-version = "0.1.1"
+version = "0.1.2"
 description = "Deep-research tool for agents — fan one question across several models, cross-check them into one synthesis, and emit an epistemic sidecar (claims, divergences, verification queue)."
 readme = "README.md"
 requires-python = ">=3.13"

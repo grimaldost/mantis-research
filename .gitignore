@@ -54,5 +54,8 @@ archive/
 .claude/settings.local.json
 .claude/anchors/
 
+# Dogfooding feedback reports — kept local, do not travel with the repo
+docs/feedback/
+
 # Development scaffolding (series-orchestrator artifacts — not for the public tree)
 pr-series/

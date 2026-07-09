@@ -27,7 +27,6 @@ This page says where everything else lives.
 | [adr/](adr/README.md) | Architecture decision records (immutable; indexed in that README). |
 | [specs/](specs/README.md) | Execution specs for governed multi-PR changes (immutable records). |
 | [method/](method/README.md) | Tool-agnostic templates for the development method (ADR, spec, DoR, DoD, review checklist). |
-| [feedback/](feedback/README.md) | Dogfooding feedback reports and their generated index. |
 | [../prompts/playbooks/](../prompts/playbooks/README.md) | Canonical prompt-authoring specs, one per pipeline role. |
 | [../skills/research/SKILL.md](../skills/research/SKILL.md) | The reference skill shipped with the Claude Code plugin. |
 

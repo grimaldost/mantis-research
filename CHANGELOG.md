@@ -7,13 +7,15 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-07-09
+
 ### Documentation
 
 - **A docs information architecture**: `docs/README.md` maps all documentation
   by task and directory; new homes for the architecture
   (`docs/architecture.md`), batch operation (`docs/running-batches.md`), and
   the batch-config schema (`docs/batch-config.md`); index READMEs for
-  `docs/adr/`, `docs/specs/`, and `docs/feedback/`; a root `CONTRIBUTING.md`
+  `docs/adr/` and `docs/specs/`; a root `CONTRIBUTING.md`
   (setup, gates, style, invariants, common changes, release steps). The README
   gains a Documentation section and links into the new homes.
 - **`prompts/playbooks/README.md` rewritten to the shipped pipeline**: its
