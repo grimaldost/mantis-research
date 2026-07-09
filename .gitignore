@@ -52,6 +52,7 @@ claude-prior-baselines/
 comparison/
 archive/
 .claude/settings.local.json
+.claude/anchors/
 
 # Development scaffolding (series-orchestrator artifacts — not for the public tree)
 pr-series/
