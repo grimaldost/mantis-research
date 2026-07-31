@@ -227,15 +227,14 @@ For domains where the falsification model has weaker prior knowledge:
 - **Stage 4** runs OPTIONALLY after Stage 3 completes. Gates: synthesis
   file must exist; no other stages need to follow.
 - **Journal stage interaction**: the journal (Stage 3 turn 2) is
-  produced BEFORE Stage 4 in default sequencing. If Stage 4 finds the
-  synthesis has FALSIFIED claims, the journal is also affected.
-  Workflow: re-run Stage 4 with falsification, then re-run the journal
-  stage (via `run_journal_only.py --source falsification`) to journal
-  the falsified-version document.
-
-Alternative: defer the journal stage until after falsification, so the
-canonical journal is always backed by the falsification-tested document.
-This is cleaner but adds 30-60 min to the wall-clock per topic.
+  produced BEFORE Stage 4 in default sequencing, and Stage 4 writes its
+  own document under the falsification output directory rather than
+  editing the synthesis. So a journal written before falsification does
+  not carry the counter-evidence, and no stage re-journals the falsified
+  document: `mantis run journal-passes` augments the first-pass journal
+  against the *synthesis*, not against Stage 4's output. Treat the
+  falsification document as the record of what the journal does not
+  reflect, and read the two together.
 
 ---
 

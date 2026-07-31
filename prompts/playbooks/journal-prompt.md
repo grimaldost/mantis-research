@@ -172,9 +172,11 @@ likely buffering for the next batch of envelopes. The validated
 topic-1 journal jumped from 23 KB to 122 KB in a single late flush.
 
 If you must kill early, the partial journal at the kill moment is
-salvageable but won't have the closing coverage-check footer. You can
-rerun the journal-only stage via `run_journal_only.py` once the
-synthesis is intact.
+salvageable but won't have the closing coverage-check footer. Re-run the
+stage for that topic — `mantis run synthesis config/<batch>.json --only
+<id>` — once the synthesis brief is intact: the attempt skips Turn 1 when
+the brief already exists and its size is recorded in state, so only the
+sidecar and journal turns re-run (`interface/stages/synthesis.py`).
 
 ---
 

@@ -172,7 +172,8 @@ MCP tool returns.
 
 - **CLI** — `mantis run <stage> <config>` (batch mode), `mantis research
   "<question>"` (one-shot façade, ADR-0004), `mantis status` / `mantis
-  monitor` (read-only reporting).
+  monitor` (read-only reporting), `mantis version` (prints the package
+  version).
 - **MCP server** — `mantis-mcp` (or `python -m
   mantis_research.interface.mcp`) serves a `research` tool over stdio,
   wrapping the same `run_research()` the CLI uses. Local-first by design: the

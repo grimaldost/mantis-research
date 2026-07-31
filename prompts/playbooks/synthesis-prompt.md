@@ -23,9 +23,12 @@ meta-observations section.
 
 ## Default synthesis prompt (project-wide)
 
-The default lives in `default_prompts.synthesis` of the batch config
-and is injected by the runner with the actual source paths. Two design
-notes shape its structure:
+The default template is packaged as `SYNTHESIS` in
+`src/mantis_research/core/prompts.py`; the runner injects the actual
+source paths. A batch can override it via `default_prompts.synthesis`
+and a topic via `stages.synthesis.prompt` — the resolution chain is
+documented in [batch-config.md](../../docs/batch-config.md#default_prompts).
+Two design notes shape its structure:
 
 1. **U-shape attention bias** (Liu 2023, Hsieh 2024): tokens at the
    beginning and end of input receive disproportionate attention.

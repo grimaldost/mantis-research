@@ -8,12 +8,12 @@ Subcommands::
     mantis run synthesis       <config>  [...]
     mantis run journal-passes  <config>  [...]
     mantis run falsification   <config>  [...]
+    mantis run claude-prior    <config>  [...]
+    mantis run evaluation      <config>  [...]
+    mantis research            <question> [--assurance TIER --substrates LIST ...]
     mantis status              <config>
     mantis monitor             <stage>   [--poll-seconds N]
     mantis version
-
-The legacy ``scripts/run_*_batch.py`` shims continue to work and dispatch
-through the same code paths. They will be removed in Phase 6 cleanup.
 """
 
 from __future__ import annotations

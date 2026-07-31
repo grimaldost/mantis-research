@@ -1,7 +1,7 @@
 {
   "schema_version": 2,
   "batch_name": "example",
-  "description": "Example batch demonstrating the config schema: two topics researched via Path B (four OpenRouter substrates fan out, then a Claude synthesis cross-checks them). Copy this file, edit the topics, and run `mantis run openrouter config/<your>.json` then `synthesis`, or use `mantis research \"<question>\"` for a one-shot run. See prompts/playbooks/ for prompt-authoring guidance.",
+  "description": "Example batch demonstrating the config schema: two topics researched via Path B, then a Claude synthesis cross-checks them. Topic 1 fans out to four OpenRouter substrates and topic 2 to two, because substrate count is chosen per topic. Copy this file, edit the topics, and run `mantis run openrouter config/<your>.json` then `synthesis`, or use `mantis research \"<question>\"` for a one-shot run. See prompts/playbooks/ for prompt-authoring guidance.",
   "runner": {
     "layout": "batch"
   },
@@ -43,9 +43,8 @@
           },
           {
             "subslug": "perplexity",
-            "model": "auto:perplexity",
-            "web_search": true,
-            "web_search_engine": "native"
+            "model": "perplexity/sonar-reasoning-pro",
+            "web_search": false
           }
         ],
         "journal": {

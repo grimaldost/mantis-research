@@ -112,8 +112,12 @@ Settable in `.env`:
   2026-05-04) — use Gemini-via-OpenRouter (`auto:google`) in batch configs
   instead. The package default disables nothing.
 
-Other env vars: `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`,
-`MANTIS_HTTP_REFERER`, `MANTIS_APP_TITLE`, `LOG_LEVEL`. See `.env.template`.
+Other env vars actually read at runtime: `OPENROUTER_API_KEY`,
+`OPENROUTER_BASE_URL`, `MANTIS_HTTP_REFERER`, `MANTIS_APP_TITLE`
+(`core/settings.py`). `LOG_LEVEL` / `LOG_FORCE_JSON` are declared on
+`Settings` but nothing reads them — the log level comes from `mantis research
+--log-level` (default `INFO`); `mantis run <stage>` has no level flag. See
+`.env.template`.
 
 ## Request-level entry + config knobs
 

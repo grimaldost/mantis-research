@@ -102,6 +102,15 @@ empty string is a valid, kept prompt) or omit `prompt` and provide
 | `reasoning_effort` | `null` | `'low'` \| `'medium'` \| `'high'` \| `'xhigh'` where the model supports it. |
 | `max_tokens` | `null` | Response cap. |
 
+Avoid `auto:perplexity`:
+[`interface/research_service.py`](../src/mantis_research/interface/research_service.py)
+records that its pick (`sonar-pro-search`) 404s on the completions endpoint,
+which is why `mantis research` leaves `perplexity` out of its default substrate
+set. Pin a Sonar model explicitly instead — `perplexity/sonar-reasoning-pro` is
+the one `core/model_policy.py` pins and the playbook's templates use, with
+`web_search: false`. Provider slugs shift, so check OpenRouter's `/models` list
+before committing a config.
+
 ### `stages.gemini[]` (legacy)
 
 One entry per Gemini CLI subsession: `{ "subslug": …, "prompt": … }` with the
@@ -110,7 +119,8 @@ Gemini via OpenRouter (`auto:google`) instead.
 
 ### Optional stages: `synthesis`, `journal`, `journal_passes`, `falsification`, `evaluation`
 
-Each is `{ "prompt": …, "enabled": … }`, both optional.
+Each accepts `{ "prompt": …, "enabled": … }`, both optional; which stages
+honour `enabled` is noted per stage below.
 
 - `synthesis` — always runs; `prompt: null` uses the default chain above. Its
   sidecar turn is not configurable per topic.
@@ -118,8 +128,10 @@ Each is `{ "prompt": …, "enabled": … }`, both optional.
   batch default, [ADR-0002](adr/0002-reposition-as-agent-researcher-tool.md));
   `false` = skipped, and the topic succeeds on the brief alone. One-shot
   `mantis research` runs default it off.
-- `journal_passes` — augmentation over an existing journal; blocks until the
-  journal artifact exists.
+- `journal_passes` — augmentation over an existing journal. Like `synthesis`,
+  its `enabled` flag is accepted by the schema but ignored: the stage runs for
+  every topic in the config and blocks on topics whose first-pass journal is
+  missing. Use `--only` to restrict it.
 - `falsification` / `evaluation` — opt-in checking stages: an explicit
   `enabled` wins; unset follows `high_stakes`. Evaluation additionally needs
   the claude-prior baseline on disk (its Gate 3 input).
