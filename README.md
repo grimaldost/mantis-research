@@ -1,26 +1,25 @@
-# mantis-research
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/mantis-hero-dark.svg">
+  <img alt="mantis" src="assets/mantis-hero-light.svg" width="100%">
+</picture>
 
-A **deep-research tool for agents**. Give it a question; it researches across
-several LLMs with different training corpora and search substrates, merges the
-briefs into one synthesis that *preserves* their disagreements instead of
-smoothing them, and emits a machine-readable **epistemic sidecar** — claims,
-cross-model divergences, and a verification queue — that a calling agent can
-load without parsing prose. An optional adversarial falsification pass and a
-gated evaluation pass are available for higher-stakes questions.
+[![version](https://img.shields.io/github/v/tag/grimaldost/mantis-research?style=flat-square&label=version&labelColor=2A3238&color=6C407F)](CHANGELOG.md)
+[![python](https://img.shields.io/badge/python-3.13%2B-6C407F?style=flat-square&labelColor=2A3238)](pyproject.toml)
+[![license](https://img.shields.io/badge/license-MIT-6C407F?style=flat-square&labelColor=2A3238)](LICENSE)
+
+**mantis-research** is a **deep-research tool for agents**. Give it a question;
+it researches across several LLMs with different training corpora and search
+substrates, merges the briefs into one synthesis that *preserves* their
+disagreements instead of smoothing them, and emits a machine-readable
+**epistemic sidecar** — claims, cross-model divergences, and a verification
+queue — that a calling agent can load without parsing prose. An optional
+adversarial falsification pass and a gated evaluation pass are available for
+higher-stakes questions.
 
 It also drives staged batch runs, and its outputs double as reference material
-for downstream [mantis](https://github.com/grimaldost) knowledge
-ingestion — but the primary purpose is grounded, cross-checked research for
-agent consumers (see [ADR-0002](docs/adr/0002-reposition-as-agent-researcher-tool.md)).
-
-## Why multi-substrate
-
-A single model's confident wrongness is invisible from inside that model.
-Running the same question across substrate-diverse models — open-weight and
-closed, different RLHF traditions, real-time vs. semantic search — makes
-hallucinations surface as *disagreement*, and the synthesis flags those
-disagreements rather than averaging them away. The sidecar turns that signal
-into structured data.
+for downstream mantis knowledge ingestion — but the primary purpose is
+grounded, cross-checked research for agent consumers (see
+[ADR-0002](docs/adr/0002-reposition-as-agent-researcher-tool.md)).
 
 ## Requirements
 
@@ -52,7 +51,7 @@ Or add it as a dependency of another project
 (`uv add git+https://github.com/grimaldost/mantis-research`), or work from a
 clone for development (`git clone … && uv sync`, then `uv run mantis …`). The
 installed tool reads `OPENROUTER_API_KEY` from the environment; a clone also
-reads a local `.env`.
+reads a local `.env`. `mantis version` prints what you have installed.
 
 ## Quickstart — one question
 
@@ -78,14 +77,31 @@ Assurance tiers select how far the pipeline runs:
 | `standard` (default) | + adversarial falsification |
 | `high` | + claude-prior baseline + gated evaluation |
 
-Other flags: `--substrates openai,deepseek,google` (the default Path B set, each
-resolved to the vendor's newest frontier model; add `,perplexity` with a working
-Sonar model for real-time-search coverage), `--primary
-openrouter:openai` (which brief anchors the synthesis), `--journal` (also emit
-a mantis-ingestion journal), `--batch-name`, `--dry-run`.
+The other flags:
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--substrates` | `openai,deepseek,google` | The Path B set, each resolved to the vendor's newest frontier model. Add `,perplexity` with a working Sonar model for real-time-search coverage. |
+| `--primary` | `openrouter:<first substrate>` | Which brief anchors the synthesis, e.g. `openrouter:openai`. |
+| `--journal` / `--no-journal` | off | Also emit a mantis-ingestion journal. |
+| `--batch-name` | `research-<slug>-<timestamp>` | Names the run's directory tree. |
+| `--dry-run` | off | Validate the whole pipeline with no model calls. |
+| `--log-level` | `INFO` | Level for the structured logs on stderr. The batch subcommands have no level flag. |
 
 The manifest lists every output path (briefs, synthesis, sidecar, falsification,
 evaluation), each stage's exit code, and best-effort token/cost totals.
+`mantis research` itself exits 0 when the manifest is `ok`, 1 when a stage
+failed, and 2 on a bad argument (the full table is in
+[docs/running-batches.md](docs/running-batches.md#exit-codes)).
+
+## Why multi-substrate
+
+A single model's confident wrongness is invisible from inside that model.
+Running the same question across substrate-diverse models — open-weight and
+closed, different RLHF traditions, real-time vs. semantic search — makes
+hallucinations surface as *disagreement*, and the synthesis flags those
+disagreements rather than averaging them away. The sidecar turns that signal
+into structured data.
 
 ## Serve to agents (MCP tool + plugin)
 
@@ -220,8 +236,13 @@ with templates in [docs/method/](docs/method/README.md).
 
 ## Cost and subscription notes
 
-Research substrates bill through OpenRouter (roughly a few dollars per
-multi-substrate question). Synthesis, journal, falsification, evaluation, and
-claude-prior run on the Claude Code CLI against your Claude subscription. The
-manifest and per-subsession state record token/cost so you can see what a run
-cost.
+Research substrates bill through OpenRouter. Earlier runs came in at roughly
+$1–6 per question on the default three-substrate set and $2–6 per topic on a
+four-substrate batch, down to cents on a lean or narrow run; the per-substrate
+cost-per-call figures those came from are tabulated in
+[model-recommendations.md](prompts/playbooks/model-recommendations.md). They are
+observed ranges from past batches, not a current quote — provider rates move.
+Synthesis, journal, falsification, evaluation, and claude-prior run on the
+Claude Code CLI against your Claude subscription — time, not metered dollars.
+The manifest and per-subsession state record token/cost so you can see what a
+run cost.

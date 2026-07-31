@@ -7,6 +7,41 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+### Fixed
+
+- `mantis version` reported a stale number. `mantis_research.__version__` was a
+  hand-maintained third copy of the version, left at `0.1.0` while
+  `pyproject.toml` and `.claude-plugin/plugin.json` moved to `0.1.2`; it now
+  reads the installed distribution's metadata, so a release bump touches two
+  files rather than three. `CONTRIBUTING.md`'s release checklist is updated to
+  match, including the `uv lock` / re-sync step the derived version needs.
+- `config/example-batch.json` set `web_search: true` on its Sonar entry and
+  pinned the `auto:perplexity` sentinel, which the code's own note reports as
+  resolving to a model that 404s on the completions endpoint — both
+  contradicting the playbook the file's documentation points at. The entry now
+  pins `perplexity/sonar-reasoning-pro` with `web_search: false`.
+
+### Documentation
+
+- The visual identity is wired in: a light/dark hero and a badge row at the top
+  of the README, with the assets and their usage rules under `assets/`.
+- Corrected claims that had drifted from the code: which stages honour a
+  per-topic `enabled` flag (`claude-prior` and `journal-passes` run for every
+  topic once invoked — `docs/running-batches.md`, `docs/batch-config.md`);
+  where the default synthesis prompt lives (`core/prompts.py`, not
+  `default_prompts.synthesis` — `prompts/playbooks/synthesis-prompt.md`); that
+  `LOG_LEVEL` / `LOG_FORCE_JSON` are declared but unread, the level coming from
+  `mantis research --log-level` (`CLAUDE.md`); and the example batch's own
+  description, which claimed four substrates for both of its topics.
+- Removed the last two pointers at `run_journal_only.py`, deleted in the pivot
+  (`prompts/playbooks/journal-prompt.md`, `falsification-prompt.md`), and the
+  `scripts/run_*_batch.py` shim note in the CLI module docstring — which also
+  omitted `run claude-prior`, `run evaluation`, and `research`.
+- Documented surfaces that had none: process exit codes for every command
+  (`docs/running-batches.md`), `mantis research --log-level`, `mantis monitor
+  --poll-seconds`, and the `mantis version` subcommand. The README's one-shot
+  flags are now a table.
+
 ## [0.1.2] - 2026-07-09
 
 ### Documentation
