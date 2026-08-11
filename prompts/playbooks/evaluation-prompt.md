@@ -68,9 +68,15 @@ drops on subjective rubric criteria (Zheng 2023, MT-Bench).
 |---|---|---|---|---|
 | **C1 — Specificity** | Generic claims, no specific tools / numbers / dates | Some specific entities but mostly generic | Most claims have specific tools / numbers / dates | All non-trivial claims have specific entities + verifiable details |
 | **C2 — Mechanism-proposing** | Pure description, no causal claims | Implicit mechanisms, no naming | Some mechanisms named but not justified | Mechanisms named, traced to evidence, conditions stated |
-| **C3 — Distinctiveness from Claude-prior** | Synthesis ≈ what Claude alone would produce | <30% novel content | 30-70% novel content | >70% content traceable to Gemini cross-check or to web-search-discovered novelty |
+| **C3 — Distinctiveness from Claude-prior** | Synthesis ≈ what Claude alone would produce | <30% novel content | 30-70% novel content | >70% content traceable to the peer briefs or to web-search-discovered novelty |
 | **C4 — Traceability** | Most claims have no source attribution | Some claims sourced, secondary commentary | Most claims sourced to primary or Tier 2 | All non-trivial claims sourced to primary text + paragraph number |
-| **C5 — Actionability** | No actionable substrate for downstream mantis ingestion | Some § 7 cross-domain links present but generic | § 7 with 3+ specific cross-domain mappings + conditions | § 7 + per-mapping action: "this pattern applies when X" |
+| **C5 — Actionability** | Nothing a reader could act on | Actionable in principle, no specifics | 3+ specific actions or applications with named targets | Those, plus the conditions under which each holds |
+
+**C5 scores content, not a section.** It used to score the presence of a `§ 7`
+block — a section only the retired Path-A scaffold produced — and in the one
+real evaluation on record it scored 3/3 anyway, against a synthesis that could
+not have contained one. A criterion that scores full marks for something absent
+is not measuring anything.
 | **C6 — Mode-dependent (varies by topic class)** | (Adapt: for regulatory = paragraph-level citation; for engineering = working code; for methodology = falsifiability + symmetric-treatment) | | | |
 
 Total quality score: **Q = (C1 + C2 + C3 + C4 + C5 + C6) / 18 ∈ [0,1]**.
@@ -103,12 +109,8 @@ that produces should not also evaluate.
 {synthesis_path} ({synthesis_size_kb:.1f} KB)
 </source>
 
-<source role="claude-original">
-{claude_path} ({claude_size_kb:.1f} KB)
-</source>
-
-<source role="gemini-originals">
-{gemini_block}
+<source role="peer-briefs" count="{secondary_count}">
+{secondary_block}
 </source>
 
 <source role="claude-prior-baseline">
@@ -144,7 +146,7 @@ exact shape:
 {
   "topic_id": "{topic_id}",
   "synthesis_path": "{synthesis_path}",
-  "evaluator_model": "claude-opus-4-7",
+  "evaluator_model": "<the model id you are actually running as>",
   "evaluation_timestamp": "<ISO 8601>",
   "claims_extracted": [<list of 15-25 claim objects>],
   "gate_1_confabulation": {

@@ -69,6 +69,17 @@ releases (starting with 0.1.0).
   each stage starting and finishing, each research substrate starting and
   finishing, and a heartbeat every 10 s inside any backoff. A broken listener
   cannot fail a run. (MANT-B01)
+- **The evaluation rubric scores what a Path-B run produces.** The stage has run
+  once in 19 runs and that record is a vacuous-gate signature — verdict PASS,
+  Q = 0.944, all three gates untriggered, five of six criteria at 3/3. Criterion
+  C5 scored the presence of a `§ 7` section that only the retired Path-A
+  scaffold produced, and scored 3/3 against a synthesis that could not contain
+  one. Fixed by inspection: C5 now scores actionable content rather than a
+  section, the `claude-original` / `gemini-originals` source blocks become one
+  N-peer-brief block, and the hardcoded `claude-opus-4-7` evaluator literal (the
+  model overrode it in the one real record) is gone. Whether the gates can
+  reject a deliberately degraded synthesis is still the open measurement, and
+  the stage's retirement stays conditional on it. (MANT-B14, partial)
 - **The synthesis prompt describes the run it is actually in.** The Path-B pivot
   reached the code and the docs but never the prompt bodies: `SYNTHESIS` still
   opened "merge two LLM-produced briefs", asked for divergences "between the

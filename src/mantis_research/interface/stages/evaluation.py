@@ -110,9 +110,15 @@ class EvaluationStage:
         baseline = _baseline_path(dirs, stem)
         eval_path = eval_dir / f'{stem}-eval.json'
 
-        secondaries = _briefs_in(dirs, 'gemini', stem) + _briefs_in(dirs, 'openrouter', stem)
-        gemini_block = '\n'.join(
-            f'- {p.as_posix()} ({p.stat().st_size / 1024:.1f} KB)' for p in secondaries
+        # Every brief the synthesis merged, whatever produced it. The rubric used
+        # to name a Claude original and a block of "gemini-originals"; a Path-B
+        # run has neither, so it was scoring against source blocks describing
+        # inputs the pipeline no longer produces (MANT-B14).
+        peers = _briefs_in(dirs, 'gemini', stem) + _briefs_in(dirs, 'openrouter', stem)
+        if claude.exists():
+            peers = [claude, *peers]
+        secondary_block = '\n'.join(
+            f'- {p.as_posix()} ({p.stat().st_size / 1024:.1f} KB)' for p in peers
         )
 
         template = (
@@ -120,16 +126,18 @@ class EvaluationStage:
             or ctx.batch.default_prompts.evaluation
             or default_prompts.EVALUATION
         )
-        # A missing Claude brief (Path B) still evaluates: fall back to the
-        # synthesis for the {claude_*} slots so the prompt formats.
+        # A missing Claude brief (Path B) still evaluates: the legacy {claude_*}
+        # slots fall back to the synthesis so an old custom prompt still formats.
         claude_ref = claude if claude.exists() else synthesis
         prompt = template.format(
             topic_id=topic_id,
             synthesis_path=synthesis.as_posix(),
             synthesis_size_kb=synthesis.stat().st_size / 1024,
+            secondary_count=len(peers),
+            secondary_block=secondary_block,
             claude_path=claude_ref.as_posix(),
             claude_size_kb=claude_ref.stat().st_size / 1024,
-            gemini_block=gemini_block,
+            gemini_block=secondary_block,
             baseline_path=baseline.as_posix(),
             baseline_size_kb=baseline.stat().st_size / 1024,
             eval_path=eval_path.as_posix(),

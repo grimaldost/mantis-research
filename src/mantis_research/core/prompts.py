@@ -219,19 +219,15 @@ You have NO access to the synthesis-production session's context. Your evaluatio
 {synthesis_path} ({synthesis_size_kb:.1f} KB)
 </source>
 
-<source role="claude-original">
-{claude_path} ({claude_size_kb:.1f} KB)
-</source>
-
-<source role="gemini-originals">
-{gemini_block}
+<source role="peer-briefs" count="{secondary_count}">
+{secondary_block}
 </source>
 
 <source role="claude-prior-baseline">
 {baseline_path} ({baseline_size_kb:.1f} KB)
 </source>
 
-The Claude-prior baseline is Claude's output given ONLY the topic title with no access to the research briefs. It represents what a generalist would produce from common industry knowledge. It is the substrate for Gate 3 (training-consensus-parroting detection).
+The peer briefs are the research briefs the synthesis merged, one per substrate — the evidence base against which its claims are traceable. The Claude-prior baseline is a Claude output given ONLY the topic title, with no access to those briefs; it represents what a generalist would produce from common industry knowledge, and it is the substrate for Gate 3 (training-consensus-parroting detection).
 
 Read all sources with the Read tool before scoring.
 
@@ -252,7 +248,7 @@ Save the evaluation record to {eval_path} as STRUCTURED JSON with this exact sha
 {{
   "topic_id": "{topic_id}",
   "synthesis_path": "{synthesis_path}",
-  "evaluator_model": "claude-opus-4-7",
+  "evaluator_model": "<the model id you are actually running as>",
   "evaluation_timestamp": "<ISO 8601 UTC>",
   "claims_extracted": [
     {{"claim": "<verbatim>", "section": "<...>", "type": "factual|procedural|reference|extrapolation"}}
@@ -311,9 +307,9 @@ Save the evaluation record to {eval_path} as STRUCTURED JSON with this exact sha
 Likert anchors (0-3 per criterion, total Q = sum/18):
 - C1 Specificity: 0=generic; 1=some specific; 2=most claims have specifics; 3=all non-trivial claims have specifics + verifiable details
 - C2 Mechanism-proposing: 0=description only; 1=implicit; 2=mechanisms named; 3=mechanisms named + traced + conditioned
-- C3 Distinctiveness from Claude-prior: 0=≈baseline; 1=<30% novel; 2=30-70%; 3=>70% from Gemini cross-check or web
+- C3 Distinctiveness from Claude-prior: 0=≈baseline; 1=<30% novel; 2=30-70%; 3=>70% from the peer briefs or the web
 - C4 Traceability: 0=mostly unsourced; 1=some primary; 2=most primary; 3=all primary + paragraph numbers
-- C5 Actionability: 0=no §7; 1=§7 generic; 2=§7 with 3+ specific cross-domain mappings; 3=§7 + per-mapping conditions
+- C5 Actionability: 0=nothing a reader could act on; 1=actionable in principle, no specifics; 2=3+ specific actions or applications with named targets; 3=those plus the conditions under which each holds. Score what the synthesis says, not whether it has a particular section
 - C6 Mode-dependent: pick the mode based on topic class, score 0-3
 
 Verdict logic:
