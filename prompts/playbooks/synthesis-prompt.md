@@ -271,7 +271,8 @@ with two authorship zones:
 
 - **model-authored** — `claims`, `divergences`, `verification_queue`,
   `agreements_worth_verifying`, `coverage_notes` (drawn from the synthesis's
-  divergence blocks and `## Synthesis Meta-Observations`).
+  divergence blocks and `## Synthesis Meta-Observations`), plus
+  `source_citations`: one citation inventory per research brief.
 - **runner-authored** — run identity (`question` / `topic_id` / `slug` /
   `batch_name` / `synthesis_path` / `generated_at`), `sources`, and
   `provenance`, merged in by the stage after the model's JSON validates.
@@ -290,3 +291,11 @@ Mechanics that matter:
   merge, `require_complete()` demands `question`, `generated_at` and a non-empty
   `sources`, and raises if any is absent. That failure does not consume a
   re-ask: the gap is the runner's, so another model turn would reproduce it.
+- **`source_overlaps` is recomputed, not accepted.** The model writes the
+  citation inventory and, per overlapping source, whether the briefs read
+  incompatible figures out of it. `derive_source_overlaps` then recomputes which
+  substrates cited each source and which never did, and folds the model's
+  conflict judgement onto that. Membership is data; only the conflict is
+  judgement. This is what makes "two substrates cited the same URL and disagreed
+  about it" a computed fact rather than free text improvised into
+  `Divergence.substrates` — a field documented for something else.

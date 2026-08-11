@@ -168,6 +168,54 @@ class TestSidecarEmission:
         assert 'question' in (result.error or '')
         assert adapter.sidecar_calls == 1  # no re-ask burned on a runner-side gap
 
+    async def test_source_overlap_membership_is_recomputed_not_trusted(
+        self, paths, tmp_path: Path
+    ) -> None:
+        # MANT-B07: the model supplies the citation inventory and the conflict
+        # judgement; which substrates cited a source is derived from the
+        # inventory, so a model that names the wrong substrates (or none) still
+        # produces a correct overlap.
+        written = json.dumps(
+            {
+                'sidecar_version': 2,
+                'claims': [],
+                'divergences': [],
+                'verification_queue': [],
+                'agreements_worth_verifying': [],
+                'coverage_notes': [],
+                'source_citations': [
+                    {
+                        'substrate': 'openrouter:openai',
+                        'cited': [{'reference': 'https://bcb.gov.br/x', 'kind': 'url'}],
+                    },
+                    {
+                        'substrate': 'openrouter:deepseek',
+                        'cited': [{'reference': 'http://www.bcb.gov.br/x/', 'kind': 'url'}],
+                    },
+                    {'substrate': 'openrouter:google', 'cited': []},
+                ],
+                'source_overlaps': [
+                    {
+                        'id': 'o1',
+                        'reference': 'https://bcb.gov.br/x',
+                        'substrates': ['everyone, obviously'],
+                        'figures_conflict': True,
+                        'conflict': '4.2% vs 6.1% off the same table',
+                    }
+                ],
+            }
+        )
+        adapter = ScriptedAdapter(paths['synthesis'], paths['sidecar'], paths['journal'], [written])
+        result = await _run(adapter, _config(), tmp_path, SynthesisState(id='1', slug='t'))
+        assert result.success
+        merged = ResearchSidecar.from_model_json(paths['sidecar'].read_text(encoding='utf-8'))
+        overlap = merged.source_overlaps[0]
+        assert overlap.substrates == ['openrouter:openai', 'openrouter:deepseek']
+        assert overlap.not_cited_by == ['openrouter:google']
+        # The model's judgement survives; only its membership claim is replaced.
+        assert overlap.figures_conflict is True
+        assert '4.2%' in (overlap.conflict or '')
+
     async def test_provenance_filled_from_openrouter_state(
         self, paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

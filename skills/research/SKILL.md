@@ -84,16 +84,27 @@ and long free-text is clipped:
   holds, when determinable).
 - `verification_queue` — claims worth checking externally; each `{ id, claim,
   reason, sources_disagree }`.
+- `source_overlaps` — the sources **more than one substrate cited**; each
+  `{ id, reference, kind, substrates, not_cited_by, figures_conflict, conflict }`.
+  This is the pipeline's sharpest signal: when two substrates cite the same URL
+  and read incompatible figures out of it (`figures_conflict: true`) while a
+  third never cites it at all (`not_cited_by`), the *source* is suspect — a
+  hallucination class no single-provider run can surface. `substrates` and
+  `not_cited_by` are computed from the per-substrate citation inventory, not
+  asserted by the model.
 - `agreements_worth_verifying`, `coverage_notes` — lists of strings.
-- `truncated` — `{ any, claims, divergences, verification_queue }`: how many items
-  each list dropped by the cap. If `any` is true, read the full sidecar.
+- `truncated` — `{ any, claims, divergences, verification_queue, source_overlaps }`:
+  how many items each list dropped by the cap. If `any` is true, read the full
+  sidecar.
 
 The **complete** sidecar is always on disk at `outputs.sidecar` — including fields
 not projected inline: `question` (the question this sidecar answers, verbatim —
 so a sidecar you froze months ago is still citable on its own), `sources[]`
 (`{ label, path, model_id, bytes }` per brief, so you can see which model
-produced which brief) and `provenance` (durations, token/cost totals). Read it
-when you need the full lists or per-source attribution.
+produced which brief), `source_citations[]` (the full per-substrate citation
+inventory `source_overlaps` is computed from) and `provenance` (durations,
+token/cost totals). Read it when you need the full lists or per-source
+attribution.
 
 ## Cost & latency
 

@@ -114,10 +114,24 @@ Write ONLY valid JSON to {sidecar_path} with the Write tool — no prose, no mar
     {{"id": "v1", "claim": "<a claim to verify externally>", "reason": "<disagreement | single-source | training-uniform>", "sources_disagree": ["<sources>"]}}
   ],
   "agreements_worth_verifying": ["<a non-trivial claim all substrates agree on — weak signal, flag before downstream reliance>"],
-  "coverage_notes": ["<what the synthesis could not cover, or marked Not-found>"]
+  "coverage_notes": ["<what the synthesis could not cover, or marked Not-found>"],
+  "source_citations": [
+    {{"substrate": "<the source label exactly as the synthesis names it, e.g. openrouter:openai>", "cited": [
+      {{"reference": "<the URL, repository slug, package name or paper title that brief cited>", "kind": "url|repository|package|paper|other"}}
+    ]}}
+  ],
+  "source_overlaps": [
+    {{"id": "o1", "reference": "<a source cited by more than one brief>", "figures_conflict": true, "conflict": "<what each brief read out of it, when they are incompatible>"}}
+  ]
 }}
 
-Draw the content faithfully from the synthesis's in-line divergence blocks and its `## Synthesis Meta-Observations` section (hallucination flags → verification_queue; cross-model agreement → agreements_worth_verifying). Give every claim, divergence, and verification item a unique id. The file is parsed and validated directly: emit ONLY the JSON object, and do not add keys beyond those shown (unknown keys are rejected)."""
+Draw the content faithfully from the synthesis's in-line divergence blocks and its `## Synthesis Meta-Observations` section (hallucination flags → verification_queue; cross-model agreement → agreements_worth_verifying). Give every claim, divergence, and verification item a unique id.
+
+`source_citations` is an inventory, one entry per research brief: what that brief actually cited, listed once each, verbatim as cited. Be exhaustive rather than selective — this is the substrate for the comparison below, so a source you omit is a comparison that cannot happen.
+
+`source_overlaps` is where this pipeline earns its cost. Two briefs citing the SAME source and reading incompatible figures out of it indicts the source, which no single-provider run can surface — set `figures_conflict` and say in `conflict` what each brief read. Only `reference`, `figures_conflict` and `conflict` are yours: which briefs cited a source is recomputed from `source_citations`, so do not list substrates here, and list an overlap only for a source that appears in the inventory.
+
+The file is parsed and validated directly: emit ONLY the JSON object, and do not add keys beyond those shown (unknown keys are rejected)."""
 
 
 # Claude-prior baseline prompt — Stage 5-input. Topic-title-only, no sources, no

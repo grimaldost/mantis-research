@@ -18,6 +18,16 @@ releases (starting with 0.1.0).
   `generated_at` or a non-empty `sources` is missing rather than shipping a
   hollow artifact. Additive under invariant I4; `sidecar_version: 1` documents
   on disk still validate. (MANT-B06)
+- **Source provenance has a typed home** — `source_citations` (a per-substrate
+  citation inventory) and `source_overlaps` (which substrates cited the same
+  artifact, who never cited it, and whether they read incompatible figures out
+  of it) on the sidecar, with `source_overlaps` surfaced in the MCP projection.
+  `SourceRef` typed only `label / path / model_id / bytes`, so the pipeline's
+  sharpest measured result — two substrates citing the identical URL with
+  incompatible figures while a third never cited it, indicting the source —
+  could only be narrated, improvised into `Divergence.substrates` as free text.
+  Overlap membership is recomputed by the runner from the inventory; the model
+  supplies the conflict judgement alone. (MANT-B07)
 - **The `research` MCP tool defaults to `assurance: "fast"`** (was `standard`).
   `standard` and `high` stay as explicit escalations; the tier is a choice about
   how much checking the answer needs, not about how long the call takes.

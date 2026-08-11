@@ -9,10 +9,14 @@ from pydantic import ValidationError
 
 from mantis_research.core.sidecar import (
     SIDECAR_VERSION,
+    CitedSource,
     Provenance,
     ResearchSidecar,
     SidecarContractError,
+    SourceCitations,
+    SourceOverlap,
     SourceRef,
+    derive_source_overlaps,
     missing_required_fields,
     project_for_agent,
 )
@@ -126,6 +130,84 @@ class TestValidation:
         doc = {'sidecar_version': 1, 'claimz': []}
         with pytest.raises(ValidationError):
             ResearchSidecar.from_model_json(json.dumps(doc))
+
+
+class TestSourceProvenance:
+    """MANT-B07 — the mechanism the tool actually wins on, made computable.
+
+    The sharpest result the pipeline has produced was not averaging: two
+    substrates cited the identical URL with incompatible figures while a third
+    never cited it at all, so the source itself was suspect. With citations
+    typed, "did two substrates cite the same source and disagree about it" is
+    computed rather than improvised into a free-text field.
+    """
+
+    def _inventory(self) -> list[SourceCitations]:
+        return [
+            SourceCitations(
+                substrate='openrouter:openai',
+                cited=[
+                    CitedSource(reference='https://bcb.gov.br/report-2025', kind='url'),
+                    CitedSource(reference='quantlib/quantlib', kind='repository'),
+                ],
+            ),
+            SourceCitations(
+                substrate='openrouter:deepseek',
+                cited=[CitedSource(reference='http://www.bcb.gov.br/report-2025/', kind='url')],
+            ),
+            SourceCitations(
+                substrate='openrouter:google',
+                cited=[CitedSource(reference='numpy', kind='package')],
+            ),
+        ]
+
+    def test_overlap_is_derived_across_substrates(self) -> None:
+        overlaps = derive_source_overlaps(self._inventory())
+        assert [o.reference for o in overlaps] == ['https://bcb.gov.br/report-2025']
+        assert overlaps[0].substrates == ['openrouter:openai', 'openrouter:deepseek']
+
+    def test_overlap_records_who_never_cited_it(self) -> None:
+        # The third substrate's silence is half the signal — it is what made the
+        # source itself suspect rather than one model wrong.
+        overlaps = derive_source_overlaps(self._inventory())
+        assert overlaps[0].not_cited_by == ['openrouter:google']
+
+    def test_url_forms_of_the_same_source_are_one_reference(self) -> None:
+        # http/https, www, and a trailing slash are the same citation.
+        overlaps = derive_source_overlaps(self._inventory())
+        assert len(overlaps) == 1
+
+    def test_a_source_cited_once_is_not_an_overlap(self) -> None:
+        overlaps = derive_source_overlaps(self._inventory())
+        assert 'numpy' not in [o.reference for o in overlaps]
+
+    def test_model_conflict_judgement_is_folded_onto_the_derived_overlap(self) -> None:
+        judgement = SourceOverlap(
+            id='ignored',
+            reference='https://BCB.gov.br/report-2025',
+            figures_conflict=True,
+            conflict='openai reads 4.2%, deepseek reads 6.1%, same table',
+        )
+        overlaps = derive_source_overlaps(self._inventory(), judgements=[judgement])
+        assert overlaps[0].figures_conflict is True
+        assert 'same table' in (overlaps[0].conflict or '')
+        # Substrate membership stays derived, never taken from the model.
+        assert overlaps[0].substrates == ['openrouter:openai', 'openrouter:deepseek']
+
+    def test_ids_are_stable_and_unique(self) -> None:
+        overlaps = derive_source_overlaps(self._inventory())
+        assert [o.id for o in overlaps] == ['o1']
+
+    def test_empty_inventory_yields_no_overlaps(self) -> None:
+        assert derive_source_overlaps([]) == []
+
+    def test_overlaps_reach_the_agent_projection(self) -> None:
+        sc = ResearchSidecar.from_model_json(json.dumps(_FULL_MODEL_DOC)).model_copy(
+            update={'source_overlaps': derive_source_overlaps(self._inventory())}
+        )
+        out = project_for_agent(sc)
+        assert out['source_overlaps'][0]['reference'] == 'https://bcb.gov.br/report-2025'
+        assert out['truncated']['source_overlaps'] == 0
 
 
 class TestProvenanceAggregation:

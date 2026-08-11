@@ -27,6 +27,7 @@ from mantis_research.core.sidecar import (
     ResearchSidecar,
     SidecarContractError,
     SourceRef,
+    derive_source_overlaps,
 )
 from mantis_research.core.stage import AttemptResult
 from mantis_research.core.state import OpenRouterResearchState
@@ -533,6 +534,12 @@ class SynthesisStage:
                 'synthesis_path': synthesis_path.as_posix(),
                 'generated_at': datetime.now(UTC).isoformat(),
                 'sources': sources,
+                # Overlap membership is recomputed from the model's citation
+                # inventory rather than trusted as written: which substrates
+                # cited a source is data, not judgement (MANT-B07).
+                'source_overlaps': derive_source_overlaps(
+                    sc.source_citations, judgements=sc.source_overlaps
+                ),
                 'provenance': provenance,
             }
         )
