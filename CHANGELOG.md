@@ -18,6 +18,16 @@ releases (starting with 0.1.0).
   `generated_at` or a non-empty `sources` is missing rather than shipping a
   hollow artifact. Additive under invariant I4; `sidecar_version: 1` documents
   on disk still validate. (MANT-B06)
+- **A run is named before it dispatches.** `run_research` minted `batch_name`
+  and the run directories before dispatch but returned them only in the final
+  manifest, so an aborted call could not say whether it had spent money or
+  written anything, and a completed run on disk could not be matched to the
+  question that produced it — a correctness hazard, not only a lost run. It now
+  writes `outputs/<batch_name>/run.json` (`status: "dispatching"`, rewritten to
+  `"complete"` at the end) and emits a `run_named` event before the first stage.
+  `run_research` takes an `on_event` callback and the manifest carries
+  `question_slug` and `outputs_dir`; `mantis research` prints the run's identity
+  to stderr as soon as it exists. (MANT-B03)
 - **Source provenance has a typed home** — `source_citations` (a per-substrate
   citation inventory) and `source_overlaps` (which substrates cited the same
   artifact, who never cited it, and whether they read incompatible figures out

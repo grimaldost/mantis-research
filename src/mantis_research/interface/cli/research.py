@@ -15,6 +15,7 @@ from typing import Annotated
 
 import typer
 
+from mantis_research.core.progress import RunEvent
 from mantis_research.interface.research_service import (
     _DEFAULT_SUBSTRATES,
     _TIER_STAGES,
@@ -47,6 +48,16 @@ def research_cmd(
 ) -> None:
     """Run one research question end-to-end and print a result manifest."""
     subs = [s.strip() for s in substrates.split(',') if s.strip()]
+
+    def announce(event: RunEvent) -> None:
+        # Name the run on stderr the moment it exists, so a Ctrl-C or a killed
+        # terminal still leaves the operator with the run's identity. stdout is
+        # reserved for the manifest.
+        if event.kind == 'run_named':
+            typer.echo(
+                f'run: {event.data["batch_name"]}  ->  {event.data["outputs_dir"]}', err=True
+            )
+
     try:
         manifest = run_research(
             question,
@@ -57,6 +68,7 @@ def research_cmd(
             batch_name=batch_name,
             dry_run=dry_run,
             log_level=log_level,
+            on_event=announce,
         )
     except ValueError as exc:
         typer.echo(str(exc), err=True)

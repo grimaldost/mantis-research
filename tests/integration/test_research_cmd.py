@@ -148,6 +148,94 @@ class TestRunResearch:
         assert manifest['cost']['available'] is True
         assert manifest['cost']['cost_usd'] == 0.0
 
+    def test_manifest_names_the_run(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        for fn in ('state_root', 'outputs_root', 'transcripts_root', 'logs_root'):
+            monkeypatch.setattr(f'mantis_research.core.paths.{fn}', lambda fn=fn: tmp_path / fn)
+        manifest = run_research(
+            'test question', assurance='fast', batch_name='b', dry_run=True, log_level='CRITICAL'
+        )
+        assert manifest['question_slug'] == 'test-question'
+        assert manifest['outputs_dir'].replace('\\', '/').endswith('/b')
+
+
+class TestRunIdentityBeforeDispatch:
+    """MANT-B03 — an interrupted call must leave an identified run, not an orphan.
+
+    ``batch_name`` and the run directories were minted before dispatch but
+    returned only in the final manifest, so an aborted call could not say
+    whether it had spent money or written anything, and one completed run on
+    disk could not be matched to the question that produced it.
+    """
+
+    @pytest.fixture
+    def rooted(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+        for fn in ('state_root', 'outputs_root', 'transcripts_root', 'logs_root'):
+            monkeypatch.setattr(f'mantis_research.core.paths.{fn}', lambda fn=fn: tmp_path / fn)
+        return tmp_path
+
+    def test_run_is_named_before_any_stage_dispatches(
+        self, rooted: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: list[tuple[str, dict[str, object]]] = []
+
+        def fake_dispatch(stage: str, cfg: object, **_: object) -> int:
+            seen.append(('dispatch:' + stage, {}))
+            return 0
+
+        monkeypatch.setattr(
+            'mantis_research.interface.cli.dispatch.dispatch_stage_config', fake_dispatch
+        )
+        run_research(
+            'what changed in X?',
+            assurance='fast',
+            batch_name='b',
+            log_level='CRITICAL',
+            on_event=lambda e: seen.append((e.kind, dict(e.data))),
+        )
+        kinds = [k for k, _ in seen]
+        assert kinds[0] == 'run_named'
+        assert kinds.index('run_named') < kinds.index('dispatch:openrouter')
+        named = seen[0][1]
+        assert named['batch_name'] == 'b'
+        assert named['question_slug'] == 'what-changed-in-x'
+        assert str(named['outputs_dir']).replace('\\', '/').endswith('/b')
+
+    def test_early_run_record_exists_before_dispatch(
+        self, rooted: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The record has to be on disk while the stages run, not only after —
+        # that is the whole point: an abort leaves an identified run behind.
+        observed: list[dict[str, object]] = []
+
+        def fake_dispatch(stage: str, cfg: object, **_: object) -> int:
+            observed.append(json.loads((rooted / 'outputs_root' / 'b' / 'run.json').read_text()))
+            return 0
+
+        monkeypatch.setattr(
+            'mantis_research.interface.cli.dispatch.dispatch_stage_config', fake_dispatch
+        )
+        run_research('what changed in X?', assurance='fast', batch_name='b', log_level='CRITICAL')
+        assert observed, 'no stage dispatched'
+        first = observed[0]
+        assert first['status'] == 'dispatching'
+        assert first['question'] == 'what changed in X?'
+        assert first['question_slug'] == 'what-changed-in-x'
+        assert first['batch_name'] == 'b'
+        assert first['started_at']
+
+    def test_completed_run_record_carries_the_final_manifest(self, rooted: Path) -> None:
+        manifest = run_research(
+            'what changed in X?',
+            assurance='fast',
+            batch_name='b',
+            dry_run=True,
+            log_level='CRITICAL',
+        )
+        record = json.loads((rooted / 'outputs_root' / 'b' / 'run.json').read_text())
+        assert record['status'] == 'complete'
+        assert record['ok'] == manifest['ok']
+        assert record['outputs'] == manifest['outputs']
+
     def test_invalid_assurance_raises_valueerror_not_typer_exit(self) -> None:
         # run_research raises no typer.Exit — the CLI wrapper maps it (FM-4).
         with pytest.raises(ValueError, match='invalid assurance'):

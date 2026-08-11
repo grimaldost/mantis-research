@@ -145,6 +145,19 @@ def run_transcript_dir(layout: Layout, batch_name: str) -> Path:
     return transcripts_root()
 
 
+def run_root_dir(layout: Layout, batch_name: str) -> Path:
+    """Return the directory that *is* the run, under ``layout``.
+
+    Under ``'batch'`` this is the run's own subtree, which is where run-level
+    records (the run manifest) belong. The flat ``'legacy'`` layout has no such
+    thing — every batch shares the output root — so it resolves there, and a
+    run-level record under legacy is shared, not per-run.
+    """
+    if layout == 'batch':
+        return outputs_root() / batch_name
+    return outputs_root()
+
+
 @dataclass(frozen=True, slots=True)
 class RunDirs:
     """Resolves one run's directories under its layout (ADR-0006).
@@ -166,3 +179,6 @@ class RunDirs:
 
     def transcripts(self) -> Path:
         return run_transcript_dir(self.layout, self.batch_name)
+
+    def root(self) -> Path:
+        return run_root_dir(self.layout, self.batch_name)

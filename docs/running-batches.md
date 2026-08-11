@@ -152,6 +152,14 @@ two digits), with per-substrate research briefs at
 `…openrouter/<NN-slug>/<subslug>.md` and the sidecar at
 `…synthesis/<NN-slug>.sidecar.json`.
 
+A request-level run (`mantis research`, the MCP `research` tool) also writes
+`outputs/<batch_name>/run.json` **before it dispatches anything**: the question
+and its slug, the batch name, the assurance tier, the substrate set and
+`status: "dispatching"`. When the run finishes it is rewritten with the final
+manifest and `status: "complete"`. A run whose caller walked away is therefore
+still identifiable on disk — which question it was answering and whether it got
+past dispatch — rather than an orphan directory nothing can be matched to.
+
 ## Cost
 
 Research substrates bill through OpenRouter (typically $2–6 per topic on a

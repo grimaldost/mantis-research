@@ -16,15 +16,26 @@ exception (spec 0002 §1 / FM-4).
 
 from __future__ import annotations
 
+import json
 import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mantis_research.core.config import load_batch_config
 from mantis_research.core.logging import configure_logging
 from mantis_research.core.paths import RunDirs, topic_stem
+from mantis_research.core.progress import RunEvent, emit
 from mantis_research.core.prompts import RESEARCH_REQUEST
 from mantis_research.core.state import OpenRouterResearchState
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from mantis_research.core.progress import ProgressCallback
+
+#: The run-level record, written before dispatch and rewritten at the end. Its
+#: presence is what turns an abandoned call into an identified run.
+RUN_RECORD_NAME = 'run.json'
 
 # Default Path B substrate set (model-recommendations.md): each vendor resolves
 # to its newest frontier model via the `auto:<vendor>` sentinel at run time.
@@ -119,14 +130,27 @@ def _manifest(
 
     return {
         'question': question,
+        'question_slug': slug,
         'batch_name': batch_name,
         'assurance': assurance,
         'layout': 'batch',
+        'outputs_dir': str(dirs.root()),
         'stages': {stage: {'exit_code': rc} for stage, rc in results.items()},
         'outputs': outputs,
         'cost': _read_cost(dirs, stem),
         'ok': all(rc == 0 for rc in results.values()),
     }
+
+
+def _write_run_record(dirs: RunDirs, record: dict[str, Any]) -> Path:
+    """Write the run-level record atomically, creating the run root if needed."""
+    root = dirs.root()
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / RUN_RECORD_NAME
+    tmp = path.with_name(f'{RUN_RECORD_NAME}.tmp')
+    tmp.write_text(json.dumps(record, indent=2), encoding='utf-8')
+    tmp.replace(path)
+    return path
 
 
 def _read_cost(dirs: RunDirs, stem: str) -> dict[str, Any]:
@@ -156,6 +180,7 @@ def run_research(
     batch_name: str = '',
     dry_run: bool = False,
     log_level: str = 'INFO',
+    on_event: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Run one research question end-to-end; return the result manifest dict.
 
@@ -165,6 +190,12 @@ def run_research(
     set. Raises ``ValueError`` on an invalid argument (the CLI maps it to an exit
     code; the MCP tool surfaces it as an error) and never ``typer.Exit``.
     Synchronous — call it off any running event loop.
+
+    ``on_event`` receives a :class:`RunEvent` at every boundary worth hearing
+    about. The first is always ``run_named``, emitted after the config is built
+    and *before* any stage is dispatched, alongside a run record on disk — so a
+    call the caller abandons still leaves a run it can name, rather than an
+    orphan directory it cannot match to a question.
     """
     # Lazy import: importing cli.dispatch runs cli/__init__, which imports
     # research_cmd -> cli.research -> back to this module. Deferring dispatch to
@@ -195,16 +226,60 @@ def run_research(
     slug = cfg.topics[0].slug
     configure_logging(level=log_level)
 
+    # ── name the run, before anything is dispatched ────────────────
+    dirs = RunDirs('batch', name)
+    identity = {
+        'question': question,
+        'question_slug': slug,
+        'batch_name': name,
+        'assurance': assurance,
+        'substrates': subs,
+        'layout': 'batch',
+        'outputs_dir': str(dirs.root()),
+    }
+    _write_run_record(dirs, {**identity, 'status': 'dispatching', 'started_at': _now_iso()})
+    stages = _TIER_STAGES[assurance]
+    emit(
+        on_event,
+        RunEvent(
+            kind='run_named',
+            message=f'run {name} dispatching {len(stages)} stage(s) into {dirs.root()}',
+            step=0,
+            total=len(stages),
+            data=identity,
+        ),
+    )
+
     results: dict[str, int] = {}
-    for stage in _TIER_STAGES[assurance]:
+    for index, stage in enumerate(stages, start=1):
+        emit(
+            on_event,
+            RunEvent(
+                kind='stage_start',
+                message=f'{stage} starting',
+                step=index - 1,
+                total=len(stages),
+                data={'stage': stage, 'batch_name': name},
+            ),
+        )
         rc = dispatch_stage_config(stage, cfg, dry_run=dry_run, log_level=log_level)
         results[stage] = rc
+        emit(
+            on_event,
+            RunEvent(
+                kind='stage_done',
+                message=f'{stage} finished (exit {rc})',
+                step=index,
+                total=len(stages),
+                data={'stage': stage, 'exit_code': rc, 'batch_name': name},
+            ),
+        )
         # Research and synthesis are load-bearing — stop the pipeline if either
         # fails (later stages depend on their outputs).
         if rc != 0 and stage in ('openrouter', 'synthesis'):
             break
 
-    return _manifest(
+    manifest = _manifest(
         question=question,
         batch_name=name,
         assurance=assurance,
@@ -212,3 +287,19 @@ def run_research(
         substrates=subs,
         results=results,
     )
+    _write_run_record(dirs, {**manifest, 'status': 'complete', 'finished_at': _now_iso()})
+    emit(
+        on_event,
+        RunEvent(
+            kind='run_done',
+            message=f'run {name} complete (ok={manifest["ok"]})',
+            step=len(stages),
+            total=len(stages),
+            data={'batch_name': name, 'ok': manifest['ok'], 'outputs_dir': str(dirs.root())},
+        ),
+    )
+    return manifest
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat()
