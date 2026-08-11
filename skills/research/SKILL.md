@@ -120,11 +120,16 @@ dollars — so all three tiers cost about the same for a given substrate set:
   runs. Substrates run concurrently, so the research stage tracks the slowest one.
 
 Pick the tier by how much checking the answer needs, not by how long you are
-willing to wait. Waiting is bounded independently: no single internal backoff
-exceeds half the caller's idle budget (`runner.caller_idle_budget_seconds`,
-default 1500 s), so a rate-limited substrate can no longer sit silently past a
-client's idle window — a failure that used to look like the tier's fault and was
-never fixed by dropping to `fast`.
+willing to wait. Waiting is handled separately, on two axes:
+
+- **The run narrates itself.** Progress notifications go out over the MCP
+  channel as the run is named, at each stage boundary, per research substrate as
+  it starts and finishes, and every 10 s during any internal backoff. A silent
+  minute means something is wrong; silence is no longer the normal case.
+- **No single internal wait exceeds half the caller's idle budget**
+  (`runner.caller_idle_budget_seconds`, default 1500 s), so a rate-limited
+  substrate cannot sit past a client's idle window — a failure that used to look
+  like the tier's fault and was never fixed by dropping to `fast`.
 
 Use `dry_run: true` first — it validates the whole pipeline for free, then drop it
 for the real run.

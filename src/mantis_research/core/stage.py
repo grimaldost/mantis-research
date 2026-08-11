@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from mantis_research.core.config import BatchConfig, TopicConfig
+    from mantis_research.core.progress import ProgressCallback
     from mantis_research.core.state import TopicState
 
 
@@ -69,6 +70,10 @@ class RunContext:
     output_dir: Path
     transcript_dir: Path
     dry_run: bool = False
+    # Where a stage reports what it is doing, for a caller watching from
+    # outside the process. ``None`` when nobody is listening; stages emit
+    # through ``core.progress.emit``, which handles that case.
+    on_event: ProgressCallback | None = None
 
 
 # ── Stage Protocol ───────────────────────────────────────────────────

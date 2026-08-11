@@ -154,7 +154,9 @@ The tool is served to agents as a **local stdio MCP server** exposing a
   orchestrator extracted from `mantis research`) and returns the run manifest +
   the sidecar's claims / divergences / verification_queue (bounded to the MCP
   size budget via `core/sidecar.py::project_for_agent`), with synthesis + briefs
-  by path.
+  by path. The handler takes the FastMCP `Context` (SDK-injected, absent from the
+  input schema) and bridges `core/progress.py`'s `RunEvent`s onto the session's
+  loop — a run that says nothing is indistinguishable from a hang.
 - **Plugin:** `.claude-plugin/plugin.json` bundles the server inline (launched
   via `uv run --project ${CLAUDE_PLUGIN_ROOT} python -m …mcp`); the reference
   skill is `skills/research/SKILL.md`. Install for local testing with `claude

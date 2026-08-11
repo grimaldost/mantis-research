@@ -19,19 +19,29 @@ FM-B):
   the SDK; even so, the ``research`` handler is ``async`` and offloads the blocking
   ``run_research`` via ``asyncio.to_thread`` — safe regardless of the SDK's
   sync-threading behaviour (FM-1/FM-B).
+- A parameter annotated ``Context`` is injected by the SDK and excluded from the
+  tool's input schema (``Tool.context_kwarg``), so it never reaches the agent as
+  an argument to supply.
+
+Progress is reported over that context. Before it, the whole multi-stage run hid
+behind one ``to_thread`` await and the client saw silence from call to return —
+which a client cannot distinguish from a hang, and answers by giving up.
 """
 
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 from pydantic import Field
 
 from mantis_research.core.sidecar import ResearchSidecar, project_for_agent
 from mantis_research.interface.research_service import run_research
+
+if TYPE_CHECKING:
+    from mantis_research.core.progress import ProgressCallback, RunEvent
 
 _SERVER_NAME = 'mantis-research'
 
@@ -71,6 +81,7 @@ def _run_and_assemble(
     primary: str,
     journal: bool,
     dry_run: bool,
+    on_event: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Run the pipeline and assemble the agent result (sync — runs off the loop)."""
     manifest = run_research(
@@ -80,8 +91,35 @@ def _run_and_assemble(
         primary=primary,
         journal=journal,
         dry_run=dry_run,
+        on_event=on_event,
     )
     return _agent_result(manifest)
+
+
+async def _deliver(ctx: Any, event: RunEvent) -> None:
+    """Push one run event down the MCP channel (progress + log)."""
+    # Both are sent: `report_progress` is the mechanism defined for this, but it
+    # no-ops when the client sent no progress token, and a log notification
+    # reaches that client anyway. Between them the caller always hears something.
+    if event.step is not None and event.total:
+        await ctx.report_progress(progress=event.step, total=event.total, message=event.message)
+    await ctx.info(event.message)
+
+
+def _progress_bridge(ctx: Any, loop: asyncio.AbstractEventLoop) -> ProgressCallback:
+    """Adapt the synchronous run-event callback onto the MCP session's loop.
+
+    ``run_research`` is synchronous and runs in a worker thread (FM-1), while the
+    MCP session belongs to the event loop that spawned it — so an event has to
+    be handed back across that boundary rather than awaited in place.
+    ``run_coroutine_threadsafe`` is that hand-off; the future is deliberately not
+    awaited, since the run must not block on its audience.
+    """
+
+    def deliver(event: RunEvent) -> None:
+        asyncio.run_coroutine_threadsafe(_deliver(ctx, event), loop)
+
+    return deliver
 
 
 async def research(
@@ -132,6 +170,7 @@ async def research(
         bool,
         Field(description='Validate orchestration without spending any model calls.'),
     ] = False,
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Research a question across multiple models and return a cross-checked result.
 
@@ -161,6 +200,9 @@ async def research(
     """
     # dispatch_stage_config nests asyncio.run per stage, so the synchronous
     # pipeline must run OFF this event loop or it raises RuntimeError (FM-1).
+    # The bridge is built here, on the loop, and closes over it: the worker
+    # thread hands events back rather than touching the session directly.
+    bridge = _progress_bridge(ctx, asyncio.get_running_loop()) if ctx is not None else None
     return await asyncio.to_thread(
         _run_and_assemble,
         question,
@@ -169,6 +211,7 @@ async def research(
         primary=primary,
         journal=journal,
         dry_run=dry_run,
+        on_event=bridge,
     )
 
 

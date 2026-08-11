@@ -27,6 +27,8 @@ if TYPE_CHECKING:
 RunEventKind = Literal[
     'run_named',
     'stage_start',
+    'substrate_start',
+    'substrate_done',
     'stage_done',
     'waiting',
     'run_done',

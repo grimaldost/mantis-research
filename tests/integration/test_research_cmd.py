@@ -251,7 +251,7 @@ class TestRunIdentityBeforeDispatch:
             monkeypatch.setattr(f'mantis_research.core.paths.{fn}', lambda fn=fn: tmp_path / fn)
         calls: list[str] = []
 
-        def fake_dispatch(stage: str, cfg: object, *, dry_run: bool, log_level: str) -> int:
+        def fake_dispatch(stage: str, cfg: object, **_: object) -> int:
             calls.append(stage)
             return 0 if stage == 'openrouter' else 1  # synthesis blocks → exit 1
 

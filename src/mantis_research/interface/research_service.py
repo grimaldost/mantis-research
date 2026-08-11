@@ -262,7 +262,9 @@ def run_research(
                 data={'stage': stage, 'batch_name': name},
             ),
         )
-        rc = dispatch_stage_config(stage, cfg, dry_run=dry_run, log_level=log_level)
+        rc = dispatch_stage_config(
+            stage, cfg, dry_run=dry_run, log_level=log_level, on_event=on_event
+        )
         results[stage] = rc
         emit(
             on_event,

@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from mantis_research.core.progress import progress_payload
+from mantis_research.core.progress import RunEvent, emit, progress_payload
 from mantis_research.core.retry import RetryPolicy, classify_failure
 from mantis_research.core.stage import AttemptResult, RunContext, Stage
 from mantis_research.core.state import TopicState, TopicStatus
@@ -36,8 +36,13 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from mantis_research.core.config import BatchConfig, TopicConfig
+    from mantis_research.core.progress import ProgressCallback
 
 log = structlog.get_logger(__name__)
+
+#: How often a long wait says it is still a wait. Also the granularity at which
+#: a backoff notices the stop signal.
+HEARTBEAT_SECONDS = 10.0
 
 
 class Orchestrator:
@@ -58,6 +63,7 @@ class Orchestrator:
         transcript_dir: Path,
         parallel: int | None = None,
         dry_run: bool = False,
+        on_event: ProgressCallback | None = None,
     ) -> None:
         self.stage = stage
         self.state_class = state_class
@@ -66,6 +72,7 @@ class Orchestrator:
         self.output_dir = output_dir
         self.transcript_dir = transcript_dir
         self.dry_run = dry_run
+        self.on_event = on_event
         self.parallel = parallel or config.runner.max_parallel_topics
         self.retry_policy = RetryPolicy(
             max_retries_per_stage=config.runner.max_retries_per_stage,
@@ -112,6 +119,7 @@ class Orchestrator:
             output_dir=self.output_dir,
             transcript_dir=self.transcript_dir,
             dry_run=self.dry_run,
+            on_event=self.on_event,
         )
 
         stop = asyncio.Event()
@@ -219,17 +227,48 @@ class Orchestrator:
             else:
                 state.reset_for_retry(error_msg)
             state.save(self.state_dir)
-            await self._stop_aware_sleep(self.retry_policy.backoff_seconds(kind), stop)
+            await self._stop_aware_sleep(
+                self.retry_policy.backoff_seconds(kind),
+                stop,
+                on_event=self.on_event,
+                data={
+                    'stage': self.stage.name,
+                    'topic_id': topic.id,
+                    'kind': kind.value,
+                    'attempt': attempt,
+                },
+            )
 
     @staticmethod
-    async def _stop_aware_sleep(seconds: float, stop: asyncio.Event) -> None:
-        """Sleep ``seconds`` total; check ``stop`` every 10s for early exit."""
+    async def _stop_aware_sleep(
+        seconds: float,
+        stop: asyncio.Event,
+        *,
+        on_event: ProgressCallback | None = None,
+        data: dict[str, object] | None = None,
+        chunk: float = HEARTBEAT_SECONDS,
+    ) -> None:
+        """Sleep ``seconds`` total, checking ``stop`` each chunk for early exit.
+
+        A heartbeat goes out per chunk. A backoff is the longest a run is silent,
+        and silence is what a caller reads as a hang — so the wait has to keep
+        saying it is a wait. Without this, MANT-B02's cap is load-bearing rather
+        than belt-and-braces.
+        """
         slept = 0.0
-        chunk = 10.0
         while slept < seconds:
             if stop.is_set():
                 return
-            await asyncio.sleep(min(chunk, seconds - slept))
+            remaining = seconds - slept
+            emit(
+                on_event,
+                RunEvent(
+                    kind='waiting',
+                    message=f'backing off, {remaining:.0f}s remaining before the next attempt',
+                    data={**(data or {}), 'remaining_s': round(remaining, 1)},
+                ),
+            )
+            await asyncio.sleep(min(chunk, remaining))
             slept += chunk
 
     # ── progress reporter ──────────────────────────────────────

@@ -37,6 +37,16 @@ async def test_research_tool_schema_documents_every_parameter() -> None:
     assert 'deepseek' in props['substrates']['description']
 
 
+async def test_request_context_is_injected_and_not_an_agent_parameter() -> None:
+    # MANT-B01: the handler takes the FastMCP Context so it can report progress.
+    # The SDK must recognise it as the injected context — if it ever leaked into
+    # the input schema instead, agents would be asked to supply it.
+    server = build_server()
+    tool = server._tool_manager.get_tool('research')
+    assert tool.context_kwarg == 'ctx'
+    assert 'ctx' not in tool.parameters['properties']
+
+
 async def test_research_tool_defaults_to_fast_assurance() -> None:
     # MANT-B04: the default tier is the one most calls want and the one that
     # actually completes over this tool's own transport. standard/high stay as

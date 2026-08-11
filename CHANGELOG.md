@@ -46,6 +46,17 @@ releases (starting with 0.1.0).
 
 ### Fixed
 
+- **The `research` tool reports progress instead of going silent.** The handler
+  never accepted a request context and never reported anything: the whole
+  multi-stage run hid behind one `asyncio.to_thread` await, so a client saw
+  silence from call to return and answered it the only way a client can — by
+  giving up. Six MCP invocations aborted at the 1800 s idle window while the
+  same questions succeeded 3/3 over the CLI. The handler now takes the FastMCP
+  `Context` (injected, not an agent-supplied parameter) and a `RunEvent` bridge
+  carries the run's boundaries onto the session's loop: the run being named,
+  each stage starting and finishing, each research substrate starting and
+  finishing, and a heartbeat every 10 s inside any backoff. A broken listener
+  cannot fail a run. (MANT-B01)
 - **A backoff can no longer outlast the caller.** `rate_limit_backoff_minutes`
   defaults to 30, exactly the MCP client's 1800 s idle window, so a rate-limited
   substrate guaranteed the abort at every assurance tier. `RetryPolicy` now
