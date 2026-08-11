@@ -266,15 +266,15 @@ prompt; don't try to make the synthesis stage compensate.
 After the synthesis brief is written, the stage runs a **dedicated sidecar
 turn**: the model reads the brief and writes `<stem>.sidecar.json` — the
 machine-readable epistemic contract agent consumers load instead of parsing
-prose. The schema is `core/sidecar.py` (`ResearchSidecar`, `sidecar_version: 1`),
+prose. The schema is `core/sidecar.py` (`ResearchSidecar`, `sidecar_version: 2`),
 with two authorship zones:
 
 - **model-authored** — `claims`, `divergences`, `verification_queue`,
   `agreements_worth_verifying`, `coverage_notes` (drawn from the synthesis's
   divergence blocks and `## Synthesis Meta-Observations`).
-- **runner-authored** — run identity (`topic_id` / `slug` / `batch_name` /
-  `synthesis_path` / `generated_at`), `sources`, and `provenance`, merged in by
-  the stage after the model's JSON validates.
+- **runner-authored** — run identity (`question` / `topic_id` / `slug` /
+  `batch_name` / `synthesis_path` / `generated_at`), `sources`, and
+  `provenance`, merged in by the stage after the model's JSON validates.
 
 Mechanics that matter:
 
@@ -286,3 +286,7 @@ Mechanics that matter:
   sidecar is a cheap, model-fallible step, isolated from the brief).
 - The sidecar joins the synthesis done-condition — an unrecoverable sidecar
   fails the attempt (brief left intact for the retry).
+- The **runner-authored zone is gated separately** from the model's. After the
+  merge, `require_complete()` demands `question`, `generated_at` and a non-empty
+  `sources`, and raises if any is absent. That failure does not consume a
+  re-ask: the gap is the runner's, so another model turn would reproduce it.

@@ -1,4 +1,4 @@
-"""Epistemic sidecar schema v1 — the agent-consumable contract (ADR-0003).
+"""Epistemic sidecar schema v2 — the agent-consumable contract (ADR-0003).
 
 Each synthesis produces a ``<stem>.sidecar.json`` alongside the markdown brief.
 It carries the pipeline's highest-value signal — divergences, hallucination
@@ -12,11 +12,18 @@ Two authorship zones (ADR-0003), marked per field group below:
   ``claims``, ``divergences``, ``verification_queue``,
   ``agreements_worth_verifying``, ``coverage_notes``.
 - **runner-authored** — identity and provenance the runner fills in after
-  validating the model's part: ``topic_id`` / ``slug`` / ``batch_name`` /
-  ``synthesis_path`` / ``generated_at`` and ``provenance``.
+  validating the model's part: ``question`` / ``topic_id`` / ``slug`` /
+  ``batch_name`` / ``synthesis_path`` / ``generated_at`` and ``provenance``.
 
 The schema evolves additively (I4); an incompatible change bumps
-``sidecar_version``.
+``sidecar_version``. v2 adds ``question`` (a sidecar with no question is not a
+citation surface — a consumer cannot tell which question it answers) and the
+typed source-provenance block. Both additions are readable by a v1 consumer,
+and v1 documents on disk still validate (I6).
+
+Emission is gated: :func:`missing_required_fields` names what a merged document
+still lacks, and :meth:`ResearchSidecar.require_complete` raises rather than let
+a hollow artifact ship.
 """
 
 from __future__ import annotations
@@ -31,6 +38,16 @@ if TYPE_CHECKING:
     from mantis_research.core.state import SubsessionResult
 
 SUPPORT_QUALITY = Literal['direct', 'indirect', 'none']
+
+#: The schema version the runner writes today. Older versions still validate.
+SIDECAR_VERSION = 2
+
+#: Runner-authored fields a written sidecar must carry to be usable at all.
+REQUIRED_ON_WRITE: tuple[str, ...] = ('question', 'generated_at', 'sources')
+
+
+class SidecarContractError(ValueError):
+    """A merged sidecar is missing a field the agent contract requires."""
 
 
 class SidecarModel(BaseModel):
@@ -149,9 +166,13 @@ class ResearchSidecar(SidecarModel):
     runner sets them before the final write.
     """
 
-    sidecar_version: Literal[1] = 1
+    sidecar_version: Literal[1, 2] = SIDECAR_VERSION
 
     # runner-authored identity
+    # The question the run answered, verbatim from the run manifest. Without it
+    # a frozen sidecar cannot be cited, and worse, can be adopted as the answer
+    # to a different question.
+    question: str | None = None
     topic_id: str | None = None
     slug: str | None = None
     batch_name: str | None = None
@@ -178,6 +199,35 @@ class ResearchSidecar(SidecarModel):
     def to_json(self) -> str:
         """Serialize the merged document for the final on-disk write."""
         return self.model_dump_json(indent=2)
+
+    def require_complete(self) -> None:
+        """Raise unless every :data:`REQUIRED_ON_WRITE` field is populated.
+
+        Called by the runner on the merged document, immediately before the
+        final write. These are runner-authored fields, so a gap here is a runner
+        defect — re-asking the model cannot fix it, and shipping the document
+        anyway produces the hollow artifact this gate exists to stop.
+        """
+        missing = missing_required_fields(self)
+        if missing:
+            msg = f'sidecar missing required field(s): {", ".join(missing)}'
+            raise SidecarContractError(msg)
+
+
+def missing_required_fields(sc: ResearchSidecar) -> list[str]:
+    """Return the :data:`REQUIRED_ON_WRITE` fields ``sc`` does not carry.
+
+    Empty and whitespace-only strings count as missing — a blank question is
+    exactly as unusable as an absent one. Pure; the synthesis stage calls it.
+    """
+    missing: list[str] = []
+    if not (sc.question or '').strip():
+        missing.append('question')
+    if not (sc.generated_at or '').strip():
+        missing.append('generated_at')
+    if not sc.sources:
+        missing.append('sources')
+    return missing
 
 
 _DEFAULT_MAX_ITEMS = 20

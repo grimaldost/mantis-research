@@ -135,7 +135,9 @@ Other env vars actually read at runtime: `OPENROUTER_API_KEY`,
   subsession that omits its own `prompt`. Resolution keys on **presence**
   (`is not None`): an explicit empty-string prompt is kept. (ADR-0008.)
 - Each synthesis emits `<stem>.sidecar.json` (schema `core/sidecar.py`,
-  `sidecar_version: 1`) — the agent-consumable epistemic contract. (ADR-0003.)
+  `sidecar_version: 2`) — the agent-consumable epistemic contract. (ADR-0003.)
+  The runner fills `question` verbatim from the topic and gates the write on
+  `question` / `generated_at` / non-empty `sources`.
 
 Decisions are recorded as ADRs in `docs/adr/`; the pivot spec + method live in
 `docs/specs/` and `docs/method/`.

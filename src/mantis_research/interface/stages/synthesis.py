@@ -21,7 +21,13 @@ from pydantic import ValidationError
 from mantis_research.core import prompts as default_prompts
 from mantis_research.core.model_policy import resolve_claude_model
 from mantis_research.core.paths import RunDirs, topic_stem
-from mantis_research.core.sidecar import Provenance, ResearchSidecar, SourceRef
+from mantis_research.core.sidecar import (
+    SIDECAR_VERSION,
+    Provenance,
+    ResearchSidecar,
+    SidecarContractError,
+    SourceRef,
+)
 from mantis_research.core.stage import AttemptResult
 from mantis_research.core.state import OpenRouterResearchState
 from mantis_research.interface.adapters.claude_cli import (
@@ -296,18 +302,24 @@ class SynthesisStage:
         # A malformed sidecar must not fail the whole 2-turn attempt; the loop
         # re-asks on the same session up to twice before giving up (ADR-0003 §14).
         if not ctx.dry_run:
-            sidecar_ok = await self._emit_sidecar(
-                topic=topic,
-                dirs=dirs,
-                stem=stem,
-                synthesis_path=synthesis_path,
-                sidecar_path=sidecar_path,
-                briefs=briefs,
-                model=model,
-                effort=effort,
-                ts=ts,
-                state=state,
-            )
+            try:
+                sidecar_ok = await self._emit_sidecar(
+                    topic=topic,
+                    dirs=dirs,
+                    stem=stem,
+                    synthesis_path=synthesis_path,
+                    sidecar_path=sidecar_path,
+                    briefs=briefs,
+                    model=model,
+                    effort=effort,
+                    ts=ts,
+                    state=state,
+                )
+            except SidecarContractError as exc:
+                # The runner-authored zone is incomplete — fail loudly rather
+                # than ship a sidecar a consumer cannot cite (MANT-B06).
+                log.error('sidecar contract violated', topic_id=topic.id, error=str(exc))
+                return AttemptResult.fail(error=str(exc))
             if not sidecar_ok:
                 return AttemptResult.fail(
                     error=f'sidecar not valid after retries at {sidecar_path.name}',
@@ -454,6 +466,10 @@ class SynthesisStage:
         except ValidationError as exc:
             return str(exc)
         merged = cls._fill_runner_fields(sc, topic, dirs, synthesis_path, briefs, state)
+        # Gate the write on the runner-authored zone (MANT-B06). This raises
+        # rather than returning an error string, because the missing field is
+        # ours: a re-ask would spend a Claude turn to produce the same gap.
+        merged.require_complete()
         sidecar_path.write_text(merged.to_json(), encoding='utf-8')
         return None
 
@@ -503,6 +519,14 @@ class SynthesisStage:
         )
         return sc.model_copy(
             update={
+                # The runner writes today's schema version regardless of what the
+                # model emitted: the merged document carries the runner-authored
+                # fields this version adds.
+                'sidecar_version': SIDECAR_VERSION,
+                # The question, verbatim. A topic's title IS the question for a
+                # request-level run (`build_config` sets it from the question) and
+                # is the closest thing a batch topic has to one.
+                'question': topic.title,
                 'topic_id': topic.id,
                 'slug': topic.slug,
                 'batch_name': dirs.batch_name,

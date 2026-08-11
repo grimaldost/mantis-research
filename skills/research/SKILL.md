@@ -89,10 +89,11 @@ and long free-text is clipped:
   each list dropped by the cap. If `any` is true, read the full sidecar.
 
 The **complete** sidecar is always on disk at `outputs.sidecar` — including fields
-not projected inline: `sources[]` (`{ label, path, model_id, bytes }` per brief,
-so you can see which model produced which brief) and `provenance` (durations,
-token/cost totals). Read it when you need the full lists or per-source
-attribution.
+not projected inline: `question` (the question this sidecar answers, verbatim —
+so a sidecar you froze months ago is still citable on its own), `sources[]`
+(`{ label, path, model_id, bytes }` per brief, so you can see which model
+produced which brief) and `provenance` (durations, token/cost totals). Read it
+when you need the full lists or per-source attribution.
 
 ## Cost & latency
 

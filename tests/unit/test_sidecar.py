@@ -7,7 +7,15 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from mantis_research.core.sidecar import Provenance, ResearchSidecar, project_for_agent
+from mantis_research.core.sidecar import (
+    SIDECAR_VERSION,
+    Provenance,
+    ResearchSidecar,
+    SidecarContractError,
+    SourceRef,
+    missing_required_fields,
+    project_for_agent,
+)
 from mantis_research.core.state import SubsessionResult
 
 _FULL_MODEL_DOC = {
@@ -53,10 +61,60 @@ class TestRoundTrip:
         assert sc.provenance.total_cost_usd is None
 
 
+class TestRequiredFieldsOnWrite:
+    """MANT-B06 — a sidecar with no question is not a citation surface.
+
+    Seven of seven sidecars across two runs were unusable because the schema had
+    no ``question`` field at all, and nothing validated the runner-authored zone
+    at write time, so a hollow artifact shipped silently.
+    """
+
+    def _merged(self, **overrides: object) -> ResearchSidecar:
+        sc = ResearchSidecar.from_model_json(json.dumps(_FULL_MODEL_DOC))
+        base: dict[str, object] = {
+            'question': 'what changed in X?',
+            'generated_at': '2026-08-11T00:00:00+00:00',
+            'sources': [SourceRef(label='openrouter:openai', path='outputs/openai.md')],
+        }
+        return sc.model_copy(update={**base, **overrides})
+
+    def test_question_is_carried_on_the_schema(self) -> None:
+        assert self._merged().question == 'what changed in X?'
+
+    def test_complete_document_passes(self) -> None:
+        assert missing_required_fields(self._merged()) == []
+        self._merged().require_complete()  # does not raise
+
+    @pytest.mark.parametrize(
+        ('field', 'empty'),
+        [('question', None), ('question', '  '), ('generated_at', None), ('sources', [])],
+    )
+    def test_missing_required_field_is_reported(self, field: str, empty: object) -> None:
+        sc = self._merged(**{field: empty})
+        assert missing_required_fields(sc) == [field]
+
+    def test_require_complete_raises_naming_every_missing_field(self) -> None:
+        sc = self._merged(question=None, sources=[])
+        with pytest.raises(SidecarContractError) as exc:
+            sc.require_complete()
+        assert 'question' in str(exc.value)
+        assert 'sources' in str(exc.value)
+
+
 class TestValidation:
+    def test_current_version_is_two(self) -> None:
+        # Additive bump (I4): `question` plus the typed provenance fields.
+        assert SIDECAR_VERSION == 2
+        assert ResearchSidecar().sidecar_version == 2
+
+    def test_version_one_still_loads(self) -> None:
+        # I6 — sidecars written before the bump stay readable.
+        sc = ResearchSidecar.from_model_json(json.dumps(_FULL_MODEL_DOC))
+        assert sc.sidecar_version == 1
+
     def test_wrong_version_rejected(self) -> None:
         with pytest.raises(ValidationError):
-            ResearchSidecar.from_model_json(json.dumps({'sidecar_version': 2}))
+            ResearchSidecar.from_model_json(json.dumps({'sidecar_version': 99}))
 
     def test_claim_without_id_rejected(self) -> None:
         doc = {'sidecar_version': 1, 'claims': [{'text': 'no id here'}]}

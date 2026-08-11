@@ -159,11 +159,17 @@ Configs may pin model ids or opt into the auto-latest policy
 
 Each synthesis writes `<stem>.sidecar.json` next to the brief — the
 agent-consumable contract ([ADR-0003](adr/0003-epistemic-sidecar-artifact.md),
-schema `core/sidecar.py`, `sidecar_version: 1`). Authorship is split by who
+schema `core/sidecar.py`, `sidecar_version: 2`). Authorship is split by who
 knows what: the synthesis model writes the epistemic fields (claims,
 divergences, verification queue, agreements worth verifying, coverage notes);
-the runner fills identity, sources, and provenance (durations, token/cost)
-after the model-authored part validates. Consumers: the field-by-field guide
+the runner fills the question, the rest of the identity, sources, and
+provenance (durations, token/cost) after the model-authored part validates.
+`ResearchSidecar.require_complete()` then gates the write on the
+runner-authored zone — `question`, `generated_at`, non-empty `sources` — so a
+document that cannot be cited fails the stage rather than reaching disk. That
+gate raises instead of feeding back into the model re-ask loop: a gap there is
+the runner's, and a re-ask would spend a Claude turn reproducing it. Consumers:
+the field-by-field guide
 is in [skills/research/SKILL.md](../skills/research/SKILL.md);
 `core/sidecar.py::project_for_agent` produces the size-bounded projection the
 MCP tool returns.

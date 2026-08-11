@@ -9,6 +9,15 @@ releases (starting with 0.1.0).
 
 ### Changed
 
+- **The sidecar carries the question, and the write is gated** —
+  `sidecar_version` 2. `ResearchSidecar` had no `question` field at all, so
+  seven of seven sidecars across two runs were unusable as a citation surface
+  and an unidentifiable run's sidecar could be adopted as the answer to a
+  different question. The runner now fills `question` verbatim from the topic,
+  and `require_complete()` fails the synthesis stage when `question`,
+  `generated_at` or a non-empty `sources` is missing rather than shipping a
+  hollow artifact. Additive under invariant I4; `sidecar_version: 1` documents
+  on disk still validate. (MANT-B06)
 - **The `research` MCP tool defaults to `assurance: "fast"`** (was `standard`).
   `standard` and `high` stay as explicit escalations; the tier is a choice about
   how much checking the answer needs, not about how long the call takes.

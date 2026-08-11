@@ -133,12 +133,18 @@ Requirements). Reference skill: `skills/research/SKILL.md`.
 
 Each synthesis writes `<stem>.sidecar.json` next to the markdown brief — the
 agent-consumable contract ([ADR-0003](docs/adr/0003-epistemic-sidecar-artifact.md),
-schema in `core/sidecar.py`, `sidecar_version: 1`):
+schema in `core/sidecar.py`, `sidecar_version: 2`):
 
 - **model-authored** — `claims`, `divergences`, `verification_queue`,
   `agreements_worth_verifying`, `coverage_notes`.
-- **runner-authored** — run identity, `sources`, and `provenance` (durations,
-  token/cost), merged in after the model's JSON validates.
+- **runner-authored** — the `question` verbatim, the rest of the run identity,
+  `sources`, and `provenance` (durations, token/cost), merged in after the
+  model's JSON validates.
+
+The write is gated: a merged sidecar missing `question`, `generated_at` or a
+non-empty `sources` fails the synthesis stage instead of shipping. Without the
+question a frozen sidecar cannot be cited, and can be adopted as the answer to a
+different question.
 
 An agent consumes the sidecar for structured signal and reads the markdown only
 when it needs the prose.
