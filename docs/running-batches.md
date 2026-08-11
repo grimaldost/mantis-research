@@ -83,9 +83,9 @@ The commands are scriptable; the process exit code is the contract.
 | Command | 0 | 1 | 2 |
 |---|---|---|---|
 | `mantis run <stage>` | every selected topic done (or already done) | any topic failed, rate-limited, or blocked upstream in a live run (a dry run does not count blocked as a failure) | unknown stage name (typer rejects it as an unknown subcommand) |
-| `mantis research` | manifest `ok: true` | manifest `ok: false` — a stage returned non-zero | invalid argument (unknown `--assurance`, empty `--substrates`) |
-| `mantis status` | the config loaded and the table printed | a missing config path or an invalid config — the error propagates | — |
-| `mantis monitor` | all topics terminal (`ALL_TERMINAL`) | `progress.json` not found | — |
+| `mantis research` | manifest `ok: true` | manifest `ok: false` — a stage returned non-zero | invalid argument (unknown `--assurance`, empty `--substrates`, a `--resume` directory outside `outputs/` or owned by a live process) |
+| `mantis monitor <stage>` | all topics terminal (`ALL_TERMINAL`) | `progress.json` not found | neither a stage nor `--snapshot` given |
+| `mantis monitor --snapshot` | the config loaded and the table printed | a missing config path or an invalid config — the error propagates | — |
 
 A stage listed in `DISABLED_STAGES` also exits 1, but not cleanly: the guard in
 `interface/cli/dispatch.py` raises `RuntimeError`, so the pointer message
@@ -94,12 +94,13 @@ arrives with a traceback rather than as a plain error.
 ## Watching a run
 
 ```bash
-uv run mantis status  config/<batch>.json      # per-stage, per-topic status table
+uv run mantis monitor --snapshot config/<batch>.json   # per-stage, per-topic table, once
 uv run mantis monitor <stage> [--poll-seconds N] [--batch-name <name>] [--layout batch]
 ```
 
-`status` resolves the run's layout from the config and reports every stage,
-including evaluation and claude-prior. `monitor` tails a stage's
+There is one progress surface (ADR-0010): `mantis status` was folded into
+`--snapshot`, which resolves the run's layout from the config and reports every
+stage, including evaluation and claude-prior. Without it, `monitor` tails a stage's
 `progress.json`; `--poll-seconds` sets the polling interval (default 30), and
 `--batch-name`/`--layout` point it at a batch-scoped run.
 Logs are structured (structlog) and go to **stderr**; each run also appends to
@@ -131,7 +132,7 @@ the cross-run rules are described in
   waited out.
 - **An abandoned topic is `dead`, not `failed`.** Every topic records the PID
   that put it `in_flight`. A later run reads that back, and a topic whose owner
-  is no longer a live process is marked `dead` (marker `DD` in `mantis status`)
+  is no longer a live process is marked `dead` (marker `DD` in the snapshot)
   with a reason naming the vanished owner, then re-attempted. `failed` keeps its
   meaning: an attempt ran and lost.
 - **Ctrl+C is graceful**: scheduling stops, in-flight topics finish, state is

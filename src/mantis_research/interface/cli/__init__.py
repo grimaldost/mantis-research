@@ -11,9 +11,14 @@ Subcommands::
     mantis run claude-prior    <config>  [...]
     mantis run evaluation      <config>  [...]
     mantis research            <question> [--assurance TIER --substrates LIST ...]
-    mantis status              <config>
+    mantis research            --resume <run-dir>
     mantis monitor             <stage>   [--poll-seconds N]
+    mantis monitor             --snapshot <config>
     mantis version
+
+``mantis status <config>`` was folded into ``mantis monitor --snapshot
+<config>`` — one progress surface rather than two competing for the job
+(ADR-0010).
 """
 
 from __future__ import annotations
@@ -23,7 +28,6 @@ import typer
 from mantis_research.interface.cli.monitor import monitor_cmd
 from mantis_research.interface.cli.research import research_cmd
 from mantis_research.interface.cli.run import app as run_app
-from mantis_research.interface.cli.status import status_cmd
 
 app = typer.Typer(
     name='mantis',
@@ -36,7 +40,6 @@ app = typer.Typer(
 
 app.add_typer(run_app, name='run')
 app.command(name='research')(research_cmd)
-app.command(name='status')(status_cmd)
 app.command(name='monitor')(monitor_cmd)
 
 

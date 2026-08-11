@@ -1,8 +1,15 @@
-"""``mantis monitor <stage>`` — batch progress monitor.
+"""``mantis monitor`` — the one progress surface.
 
-Polls a stage's ``progress.json`` every 30s and emits one line per topic
-state transition (or any counts change). Designed to be driven by the
-Claude Code Monitor tool (each stdout line becomes a notification).
+Two modes over the same job:
+
+- ``mantis monitor <stage>`` follows a stage's ``progress.json``, emitting one
+  line per topic state transition (or any counts change). Designed to be driven
+  by an agent's monitor tool, where each stdout line becomes a notification.
+- ``mantis monitor --snapshot <config>`` prints the cross-stage table for a
+  batch once and exits.
+
+The snapshot was its own command (``mantis status``) competing with this one for
+the same job on a path with no live consumers (ADR-0010).
 
 Note: this module does NOT use ``from __future__ import annotations`` for
 the same reason as ``run.py`` — typer needs real types at decoration time.
@@ -10,18 +17,20 @@ the same reason as ``run.py`` — typer needs real types at decoration time.
 
 import json
 import time
-from typing import Annotated
+from pathlib import Path
+from typing import Annotated, Optional
 
 import typer
 
 from mantis_research.core.paths import project_root, run_state_dir
+from mantis_research.interface.cli.snapshot import print_snapshot
 
 
 def monitor_cmd(
     stage: Annotated[
         str,
-        typer.Argument(help="Stage name (e.g. 'claude', 'gemini', 'synthesis')"),
-    ],
+        typer.Argument(help="Stage name (e.g. 'openrouter', 'synthesis')"),
+    ] = '',
     poll_seconds: Annotated[int, typer.Option(help='Polling interval')] = 30,
     batch_name: Annotated[
         str,
@@ -31,12 +40,27 @@ def monitor_cmd(
         str,
         typer.Option('--layout', help="Run layout: 'legacy' (default) or 'batch'"),
     ] = 'legacy',
+    snapshot: Annotated[
+        Optional[Path],  # noqa: UP045 — typer reads the annotation at runtime
+        typer.Option(
+            '--snapshot',
+            help='Print the cross-stage table for this batch config once, then exit',
+        ),
+    ] = None,
 ) -> None:
-    """Watch a stage's progress.json. One stdout line per state change.
+    """Follow a stage's progress, or print a one-shot cross-stage snapshot.
 
-    Bare ``mantis monitor <stage>`` keeps the legacy behavior; add
-    ``--batch-name <b> --layout batch`` to watch a batch-scoped run.
+    ``mantis monitor <stage>`` follows; add ``--batch-name <b> --layout batch``
+    to follow a batch-scoped run. ``mantis monitor --snapshot <config>`` prints
+    the whole batch's per-stage status once and exits.
     """
+    if snapshot is not None:
+        print_snapshot(snapshot)
+        return
+    if not stage:
+        typer.echo('give a stage to follow, or --snapshot <config> for a one-shot table', err=True)
+        raise typer.Exit(code=2)
+
     progress_path = run_state_dir(layout, batch_name, stage) / 'progress.json'
     if not progress_path.exists() and layout == 'legacy':
         # Legacy fallback: the canonical nested state/<stage>/progress.json.

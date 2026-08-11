@@ -10,7 +10,6 @@ import typer
 
 from mantis_research.core.state import ClaudeResearchState, TopicStatus
 from mantis_research.interface.cli.monitor import monitor_cmd
-from mantis_research.interface.cli.status import status_cmd
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -24,9 +23,11 @@ _BATCH_CFG = {
 }
 
 
-def test_status_batch_layout_shows_markers(
+def test_snapshot_batch_layout_shows_markers(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    # MANT-B43: the cross-stage table is now `mantis monitor --snapshot`, the
+    # one-shot mode of the one progress surface (was `mantis status`).
     monkeypatch.setattr('mantis_research.core.paths.state_root', lambda: tmp_path / 'state')
     cfg_path = tmp_path / 'cfg.json'
     cfg_path.write_text(json.dumps(_BATCH_CFG), encoding='utf-8')
@@ -35,10 +36,24 @@ def test_status_batch_layout_shows_markers(
     sd.mkdir(parents=True, exist_ok=True)
     ClaudeResearchState(id='1', slug='t', status=TopicStatus.DONE).save(sd)
 
-    status_cmd(cfg_path)
+    monitor_cmd(snapshot=cfg_path)
 
     out = capsys.readouterr().out
     assert 'OK' in out  # the DONE marker — proves it read the batch-scoped dir
+
+
+def test_status_command_is_gone(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mantis_research.interface.cli import app
+
+    names = {c.name for c in app.registered_commands}
+    assert 'status' not in names
+    assert 'monitor' in names
+
+
+def test_monitor_with_neither_stage_nor_snapshot_exits_two() -> None:
+    with pytest.raises(typer.Exit) as exc:
+        monitor_cmd()
+    assert exc.value.exit_code == 2
 
 
 def test_monitor_batch_finds_scoped_progress(

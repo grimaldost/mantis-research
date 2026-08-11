@@ -56,6 +56,16 @@ releases (starting with 0.1.0).
   alive. The offered directory must be *strictly* contained by the outputs root,
   the same containment rule the sibling series engine resumes under. (MANT-B13)
 
+### Removed
+
+- **`mantis status` is folded into `mantis monitor --snapshot <config>`**
+  (ADR-0010). Two commands reported run progress — a follower and a snapshot —
+  answering the same question in two shapes, on a batch path with no live
+  consumers. There is now one progress surface; `interface/cli/status.py`
+  becomes `interface/cli/snapshot.py` and `status_cmd` becomes
+  `print_snapshot`. `mantis monitor` with neither a stage nor `--snapshot`
+  exits 2 naming both. (MANT-B43)
+
 ### Fixed
 
 - **The `research` tool reports progress instead of going silent.** The handler
