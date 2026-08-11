@@ -3,3 +3,6 @@
 *.md text
 *.json text
 *.toml text
+# The git hook is executed by sh; a CRLF checkout puts a stray \r in the
+# shebang and the hook dies before it runs the gate.
+scripts/git-hooks/** text eol=lf

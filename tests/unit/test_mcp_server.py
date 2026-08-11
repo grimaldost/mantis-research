@@ -29,12 +29,42 @@ async def test_research_tool_schema_documents_every_parameter() -> None:
     tools = await server.list_tools()
     tool = next(t for t in tools if t.name == 'research')
     props = tool.inputSchema['properties']
-    expected = {'question', 'assurance', 'substrates', 'primary', 'journal', 'dry_run'}
+    expected = {'question', 'assurance', 'substrates', 'primary', 'journal', 'dry_run', 'resume'}
     assert set(props) == expected
     for name in expected:
         assert props[name].get('description', '').strip(), f'{name} has no description'
     # The substrate vocabulary + default set must actually reach the agent.
     assert 'deepseek' in props['substrates']['description']
+
+
+async def test_request_context_is_injected_and_not_an_agent_parameter() -> None:
+    # MANT-B01: the handler takes the FastMCP Context so it can report progress.
+    # The SDK must recognise it as the injected context — if it ever leaked into
+    # the input schema instead, agents would be asked to supply it.
+    server = build_server()
+    tool = server._tool_manager.get_tool('research')
+    assert tool.context_kwarg == 'ctx'
+    assert 'ctx' not in tool.parameters['properties']
+
+
+async def test_research_tool_defaults_to_fast_assurance() -> None:
+    # MANT-B04: the default tier is the one most calls want and the one that
+    # actually completes over this tool's own transport. standard/high stay as
+    # explicit escalations.
+    server = build_server()
+    tools = await server.list_tools()
+    tool = next(t for t in tools if t.name == 'research')
+    assert tool.inputSchema['properties']['assurance']['default'] == 'fast'
+
+
+async def test_research_tool_assurance_description_names_the_escalations() -> None:
+    server = build_server()
+    tools = await server.list_tools()
+    tool = next(t for t in tools if t.name == 'research')
+    description = tool.inputSchema['properties']['assurance']['description']
+    assert 'default' in description.lower()
+    for tier in ('fast', 'standard', 'high'):
+        assert tier in description
 
 
 async def test_research_tool_projects_sidecar_and_paths(

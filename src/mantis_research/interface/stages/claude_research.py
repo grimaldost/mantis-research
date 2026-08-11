@@ -95,6 +95,8 @@ class ClaudeResearchStage:
             append_system_prompt=save_instruction,
             session_id=state.session_id or str(uuid.uuid4()),
             name=f'research-topic-{topic_id}',
+            idle_timeout_s=ctx.child_idle_timeout_s,
+            seat_owner=ctx.seat_owner('claude', topic_id),
         )
 
         result = await self._adapter.run(

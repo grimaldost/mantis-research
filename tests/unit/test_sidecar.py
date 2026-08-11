@@ -7,7 +7,19 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from mantis_research.core.sidecar import Provenance, ResearchSidecar, project_for_agent
+from mantis_research.core.sidecar import (
+    SIDECAR_VERSION,
+    CitedSource,
+    Provenance,
+    ResearchSidecar,
+    SidecarContractError,
+    SourceCitations,
+    SourceOverlap,
+    SourceRef,
+    derive_source_overlaps,
+    missing_required_fields,
+    project_for_agent,
+)
 from mantis_research.core.state import SubsessionResult
 
 _FULL_MODEL_DOC = {
@@ -53,10 +65,60 @@ class TestRoundTrip:
         assert sc.provenance.total_cost_usd is None
 
 
+class TestRequiredFieldsOnWrite:
+    """MANT-B06 — a sidecar with no question is not a citation surface.
+
+    Seven of seven sidecars across two runs were unusable because the schema had
+    no ``question`` field at all, and nothing validated the runner-authored zone
+    at write time, so a hollow artifact shipped silently.
+    """
+
+    def _merged(self, **overrides: object) -> ResearchSidecar:
+        sc = ResearchSidecar.from_model_json(json.dumps(_FULL_MODEL_DOC))
+        base: dict[str, object] = {
+            'question': 'what changed in X?',
+            'generated_at': '2026-08-11T00:00:00+00:00',
+            'sources': [SourceRef(label='openrouter:openai', path='outputs/openai.md')],
+        }
+        return sc.model_copy(update={**base, **overrides})
+
+    def test_question_is_carried_on_the_schema(self) -> None:
+        assert self._merged().question == 'what changed in X?'
+
+    def test_complete_document_passes(self) -> None:
+        assert missing_required_fields(self._merged()) == []
+        self._merged().require_complete()  # does not raise
+
+    @pytest.mark.parametrize(
+        ('field', 'empty'),
+        [('question', None), ('question', '  '), ('generated_at', None), ('sources', [])],
+    )
+    def test_missing_required_field_is_reported(self, field: str, empty: object) -> None:
+        sc = self._merged(**{field: empty})
+        assert missing_required_fields(sc) == [field]
+
+    def test_require_complete_raises_naming_every_missing_field(self) -> None:
+        sc = self._merged(question=None, sources=[])
+        with pytest.raises(SidecarContractError) as exc:
+            sc.require_complete()
+        assert 'question' in str(exc.value)
+        assert 'sources' in str(exc.value)
+
+
 class TestValidation:
+    def test_current_version_is_two(self) -> None:
+        # Additive bump (I4): `question` plus the typed provenance fields.
+        assert SIDECAR_VERSION == 2
+        assert ResearchSidecar().sidecar_version == 2
+
+    def test_version_one_still_loads(self) -> None:
+        # I6 — sidecars written before the bump stay readable.
+        sc = ResearchSidecar.from_model_json(json.dumps(_FULL_MODEL_DOC))
+        assert sc.sidecar_version == 1
+
     def test_wrong_version_rejected(self) -> None:
         with pytest.raises(ValidationError):
-            ResearchSidecar.from_model_json(json.dumps({'sidecar_version': 2}))
+            ResearchSidecar.from_model_json(json.dumps({'sidecar_version': 99}))
 
     def test_claim_without_id_rejected(self) -> None:
         doc = {'sidecar_version': 1, 'claims': [{'text': 'no id here'}]}
@@ -68,6 +130,84 @@ class TestValidation:
         doc = {'sidecar_version': 1, 'claimz': []}
         with pytest.raises(ValidationError):
             ResearchSidecar.from_model_json(json.dumps(doc))
+
+
+class TestSourceProvenance:
+    """MANT-B07 — the mechanism the tool actually wins on, made computable.
+
+    The sharpest result the pipeline has produced was not averaging: two
+    substrates cited the identical URL with incompatible figures while a third
+    never cited it at all, so the source itself was suspect. With citations
+    typed, "did two substrates cite the same source and disagree about it" is
+    computed rather than improvised into a free-text field.
+    """
+
+    def _inventory(self) -> list[SourceCitations]:
+        return [
+            SourceCitations(
+                substrate='openrouter:openai',
+                cited=[
+                    CitedSource(reference='https://bcb.gov.br/report-2025', kind='url'),
+                    CitedSource(reference='quantlib/quantlib', kind='repository'),
+                ],
+            ),
+            SourceCitations(
+                substrate='openrouter:deepseek',
+                cited=[CitedSource(reference='http://www.bcb.gov.br/report-2025/', kind='url')],
+            ),
+            SourceCitations(
+                substrate='openrouter:google',
+                cited=[CitedSource(reference='numpy', kind='package')],
+            ),
+        ]
+
+    def test_overlap_is_derived_across_substrates(self) -> None:
+        overlaps = derive_source_overlaps(self._inventory())
+        assert [o.reference for o in overlaps] == ['https://bcb.gov.br/report-2025']
+        assert overlaps[0].substrates == ['openrouter:openai', 'openrouter:deepseek']
+
+    def test_overlap_records_who_never_cited_it(self) -> None:
+        # The third substrate's silence is half the signal — it is what made the
+        # source itself suspect rather than one model wrong.
+        overlaps = derive_source_overlaps(self._inventory())
+        assert overlaps[0].not_cited_by == ['openrouter:google']
+
+    def test_url_forms_of_the_same_source_are_one_reference(self) -> None:
+        # http/https, www, and a trailing slash are the same citation.
+        overlaps = derive_source_overlaps(self._inventory())
+        assert len(overlaps) == 1
+
+    def test_a_source_cited_once_is_not_an_overlap(self) -> None:
+        overlaps = derive_source_overlaps(self._inventory())
+        assert 'numpy' not in [o.reference for o in overlaps]
+
+    def test_model_conflict_judgement_is_folded_onto_the_derived_overlap(self) -> None:
+        judgement = SourceOverlap(
+            id='ignored',
+            reference='https://BCB.gov.br/report-2025',
+            figures_conflict=True,
+            conflict='openai reads 4.2%, deepseek reads 6.1%, same table',
+        )
+        overlaps = derive_source_overlaps(self._inventory(), judgements=[judgement])
+        assert overlaps[0].figures_conflict is True
+        assert 'same table' in (overlaps[0].conflict or '')
+        # Substrate membership stays derived, never taken from the model.
+        assert overlaps[0].substrates == ['openrouter:openai', 'openrouter:deepseek']
+
+    def test_ids_are_stable_and_unique(self) -> None:
+        overlaps = derive_source_overlaps(self._inventory())
+        assert [o.id for o in overlaps] == ['o1']
+
+    def test_empty_inventory_yields_no_overlaps(self) -> None:
+        assert derive_source_overlaps([]) == []
+
+    def test_overlaps_reach_the_agent_projection(self) -> None:
+        sc = ResearchSidecar.from_model_json(json.dumps(_FULL_MODEL_DOC)).model_copy(
+            update={'source_overlaps': derive_source_overlaps(self._inventory())}
+        )
+        out = project_for_agent(sc)
+        assert out['source_overlaps'][0]['reference'] == 'https://bcb.gov.br/report-2025'
+        assert out['truncated']['source_overlaps'] == 0
 
 
 class TestProvenanceAggregation:

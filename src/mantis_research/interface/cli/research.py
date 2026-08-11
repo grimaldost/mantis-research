@@ -11,24 +11,34 @@ typer evaluates annotations at runtime to build option metadata.
 """
 
 import json
+from pathlib import Path
 from typing import Annotated
 
 import typer
 
+from mantis_research.core.progress import RunEvent
 from mantis_research.interface.research_service import (
     _DEFAULT_SUBSTRATES,
     _TIER_STAGES,
     build_config,
+    resume_research,
     run_research,
 )
 
 # ``build_config`` and ``_TIER_STAGES`` are re-exported here for existing
 # importers (tests/integration/test_research_cmd.py, spec 0002 §1 / FM-3).
-__all__ = ('_DEFAULT_SUBSTRATES', '_TIER_STAGES', 'build_config', 'research_cmd', 'run_research')
+__all__ = (
+    '_DEFAULT_SUBSTRATES',
+    '_TIER_STAGES',
+    'build_config',
+    'research_cmd',
+    'resume_research',
+    'run_research',
+)
 
 
 def research_cmd(
-    question: Annotated[str, typer.Argument(help='The research question')],
+    question: Annotated[str, typer.Argument(help='The research question')] = '',
     assurance: Annotated[
         str, typer.Option('--assurance', help='fast | standard | high')
     ] = 'standard',
@@ -44,20 +54,53 @@ def research_cmd(
     batch_name: Annotated[str, typer.Option('--batch-name')] = '',
     dry_run: Annotated[bool, typer.Option('--dry-run')] = False,
     log_level: Annotated[str, typer.Option('--log-level')] = 'INFO',
+    resume: Annotated[
+        str,
+        typer.Option(
+            '--resume',
+            help='Re-enter an existing run directory (outputs/<batch_name>), '
+            'skipping the stages already done',
+        ),
+    ] = '',
 ) -> None:
-    """Run one research question end-to-end and print a result manifest."""
+    """Run one research question end-to-end and print a result manifest.
+
+    ``--resume outputs/<batch_name>`` re-enters a run that was interrupted: the
+    per-stage state files already record what finished, so only the rest is
+    re-attempted. The question and settings come from that run's own record, so
+    no argument has to be retyped and none can silently disagree.
+    """
     subs = [s.strip() for s in substrates.split(',') if s.strip()]
+
+    def announce(event: RunEvent) -> None:
+        # Name the run on stderr the moment it exists, so a Ctrl-C or a killed
+        # terminal still leaves the operator with the run's identity. stdout is
+        # reserved for the manifest.
+        if event.kind == 'run_named':
+            typer.echo(
+                f'run: {event.data["batch_name"]}  ->  {event.data["outputs_dir"]}', err=True
+            )
+
     try:
-        manifest = run_research(
-            question,
-            assurance=assurance,
-            substrates=subs,
-            primary=primary,
-            journal=journal,
-            batch_name=batch_name,
-            dry_run=dry_run,
-            log_level=log_level,
-        )
+        if resume:
+            manifest = resume_research(
+                Path(resume), dry_run=dry_run, log_level=log_level, on_event=announce
+            )
+        else:
+            if not question.strip():
+                msg = 'give a question, or --resume <run-dir> to re-enter an existing run'
+                raise ValueError(msg)
+            manifest = run_research(
+                question,
+                assurance=assurance,
+                substrates=subs,
+                primary=primary,
+                journal=journal,
+                batch_name=batch_name,
+                dry_run=dry_run,
+                log_level=log_level,
+                on_event=announce,
+            )
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=2) from exc

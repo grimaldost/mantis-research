@@ -1,4 +1,4 @@
-"""Epistemic sidecar schema v1 — the agent-consumable contract (ADR-0003).
+"""Epistemic sidecar schema v2 — the agent-consumable contract (ADR-0003).
 
 Each synthesis produces a ``<stem>.sidecar.json`` alongside the markdown brief.
 It carries the pipeline's highest-value signal — divergences, hallucination
@@ -12,11 +12,18 @@ Two authorship zones (ADR-0003), marked per field group below:
   ``claims``, ``divergences``, ``verification_queue``,
   ``agreements_worth_verifying``, ``coverage_notes``.
 - **runner-authored** — identity and provenance the runner fills in after
-  validating the model's part: ``topic_id`` / ``slug`` / ``batch_name`` /
-  ``synthesis_path`` / ``generated_at`` and ``provenance``.
+  validating the model's part: ``question`` / ``topic_id`` / ``slug`` /
+  ``batch_name`` / ``synthesis_path`` / ``generated_at`` and ``provenance``.
 
 The schema evolves additively (I4); an incompatible change bumps
-``sidecar_version``.
+``sidecar_version``. v2 adds ``question`` (a sidecar with no question is not a
+citation surface — a consumer cannot tell which question it answers) and the
+typed source-provenance block. Both additions are readable by a v1 consumer,
+and v1 documents on disk still validate (I6).
+
+Emission is gated: :func:`missing_required_fields` names what a merged document
+still lacks, and :meth:`ResearchSidecar.require_complete` raises rather than let
+a hollow artifact ship.
 """
 
 from __future__ import annotations
@@ -31,6 +38,17 @@ if TYPE_CHECKING:
     from mantis_research.core.state import SubsessionResult
 
 SUPPORT_QUALITY = Literal['direct', 'indirect', 'none']
+CITATION_KIND = Literal['url', 'repository', 'package', 'paper', 'other']
+
+#: The schema version the runner writes today. Older versions still validate.
+SIDECAR_VERSION = 2
+
+#: Runner-authored fields a written sidecar must carry to be usable at all.
+REQUIRED_ON_WRITE: tuple[str, ...] = ('question', 'generated_at', 'sources')
+
+
+class SidecarContractError(ValueError):
+    """A merged sidecar is missing a field the agent contract requires."""
 
 
 class SidecarModel(BaseModel):
@@ -71,6 +89,45 @@ class VerificationItem(SidecarModel):
     claim: str
     reason: str  # why it is flagged (disagreement, single-source, training-uniform)
     sources_disagree: list[str] = Field(default_factory=list)
+
+
+class CitedSource(SidecarModel):
+    """One artifact a research brief cited."""
+
+    reference: str  # URL, repository slug, package name, or paper title
+    kind: CITATION_KIND = 'other'
+
+
+class SourceCitations(SidecarModel):
+    """The citation inventory for one research brief (model-authored).
+
+    ``substrate`` matches a ``sources[].label``, so the inventory joins back to
+    the brief and the model id that produced it.
+    """
+
+    substrate: str
+    cited: list[CitedSource] = Field(default_factory=list)
+
+
+class SourceOverlap(SidecarModel):
+    """One artifact more than one substrate cited.
+
+    This is the pipeline's sharpest measured result and the mechanism that
+    survives the counter-evidence against ensembling: not that several models
+    agreed, but that two of them cited the same source and read incompatible
+    figures out of it while a third never cited it at all — which indicts the
+    source. ``substrates`` and ``not_cited_by`` are *derived* from the citation
+    inventory; only ``figures_conflict`` / ``conflict`` are the model's
+    judgement.
+    """
+
+    id: str
+    reference: str
+    kind: CITATION_KIND = 'other'
+    substrates: list[str] = Field(default_factory=list)
+    not_cited_by: list[str] = Field(default_factory=list)
+    figures_conflict: bool = False
+    conflict: str | None = None  # what disagreed, when figures_conflict
 
 
 # ── runner-authored provenance ───────────────────────────────────────
@@ -149,9 +206,13 @@ class ResearchSidecar(SidecarModel):
     runner sets them before the final write.
     """
 
-    sidecar_version: Literal[1] = 1
+    sidecar_version: Literal[1, 2] = SIDECAR_VERSION
 
     # runner-authored identity
+    # The question the run answered, verbatim from the run manifest. Without it
+    # a frozen sidecar cannot be cited, and worse, can be adopted as the answer
+    # to a different question.
+    question: str | None = None
     topic_id: str | None = None
     slug: str | None = None
     batch_name: str | None = None
@@ -166,6 +227,13 @@ class ResearchSidecar(SidecarModel):
     agreements_worth_verifying: list[str] = Field(default_factory=list)
     coverage_notes: list[str] = Field(default_factory=list)
 
+    # source provenance (v2). The inventory is model-authored — only the model
+    # read the briefs. The overlaps are re-derived by the runner from that
+    # inventory, so membership is computed; the model's contribution to an
+    # overlap is the conflict judgement alone.
+    source_citations: list[SourceCitations] = Field(default_factory=list)
+    source_overlaps: list[SourceOverlap] = Field(default_factory=list)
+
     # runner-authored provenance
     provenance: Provenance = Field(default_factory=Provenance)
 
@@ -178,6 +246,101 @@ class ResearchSidecar(SidecarModel):
     def to_json(self) -> str:
         """Serialize the merged document for the final on-disk write."""
         return self.model_dump_json(indent=2)
+
+    def require_complete(self) -> None:
+        """Raise unless every :data:`REQUIRED_ON_WRITE` field is populated.
+
+        Called by the runner on the merged document, immediately before the
+        final write. These are runner-authored fields, so a gap here is a runner
+        defect — re-asking the model cannot fix it, and shipping the document
+        anyway produces the hollow artifact this gate exists to stop.
+        """
+        missing = missing_required_fields(self)
+        if missing:
+            msg = f'sidecar missing required field(s): {", ".join(missing)}'
+            raise SidecarContractError(msg)
+
+
+def _normalize_reference(reference: str) -> str:
+    """Fold the spellings of one citation into a single key.
+
+    http vs https, a leading ``www.`` and a trailing slash are the same source;
+    a brief that cites it one way and another that cites it the other must not
+    read as two independent sources.
+    """
+    key = reference.strip().lower()
+    for scheme in ('https://', 'http://'):
+        key = key.removeprefix(scheme)
+    key = key.removeprefix('www.')
+    return key.rstrip('/')
+
+
+def derive_source_overlaps(
+    citations: Iterable[SourceCitations],
+    *,
+    judgements: Iterable[SourceOverlap] = (),
+) -> list[SourceOverlap]:
+    """Compute which artifacts more than one substrate cited.
+
+    Membership (``substrates``, ``not_cited_by``) is derived from the citation
+    inventory, never taken from the model — that is the whole point of typing
+    provenance: "two substrates cited the same URL and disagreed about it" is
+    computed, not narrated. ``judgements`` supplies the model's
+    ``figures_conflict`` / ``conflict`` assessment, matched by normalized
+    reference and ignored where it names an artifact no inventory contains.
+    Pure; the synthesis stage calls it at merge time.
+    """
+    inventory = list(citations)
+    all_substrates = [entry.substrate for entry in inventory]
+    # Preserve first-seen order for both the references and their substrates, so
+    # the output is stable across runs with the same inventory.
+    cited_by: dict[str, list[str]] = {}
+    display: dict[str, tuple[str, CITATION_KIND]] = {}
+    for entry in inventory:
+        for item in entry.cited:
+            key = _normalize_reference(item.reference)
+            if not key:
+                continue
+            display.setdefault(key, (item.reference, item.kind))
+            substrates = cited_by.setdefault(key, [])
+            if entry.substrate not in substrates:
+                substrates.append(entry.substrate)
+
+    verdict = {_normalize_reference(j.reference): j for j in judgements}
+    overlaps: list[SourceOverlap] = []
+    for key, substrates in cited_by.items():
+        if len(substrates) < 2:
+            continue
+        reference, kind = display[key]
+        judgement = verdict.get(key)
+        overlaps.append(
+            SourceOverlap(
+                id=f'o{len(overlaps) + 1}',
+                reference=reference,
+                kind=kind,
+                substrates=substrates,
+                not_cited_by=[s for s in all_substrates if s not in substrates],
+                figures_conflict=judgement.figures_conflict if judgement else False,
+                conflict=judgement.conflict if judgement else None,
+            )
+        )
+    return overlaps
+
+
+def missing_required_fields(sc: ResearchSidecar) -> list[str]:
+    """Return the :data:`REQUIRED_ON_WRITE` fields ``sc`` does not carry.
+
+    Empty and whitespace-only strings count as missing — a blank question is
+    exactly as unusable as an absent one. Pure; the synthesis stage calls it.
+    """
+    missing: list[str] = []
+    if not (sc.question or '').strip():
+        missing.append('question')
+    if not (sc.generated_at or '').strip():
+        missing.append('generated_at')
+    if not sc.sources:
+        missing.append('sources')
+    return missing
 
 
 _DEFAULT_MAX_ITEMS = 20
@@ -226,11 +389,17 @@ def project_for_agent(
         'claims': max(0, len(sc.claims) - max_items),
         'divergences': max(0, len(sc.divergences) - max_items),
         'verification_queue': max(0, len(sc.verification_queue) - max_items),
+        'source_overlaps': max(0, len(sc.source_overlaps) - max_items),
     }
     return {
         'claims': [_clip_item(c.model_dump(), max_item_chars) for c in sc.claims[:max_items]],
         'divergences': [
             _clip_item(d.model_dump(), max_item_chars) for d in sc.divergences[:max_items]
+        ],
+        # The full per-substrate citation inventory stays on disk; what an agent
+        # needs inline is where the substrates landed on the same source.
+        'source_overlaps': [
+            _clip_item(o.model_dump(), max_item_chars) for o in sc.source_overlaps[:max_items]
         ],
         'verification_queue': [
             _clip_item(v.model_dump(), max_item_chars) for v in sc.verification_queue[:max_items]

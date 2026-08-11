@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from mantis_research.core.config import BatchConfig, TopicConfig
+    from mantis_research.core.progress import ProgressCallback
     from mantis_research.core.state import TopicState
 
 
@@ -69,6 +70,24 @@ class RunContext:
     output_dir: Path
     transcript_dir: Path
     dry_run: bool = False
+    # Where a stage reports what it is doing, for a caller watching from
+    # outside the process. ``None`` when nobody is listening; stages emit
+    # through ``core.progress.emit``, which handles that case.
+    on_event: ProgressCallback | None = None
+
+    @property
+    def child_idle_timeout_s(self) -> float | None:
+        """Seconds a spawned child may stay silent before the watchdog kills it."""
+        minutes = self.batch.runner.child_idle_timeout_minutes
+        return None if minutes is None else float(minutes) * 60.0
+
+    def seat_owner(self, stage_name: str, topic_id: str) -> str:
+        """A queue-legible name for whoever is holding the local Claude seat.
+
+        Read by the *next* run that finds the lock, so it names the run, the
+        stage and the topic — enough to answer "what is holding this up".
+        """
+        return f'{self.batch.batch_name}/{stage_name}:{topic_id}'
 
 
 # ── Stage Protocol ───────────────────────────────────────────────────

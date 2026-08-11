@@ -52,6 +52,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from mantis_research.core.config import BatchConfig
+    from mantis_research.core.progress import ProgressCallback
     from mantis_research.core.stage import Stage
 
 
@@ -140,6 +141,7 @@ async def _run_stage_async(
     dry_run: bool,
     force: bool,
     only: Sequence[str] | None,
+    on_event: ProgressCallback | None = None,
 ) -> int:
     entry = STAGE_REGISTRY[name]
     stage = entry.stage_factory()
@@ -168,6 +170,7 @@ async def _run_stage_async(
         transcript_dir=transcript_dir,
         parallel=parallel,
         dry_run=dry_run,
+        on_event=on_event,
     )
     return await orchestrator.run(only=only, force=force)
 
@@ -202,6 +205,7 @@ def dispatch_stage_config(
     force: bool = False,
     only: Sequence[str] | None = None,
     log_level: str = 'INFO',
+    on_event: ProgressCallback | None = None,
 ) -> int:
     """Run one stage from an already-built ``BatchConfig`` (no path read).
 
@@ -221,6 +225,7 @@ def dispatch_stage_config(
             dry_run=dry_run,
             force=force,
             only=only,
+            on_event=on_event,
         )
     )
 

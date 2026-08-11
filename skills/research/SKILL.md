@@ -23,10 +23,13 @@ Arguments:
 - `question` (required) — the research question.
 - `assurance` — how far the pipeline runs. Each tier adds stages (deeper
   checking), not more research breadth:
-  - `fast` — research → synthesis (quickest, cheapest).
-  - `standard` (default) — adds a **falsification** pass: one adversarial Claude
-    turn that reads the finished synthesis and hunts for counter-evidence against
-    its claims.
+  - `fast` (default) — research → synthesis. This is what most calls want: the
+    cross-model briefs, the merged synthesis and the epistemic sidecar are all
+    produced here.
+  - `standard` — adds a **falsification** pass: one adversarial Claude turn that
+    reads the finished synthesis and hunts for counter-evidence against its
+    claims. Escalate to it when the answer will carry a decision you cannot
+    cheaply revisit.
   - `high` — also adds a **Claude-prior baseline** (a title-only, no-sources
     answer) and an **evaluation** pass that scores the synthesis against a rubric,
     using that baseline to detect training-consensus parroting (whether the
@@ -53,6 +56,12 @@ Arguments:
   turn (markedly slower). Off by default; turn it on only when feeding a
   downstream mantis memory store.
 - `dry_run` — validate orchestration end-to-end without spending model calls.
+- `resume` — re-enter a run that was interrupted, instead of starting a new one.
+  Pass its output directory (the `outputs_dir` of the run you lost, e.g.
+  `outputs/research-my-question-20260811T101500Z`). Stages that already finished
+  are skipped, and the question and settings come from that run's own record, so
+  `question` is ignored. Cheaper and more faithful than re-asking: the per-model
+  briefs a lost run already paid for are reused rather than bought again.
 
 ## What comes back
 
@@ -81,13 +90,25 @@ and long free-text is clipped:
   holds, when determinable).
 - `verification_queue` — claims worth checking externally; each `{ id, claim,
   reason, sources_disagree }`.
+- `source_overlaps` — the sources **more than one substrate cited**; each
+  `{ id, reference, kind, substrates, not_cited_by, figures_conflict, conflict }`.
+  This is the pipeline's sharpest signal: when two substrates cite the same URL
+  and read incompatible figures out of it (`figures_conflict: true`) while a
+  third never cites it at all (`not_cited_by`), the *source* is suspect — a
+  hallucination class no single-provider run can surface. `substrates` and
+  `not_cited_by` are computed from the per-substrate citation inventory, not
+  asserted by the model.
 - `agreements_worth_verifying`, `coverage_notes` — lists of strings.
-- `truncated` — `{ any, claims, divergences, verification_queue }`: how many items
-  each list dropped by the cap. If `any` is true, read the full sidecar.
+- `truncated` — `{ any, claims, divergences, verification_queue, source_overlaps }`:
+  how many items each list dropped by the cap. If `any` is true, read the full
+  sidecar.
 
 The **complete** sidecar is always on disk at `outputs.sidecar` — including fields
-not projected inline: `sources[]` (`{ label, path, model_id, bytes }` per brief,
-so you can see which model produced which brief) and `provenance` (durations,
+not projected inline: `question` (the question this sidecar answers, verbatim —
+so a sidecar you froze months ago is still citable on its own), `sources[]`
+(`{ label, path, model_id, bytes }` per brief, so you can see which model
+produced which brief), `source_citations[]` (the full per-substrate citation
+inventory `source_overlaps` is computed from) and `provenance` (durations,
 token/cost totals). Read it when you need the full lists or per-source
 attribution.
 
@@ -103,6 +124,18 @@ dollars — so all three tiers cost about the same for a given substrate set:
 - **Latency (estimates):** `fast` ~5–15 min, `standard` ~35–75 min, `high`
   ~50–100+ min — the falsification and evaluation passes are each full Claude
   runs. Substrates run concurrently, so the research stage tracks the slowest one.
+
+Pick the tier by how much checking the answer needs, not by how long you are
+willing to wait. Waiting is handled separately, on two axes:
+
+- **The run narrates itself.** Progress notifications go out over the MCP
+  channel as the run is named, at each stage boundary, per research substrate as
+  it starts and finishes, and every 10 s during any internal backoff. A silent
+  minute means something is wrong; silence is no longer the normal case.
+- **No single internal wait exceeds half the caller's idle budget**
+  (`runner.caller_idle_budget_seconds`, default 1500 s), so a rate-limited
+  substrate cannot sit past a client's idle window — a failure that used to look
+  like the tier's fault and was never fixed by dropping to `fast`.
 
 Use `dry_run: true` first — it validates the whole pipeline for free, then drop it
 for the real run.
@@ -151,10 +184,14 @@ scratch — **no clone needed** (`uv` must be installed):
 
 ## Example
 
-Ask for a standard-assurance run:
+Ask for a default (`fast`) run:
 
 > Use the research tool with question "What changed in ISO 20022 migration for
-> Brazilian banks in 2025?" and assurance "standard".
+> Brazilian banks in 2025?".
+
+Escalate only when the extra checking earns its Claude-seat time:
+
+> …and assurance "standard".
 
 Start with `dry_run: true` to validate the pipeline end to end without spending
 model calls, then drop it for the real run.

@@ -14,6 +14,14 @@ def test_research_skill_documents_tool_and_tiers() -> None:
         assert tier in skill
 
 
+def test_skill_names_fast_as_the_default_tier() -> None:
+    # MANT-B04: the skill is the surface a calling agent actually meets, so the
+    # default has to be stated there, not only in the schema.
+    skill = (_ROOT / 'skills' / 'research' / 'SKILL.md').read_text(encoding='utf-8')
+    assert '`fast` (default)' in skill
+    assert '`standard` (default)' not in skill
+
+
 def test_claude_md_has_mcp_plugin_section() -> None:
     claude_md = (_ROOT / 'CLAUDE.md').read_text(encoding='utf-8')
     assert 'Serving agents (MCP server + plugin)' in claude_md

@@ -1,16 +1,14 @@
-"""``mantis status <config>`` — cross-stage progress snapshot.
+"""The cross-stage progress snapshot behind ``mantis monitor --snapshot``.
 
 Walks every state directory and reports the topic-by-topic status for each
-stage. Replaces the ad-hoc bash one-liners we used during batch runs.
-
-Note: this module deliberately does NOT use ``from __future__ import
-annotations`` — typer evaluates annotations at runtime to build option
-metadata (``Path``, ``int``, etc.), and that requires real types in the
-function signature, not strings.
+stage. This was ``mantis status``, a second command competing with ``monitor``
+for one job on a path with no live consumers; it is now the one-shot mode of the
+single progress surface (ADR-0010).
 """
 
-from pathlib import Path
-from typing import Annotated
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import typer
 
@@ -28,6 +26,9 @@ from mantis_research.core.state import (
     TopicState,
     TopicStatus,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # Map stage display name → (state-dir name, state class)
 
@@ -54,12 +55,11 @@ def _status_marker(status: TopicStatus | None) -> str:
         TopicStatus.FAILED: 'XX',
         TopicStatus.RATE_LIMITED: 'RL',
         TopicStatus.BLOCKED_UPSTREAM: 'BL',
+        TopicStatus.DEAD: 'DD',
     }.get(status, '?')
 
 
-def status_cmd(
-    config: Annotated[Path, typer.Argument(help='Path to v2 batch config JSON')],
-) -> None:
+def print_snapshot(config: Path) -> None:
     """Print cross-stage status for every topic in the batch config."""
     cfg_path = config if config.exists() else project_root() / config
     cfg = load_batch_config(cfg_path)

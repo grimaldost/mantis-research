@@ -17,7 +17,7 @@ import pytest
 
 from mantis_research.core import prompts as default_prompts
 from mantis_research.core.config import load_batch_config
-from mantis_research.core.sidecar import ResearchSidecar
+from mantis_research.core.sidecar import SIDECAR_VERSION, ResearchSidecar
 from mantis_research.core.stage import RunContext
 from mantis_research.core.state import SynthesisState
 from mantis_research.interface.adapters.claude_cli import ClaudeCliOptions, ClaudeCliResult
@@ -38,7 +38,7 @@ _VALID = json.dumps(
         'coverage_notes': [],
     }
 )
-_INVALID = json.dumps({'sidecar_version': 2})  # wrong version → ValidationError
+_INVALID = json.dumps({'sidecar_version': 99})  # unknown version → ValidationError
 
 
 @dataclass
@@ -138,6 +138,83 @@ class TestSidecarEmission:
         assert merged.batch_name == 'sc'
         assert merged.sources  # runner filled source refs
         assert state.sidecar_bytes is not None
+
+    async def test_question_is_populated_verbatim_from_the_topic(
+        self, paths, tmp_path: Path
+    ) -> None:
+        # MANT-B06: the run manifest already carries the question; the sidecar
+        # now carries it too, so a frozen sidecar is a citation surface on its
+        # own and cannot be adopted as the answer to a different question.
+        adapter = ScriptedAdapter(paths['synthesis'], paths['sidecar'], paths['journal'], [_VALID])
+        result = await _run(adapter, _config(), tmp_path, SynthesisState(id='1', slug='t'))
+        assert result.success
+        merged = ResearchSidecar.from_model_json(paths['sidecar'].read_text(encoding='utf-8'))
+        assert merged.question == 'T'
+        assert merged.sidecar_version == SIDECAR_VERSION
+
+    async def test_missing_required_field_fails_the_stage_loudly(
+        self, paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A hollow artifact must not ship. The failure names the field and does
+        # NOT burn re-asks: the missing field is runner-authored, so re-asking
+        # the model cannot fix it.
+        monkeypatch.setattr(
+            'mantis_research.interface.stages.synthesis.SynthesisStage._fill_runner_fields',
+            staticmethod(lambda sc, *a, **k: sc.model_copy(update={'question': None})),
+        )
+        adapter = ScriptedAdapter(paths['synthesis'], paths['sidecar'], paths['journal'], [_VALID])
+        result = await _run(adapter, _config(), tmp_path, SynthesisState(id='1', slug='t'))
+        assert not result.success
+        assert 'question' in (result.error or '')
+        assert adapter.sidecar_calls == 1  # no re-ask burned on a runner-side gap
+
+    async def test_source_overlap_membership_is_recomputed_not_trusted(
+        self, paths, tmp_path: Path
+    ) -> None:
+        # MANT-B07: the model supplies the citation inventory and the conflict
+        # judgement; which substrates cited a source is derived from the
+        # inventory, so a model that names the wrong substrates (or none) still
+        # produces a correct overlap.
+        written = json.dumps(
+            {
+                'sidecar_version': 2,
+                'claims': [],
+                'divergences': [],
+                'verification_queue': [],
+                'agreements_worth_verifying': [],
+                'coverage_notes': [],
+                'source_citations': [
+                    {
+                        'substrate': 'openrouter:openai',
+                        'cited': [{'reference': 'https://bcb.gov.br/x', 'kind': 'url'}],
+                    },
+                    {
+                        'substrate': 'openrouter:deepseek',
+                        'cited': [{'reference': 'http://www.bcb.gov.br/x/', 'kind': 'url'}],
+                    },
+                    {'substrate': 'openrouter:google', 'cited': []},
+                ],
+                'source_overlaps': [
+                    {
+                        'id': 'o1',
+                        'reference': 'https://bcb.gov.br/x',
+                        'substrates': ['everyone, obviously'],
+                        'figures_conflict': True,
+                        'conflict': '4.2% vs 6.1% off the same table',
+                    }
+                ],
+            }
+        )
+        adapter = ScriptedAdapter(paths['synthesis'], paths['sidecar'], paths['journal'], [written])
+        result = await _run(adapter, _config(), tmp_path, SynthesisState(id='1', slug='t'))
+        assert result.success
+        merged = ResearchSidecar.from_model_json(paths['sidecar'].read_text(encoding='utf-8'))
+        overlap = merged.source_overlaps[0]
+        assert overlap.substrates == ['openrouter:openai', 'openrouter:deepseek']
+        assert overlap.not_cited_by == ['openrouter:google']
+        # The model's judgement survives; only its membership claim is replaced.
+        assert overlap.figures_conflict is True
+        assert '4.2%' in (overlap.conflict or '')
 
     async def test_provenance_filled_from_openrouter_state(
         self, paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -291,4 +368,4 @@ def test_sidecar_prompt_formats_without_brace_error() -> None:
         synthesis_path='/x/01-t.md', sidecar_path='/x/01-t.sidecar.json'
     )
     assert '/x/01-t.sidecar.json' in out
-    assert '"sidecar_version": 1' in out  # the literal JSON survived intact
+    assert f'"sidecar_version": {SIDECAR_VERSION}' in out  # the literal JSON survived intact

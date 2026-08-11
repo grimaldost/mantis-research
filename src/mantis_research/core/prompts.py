@@ -34,23 +34,23 @@ Do NOT ask clarifying questions — this is a non-interactive research request. 
 
 
 # Synthesis prompt — see prompts/playbooks/synthesis-prompt.md
-SYNTHESIS = """You are the synthesis stage of a multi-model research pipeline. Your job is to merge two LLM-produced briefs into one richer document with explicit divergence flagging and meta-observations on model biases and prompt quality.
+SYNTHESIS = """You are the synthesis stage of a multi-model research pipeline. Your job is to merge {source_count} independently-produced research briefs into one richer document with explicit divergence flagging and meta-observations on model biases and prompt quality.
 
 ## Sources to read
 
 <source role="primary" label="{primary_label}" effort="max">
-{claude_path} ({claude_size_kb:.1f} KB)
+{primary_path} ({primary_size_kb:.1f} KB)
 </source>
 
-<source role="secondary" count="{gemini_count}">
-{gemini_block}
+<source role="secondary" count="{secondary_count}">
+{secondary_block}
 </source>
 
 Use the Read tool to read all sources before writing.
 
 ## Pre-synthesis quote extraction (mandatory first step)
 
-Before drafting the merged synthesis, output a `<quotes>` block containing 5-10 of the MOST DIVERGENT passages between the Claude and Gemini briefs — passages where the two sources make claims that disagree on a verifiable fact, frame the same concept from different angles, or where one source addresses something the other doesn't. Each quote: source path, brief, exact passage. This anchors the synthesis to real spans rather than to associatively-activated context.
+Before drafting, output a `<quotes>` block with 5-10 of the MOST DIVERGENT passages across the briefs — where two disagree on a verifiable fact, frame the same concept differently, or one covers what another omits. Each quote: source label, path, exact passage. This anchors the synthesis to real spans rather than to associatively-activated context.
 
 ## What to produce
 
@@ -58,15 +58,16 @@ Save the synthesis brief to {synthesis_path} using the Write tool.
 
 ### Body — merged technical content
 
-**Concept-centric structure (mandatory).** Each paragraph's topic sentence is a CLAIM, not a model name or source name. Multiple sources cited per paragraph. Diagnostic test: read your topic sentences. If they are claims, the synthesis is concept-centric. If they are "Claude says X, Gemini says Y" sequential, it's an annotated bibliography (the failure mode arXiv moderators flagged in October 2025).
+**Concept-centric structure (mandatory).** Each paragraph's topic sentence is a CLAIM, not a model name or source name. Multiple sources cited per paragraph. Diagnostic test: read your topic sentences. If they are claims, the synthesis is concept-centric. If they read "{primary_label} says X, the next brief says Y", it is an annotated bibliography. Organise by the topic's own structure, not by any one brief's; the synthesis should be RICHER than any input alone — the union with conflicts explicit, not the intersection.
 
-The structure follows Claude's brief (it's the comprehensive substrate). Fold in Gemini content where it adds detail, alternative framing, or cross-checks a Claude claim. The synthesis should be RICHER than either input alone — the union with conflicts explicit, not the intersection.
+Where the briefs agree on a substantive claim, state the merged claim cleanly. **Cross-brief agreement is WEAKER signal than intuition suggests** (Goel et al., ICML 2025: mistake similarity grows with capability across frontier models because they share substrate). Two rules follow:
 
-Where the models agree on a substantive claim, state the merged claim cleanly. **Note: cross-model agreement is WEAKER signal than intuition suggests** (Goel et al., ICML 2025: mistake similarity grows with capability across frontier models because they share substrate). Agreement on a non-trivial verifiable claim is worth explicit flagging — list 2-3 such items in the meta-observations as candidates for external verification rather than treating them as confirmed.
+- Agreement on a non-trivial verifiable claim is worth explicit flagging — list it in the meta-observations as a candidate for external verification rather than treating it as confirmed.
+- **Agreement on a named artifact no brief traces to a verifiable primary source is a CO-HALLUCINATION FLAG, not corroboration.** Named artifact means anything named, not only citations: repository slugs, package names, URLs, product names, versions, paper titles, regulation paragraphs. Two briefs naming the same non-existent repository is this pipeline's worst exposure, precisely because the agreement is what makes it look safe. Flag such items; never promote one to a recommendation.
 
-Where the models diverge, flag the divergence in-line with an explicit block. **Steelmanning required:**
+Where the briefs diverge, flag it in-line with an explicit block. **Steelmanning required:**
 
-> **Divergence:** Claude argues <X-as-Claude's-strongest-version-would-defend-it>. Gemini argues <Y-as-Gemini's-strongest-version-would-defend-it>. <Your assessment of which is right, or whether both are valid framings under different conditions — cite specific reasons or sources. Don't quietly average; naming the disagreement is the point.>
+> **Divergence:** <label A> argues <X, steelmanned>. <label B> argues <Y, steelmanned>. <Which is right, or under what conditions each holds — with specific reasons or sources. Don't quietly average; naming the disagreement is the point.>
 
 If the briefs largely agree on the topic, **do NOT manufacture divergences to satisfy a count**. Flag the agreement explicitly ("the briefs converge on X with the same source attribution Y"). The synthesis values flagged uncertainty over confident-wrongness, and flagged agreement over manufactured disagreement.
 
@@ -74,17 +75,17 @@ If the briefs largely agree on the topic, **do NOT manufacture divergences to sa
 
 This section is feedback signal for prompt engineering and model evaluation, not technical content. Cover:
 
-a) **Depth distribution.** Which sub-areas of the topic did Claude treat well that Gemini thinned, and vice versa? Cite specific section names or claims.
+a) **Depth distribution.** Which sub-areas did each brief treat well, and which did it thin? Name the brief and cite specific section names or claims.
 
-b) **Notable biases.** Any framing that seemed off in either model. Training-recency artifacts, vendor lock-in, ideological lean, framing-as-marketing. Cite specific examples.
+b) **Notable biases.** Any framing that seemed off in a brief. Training-recency artifacts, vendor lock-in, ideological lean, framing-as-marketing. Cite specific examples.
 
-c) **Prompt-signal quality.** Did both models interpret the prompt the same way? If they diverged on what to research, the prompt was ambiguous — call out which phrasing was the load-bearing source of divergence. (For this pipeline specifically: the Claude prompt has "mantis substrate / analogical-transfer" framing; Gemini prompts strip it because that framing hijacks the gemini-3-flash router. Note any drift the asymmetric prompts introduced.)
+c) **Prompt-signal quality.** Did the briefs interpret the prompt the same way? If they diverged on what to research, the prompt was ambiguous — call out which phrasing was the load-bearing source of divergence.
 
-d) **Hallucination flags.** Cross-model disagreement on factual claims is the strongest signal. List 3-5 specific claims where the models disagree on a verifiable fact (tool versions, file format details, vendor attributions, recent events). For each, state which is likely correct or that both are unverified pending external check. Each flag should be specific enough that an external verifier could resolve it: name the claim, the source that's more credible, and the verifiable fact at issue.
+d) **Hallucination flags.** Cross-brief disagreement on a factual claim is the strongest signal there is. List 3-5 claims where the briefs disagree on something verifiable (tool versions, format details, vendor attributions, recent events). For each: name the claim, say which source is more credible and why, and state the verifiable fact at issue — specific enough that an external verifier could settle it.
 
-e) **Cross-model agreement worth verifying.** List 2-3 non-trivial claims where Claude and Gemini AGREE on a specific fact (number, date, name, version, regulatory paragraph). Cross-model agreement on training-data-uniform claims is weak signal — both could be wrong. Worth explicit verification before downstream reliance.
+e) **Cross-brief agreement worth verifying.** List 2-3 non-trivial claims the briefs AGREE on that name a specific fact (number, date, name, version, regulation paragraph): agreement on training-data-uniform claims is weak signal, and all of them could be wrong. Then, with no count limit, every agreed-on named artifact whose existence the briefs do not establish — the co-hallucination candidates.
 
-f) **Independence note.** Acknowledge: this synthesis was produced by Claude integrating its own brief plus a Gemini cross-check. Both models share substrate (Common Crawl, Wikipedia, GitHub, ArXiv). This is "tertiary independence" in the MRM/IEEE 1012 sense — not the kind of judge-level independence that programmatic verifiers or domain experts would provide. Treat the synthesis as comprehensive cross-check, not as validation.
+f) **Independence note.** This synthesis merges briefs from: {substrate_list}. Frontier models share substrate (Common Crawl, Wikipedia, GitHub, ArXiv), so this is "tertiary independence" in the MRM/IEEE 1012 sense — not the judge-level independence a programmatic verifier or a domain expert would provide. Treat the synthesis as comprehensive cross-check, not as validation.
 
 The synthesis is the canonical reference document going forward; the individual research briefs are working notes."""
 
@@ -103,7 +104,7 @@ Read the synthesis brief at {synthesis_path} with the Read tool.
 Write ONLY valid JSON to {sidecar_path} with the Write tool — no prose, no markdown fences, no code block. Emit exactly this shape (these are the model-authored fields; the runner fills run identity and provenance separately, so do NOT include them):
 
 {{
-  "sidecar_version": 1,
+  "sidecar_version": 2,
   "claims": [
     {{"id": "c1", "text": "<a load-bearing claim, verbatim from the synthesis>", "section": "<section/paragraph ref, or null>", "support": "direct|indirect|none"}}
   ],
@@ -114,10 +115,24 @@ Write ONLY valid JSON to {sidecar_path} with the Write tool — no prose, no mar
     {{"id": "v1", "claim": "<a claim to verify externally>", "reason": "<disagreement | single-source | training-uniform>", "sources_disagree": ["<sources>"]}}
   ],
   "agreements_worth_verifying": ["<a non-trivial claim all substrates agree on — weak signal, flag before downstream reliance>"],
-  "coverage_notes": ["<what the synthesis could not cover, or marked Not-found>"]
+  "coverage_notes": ["<what the synthesis could not cover, or marked Not-found>"],
+  "source_citations": [
+    {{"substrate": "<the source label exactly as the synthesis names it, e.g. openrouter:openai>", "cited": [
+      {{"reference": "<the URL, repository slug, package name or paper title that brief cited>", "kind": "url|repository|package|paper|other"}}
+    ]}}
+  ],
+  "source_overlaps": [
+    {{"id": "o1", "reference": "<a source cited by more than one brief>", "figures_conflict": true, "conflict": "<what each brief read out of it, when they are incompatible>"}}
+  ]
 }}
 
-Draw the content faithfully from the synthesis's in-line divergence blocks and its `## Synthesis Meta-Observations` section (hallucination flags → verification_queue; cross-model agreement → agreements_worth_verifying). Give every claim, divergence, and verification item a unique id. The file is parsed and validated directly: emit ONLY the JSON object, and do not add keys beyond those shown (unknown keys are rejected)."""
+Draw the content faithfully from the synthesis's in-line divergence blocks and its `## Synthesis Meta-Observations` section (hallucination flags → verification_queue; cross-model agreement → agreements_worth_verifying). Give every claim, divergence, and verification item a unique id.
+
+`source_citations` is an inventory, one entry per research brief: what that brief actually cited, listed once each, verbatim as cited. Be exhaustive rather than selective — this is the substrate for the comparison below, so a source you omit is a comparison that cannot happen.
+
+`source_overlaps` is where this pipeline earns its cost. Two briefs citing the SAME source and reading incompatible figures out of it indicts the source, which no single-provider run can surface — set `figures_conflict` and say in `conflict` what each brief read. Only `reference`, `figures_conflict` and `conflict` are yours: which briefs cited a source is recomputed from `source_citations`, so do not list substrates here, and list an overlap only for a source that appears in the inventory.
+
+The file is parsed and validated directly: emit ONLY the JSON object, and do not add keys beyond those shown (unknown keys are rejected)."""
 
 
 # Claude-prior baseline prompt — Stage 5-input. Topic-title-only, no sources, no
@@ -204,19 +219,15 @@ You have NO access to the synthesis-production session's context. Your evaluatio
 {synthesis_path} ({synthesis_size_kb:.1f} KB)
 </source>
 
-<source role="claude-original">
-{claude_path} ({claude_size_kb:.1f} KB)
-</source>
-
-<source role="gemini-originals">
-{gemini_block}
+<source role="peer-briefs" count="{secondary_count}">
+{secondary_block}
 </source>
 
 <source role="claude-prior-baseline">
 {baseline_path} ({baseline_size_kb:.1f} KB)
 </source>
 
-The Claude-prior baseline is Claude's output given ONLY the topic title with no access to the research briefs. It represents what a generalist would produce from common industry knowledge. It is the substrate for Gate 3 (training-consensus-parroting detection).
+The peer briefs are the research briefs the synthesis merged, one per substrate — the evidence base against which its claims are traceable. The Claude-prior baseline is a Claude output given ONLY the topic title, with no access to those briefs; it represents what a generalist would produce from common industry knowledge, and it is the substrate for Gate 3 (training-consensus-parroting detection).
 
 Read all sources with the Read tool before scoring.
 
@@ -237,7 +248,7 @@ Save the evaluation record to {eval_path} as STRUCTURED JSON with this exact sha
 {{
   "topic_id": "{topic_id}",
   "synthesis_path": "{synthesis_path}",
-  "evaluator_model": "claude-opus-4-7",
+  "evaluator_model": "<the model id you are actually running as>",
   "evaluation_timestamp": "<ISO 8601 UTC>",
   "claims_extracted": [
     {{"claim": "<verbatim>", "section": "<...>", "type": "factual|procedural|reference|extrapolation"}}
@@ -296,9 +307,9 @@ Save the evaluation record to {eval_path} as STRUCTURED JSON with this exact sha
 Likert anchors (0-3 per criterion, total Q = sum/18):
 - C1 Specificity: 0=generic; 1=some specific; 2=most claims have specifics; 3=all non-trivial claims have specifics + verifiable details
 - C2 Mechanism-proposing: 0=description only; 1=implicit; 2=mechanisms named; 3=mechanisms named + traced + conditioned
-- C3 Distinctiveness from Claude-prior: 0=≈baseline; 1=<30% novel; 2=30-70%; 3=>70% from Gemini cross-check or web
+- C3 Distinctiveness from Claude-prior: 0=≈baseline; 1=<30% novel; 2=30-70%; 3=>70% from the peer briefs or the web
 - C4 Traceability: 0=mostly unsourced; 1=some primary; 2=most primary; 3=all primary + paragraph numbers
-- C5 Actionability: 0=no §7; 1=§7 generic; 2=§7 with 3+ specific cross-domain mappings; 3=§7 + per-mapping conditions
+- C5 Actionability: 0=nothing a reader could act on; 1=actionable in principle, no specifics; 2=3+ specific actions or applications with named targets; 3=those plus the conditions under which each holds. Score what the synthesis says, not whether it has a particular section
 - C6 Mode-dependent: pick the mode based on topic class, score 0-3
 
 Verdict logic:

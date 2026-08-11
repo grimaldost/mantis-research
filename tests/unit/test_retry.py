@@ -88,7 +88,10 @@ class TestRetryPolicy:
         assert p.generic_failure_backoff_minutes == 5
 
     def test_rate_limit_backoff_in_seconds(self) -> None:
-        p = RetryPolicy(rate_limit_backoff_minutes=30)
+        # The configured 30 minutes is the wait the policy would take; what it
+        # actually waits is capped to the caller's idle budget (MANT-B02, see
+        # TestIdleBudgetCap). Uncapped, the arithmetic is unchanged.
+        p = RetryPolicy(rate_limit_backoff_minutes=30, caller_idle_budget_seconds=None)
         assert p.backoff_seconds(FailureKind.RATE_LIMIT) == 1800.0
 
     def test_generic_backoff_in_seconds(self) -> None:
@@ -109,6 +112,48 @@ class TestRetryPolicy:
     ) -> None:
         p = RetryPolicy(max_retries_per_stage=2)
         assert p.is_final_attempt(attempt_number) is is_final
+
+
+class TestIdleBudgetCap:
+    """MANT-B02 — a backoff must fit inside the caller's idle window.
+
+    The 30-minute rate-limit backoff is exactly the MCP client's 1800 s idle
+    default, so any rate-limited substrate guaranteed the abort at every
+    assurance tier. The policy now caps a wait at half the budget.
+    """
+
+    def test_default_budget_is_comfortably_under_the_1800s_client_window(self) -> None:
+        p = RetryPolicy()
+        assert p.caller_idle_budget_seconds is not None
+        assert p.caller_idle_budget_seconds < 1800.0
+
+    def test_rate_limit_backoff_is_capped_at_half_the_budget(self) -> None:
+        p = RetryPolicy(rate_limit_backoff_minutes=30, caller_idle_budget_seconds=1500.0)
+        assert p.backoff_seconds(FailureKind.RATE_LIMIT) == 750.0
+
+    def test_uncapped_when_the_budget_is_disabled(self) -> None:
+        p = RetryPolicy(rate_limit_backoff_minutes=30, caller_idle_budget_seconds=None)
+        assert p.backoff_seconds(FailureKind.RATE_LIMIT) == 1800.0
+
+    def test_generic_five_minute_default_is_untouched_by_the_cap(self) -> None:
+        # The generic backoff already sits inside the cap; MANT-B02 does not
+        # move it.
+        p = RetryPolicy()
+        assert p.generic_failure_backoff_minutes == 5
+        assert p.backoff_seconds(FailureKind.GENERIC) == 300.0
+
+    def test_a_shorter_configured_backoff_is_not_lengthened(self) -> None:
+        p = RetryPolicy(rate_limit_backoff_minutes=2, caller_idle_budget_seconds=1500.0)
+        assert p.backoff_seconds(FailureKind.RATE_LIMIT) == 120.0
+
+    @given(
+        rl_min=st.integers(min_value=1, max_value=600),
+        budget=st.floats(min_value=10.0, max_value=7200.0),
+    )
+    def test_no_wait_ever_exceeds_half_the_budget(self, rl_min: int, budget: float) -> None:
+        p = RetryPolicy(rate_limit_backoff_minutes=rl_min, caller_idle_budget_seconds=budget)
+        for kind in FailureKind:
+            assert p.backoff_seconds(kind) <= budget / 2
 
 
 class TestPatternsCoverage:

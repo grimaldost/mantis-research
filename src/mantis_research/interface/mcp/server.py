@@ -19,19 +19,29 @@ FM-B):
   the SDK; even so, the ``research`` handler is ``async`` and offloads the blocking
   ``run_research`` via ``asyncio.to_thread`` — safe regardless of the SDK's
   sync-threading behaviour (FM-1/FM-B).
+- A parameter annotated ``Context`` is injected by the SDK and excluded from the
+  tool's input schema (``Tool.context_kwarg``), so it never reaches the agent as
+  an argument to supply.
+
+Progress is reported over that context. Before it, the whole multi-stage run hid
+behind one ``to_thread`` await and the client saw silence from call to return —
+which a client cannot distinguish from a hang, and answers by giving up.
 """
 
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 from pydantic import Field
 
 from mantis_research.core.sidecar import ResearchSidecar, project_for_agent
-from mantis_research.interface.research_service import run_research
+from mantis_research.interface.research_service import resume_research, run_research
+
+if TYPE_CHECKING:
+    from mantis_research.core.progress import ProgressCallback, RunEvent
 
 _SERVER_NAME = 'mantis-research'
 
@@ -71,17 +81,49 @@ def _run_and_assemble(
     primary: str,
     journal: bool,
     dry_run: bool,
+    resume: str = '',
+    on_event: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Run the pipeline and assemble the agent result (sync — runs off the loop)."""
-    manifest = run_research(
-        question,
-        assurance=assurance,
-        substrates=substrates,
-        primary=primary,
-        journal=journal,
-        dry_run=dry_run,
-    )
+    if resume:
+        manifest = resume_research(Path(resume), dry_run=dry_run, on_event=on_event)
+    else:
+        manifest = run_research(
+            question,
+            assurance=assurance,
+            substrates=substrates,
+            primary=primary,
+            journal=journal,
+            dry_run=dry_run,
+            on_event=on_event,
+        )
     return _agent_result(manifest)
+
+
+async def _deliver(ctx: Any, event: RunEvent) -> None:
+    """Push one run event down the MCP channel (progress + log)."""
+    # Both are sent: `report_progress` is the mechanism defined for this, but it
+    # no-ops when the client sent no progress token, and a log notification
+    # reaches that client anyway. Between them the caller always hears something.
+    if event.step is not None and event.total:
+        await ctx.report_progress(progress=event.step, total=event.total, message=event.message)
+    await ctx.info(event.message)
+
+
+def _progress_bridge(ctx: Any, loop: asyncio.AbstractEventLoop) -> ProgressCallback:
+    """Adapt the synchronous run-event callback onto the MCP session's loop.
+
+    ``run_research`` is synchronous and runs in a worker thread (FM-1), while the
+    MCP session belongs to the event loop that spawned it — so an event has to
+    be handed back across that boundary rather than awaited in place.
+    ``run_coroutine_threadsafe`` is that hand-off; the future is deliberately not
+    awaited, since the run must not block on its audience.
+    """
+
+    def deliver(event: RunEvent) -> None:
+        asyncio.run_coroutine_threadsafe(_deliver(ctx, event), loop)
+
+    return deliver
 
 
 async def research(
@@ -90,12 +132,14 @@ async def research(
         str,
         Field(
             description=(
-                'How far the pipeline runs: "fast" (research + synthesis), '
-                '"standard" (+ a falsification pass), or "high" (+ a Claude-prior '
-                'baseline and an evaluation pass).'
+                'How far the pipeline runs. "fast" (the default) is research + '
+                'synthesis. Escalate explicitly when the extra checking is worth '
+                'the extra Claude-seat time: "standard" adds an adversarial '
+                'falsification pass over the finished synthesis, "high" adds a '
+                'Claude-prior baseline and a rubric evaluation on top.'
             )
         ),
-    ] = 'standard',
+    ] = 'fast',
     substrates: Annotated[
         list[str] | None,
         Field(
@@ -130,6 +174,19 @@ async def research(
         bool,
         Field(description='Validate orchestration without spending any model calls.'),
     ] = False,
+    resume: Annotated[
+        str,
+        Field(
+            description=(
+                'Re-enter an interrupted run instead of starting a new one: pass '
+                'its output directory (the "outputs_dir" of the run you lost, e.g. '
+                '"outputs/research-my-question-20260811T101500Z"). Stages that '
+                'already finished are skipped, and the question and settings come '
+                'from that run\'s own record, so "question" is ignored.'
+            )
+        ),
+    ] = '',
+    ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Research a question across multiple models and return a cross-checked result.
 
@@ -141,9 +198,10 @@ async def research(
     ``OPENROUTER_API_KEY``.
 
     Parameters:
-      - ``assurance`` (``fast`` | ``standard`` | ``high``) chooses depth: ``fast``
-        runs research + synthesis, ``standard`` adds a falsification pass, ``high``
-        adds a Claude-prior baseline and an evaluation pass.
+      - ``assurance`` (``fast`` | ``standard`` | ``high``) chooses depth. ``fast``
+        — research + synthesis — is the default and what most calls want;
+        ``standard`` adds a falsification pass and ``high`` adds a Claude-prior
+        baseline and an evaluation pass, as explicit escalations.
       - ``substrates`` overrides the OpenRouter research vendors (slugs such as
         ``openai``, ``deepseek``, ``google``, ``anthropic``, ``qwen``, ``x-ai``,
         ``meta-llama``, ``mistralai``, ``perplexity``); each runs as its newest
@@ -155,9 +213,15 @@ async def research(
       - ``journal`` also emits a mantis-ingestion journal via a second synthesis
         turn (slower); off by default.
       - ``dry_run`` validates orchestration without spending model calls.
+      - ``resume`` re-enters an interrupted run by its output directory instead
+        of starting a new one; completed stages are skipped and the question and
+        settings are read from that run's own record.
     """
     # dispatch_stage_config nests asyncio.run per stage, so the synchronous
     # pipeline must run OFF this event loop or it raises RuntimeError (FM-1).
+    # The bridge is built here, on the loop, and closes over it: the worker
+    # thread hands events back rather than touching the session directly.
+    bridge = _progress_bridge(ctx, asyncio.get_running_loop()) if ctx is not None else None
     return await asyncio.to_thread(
         _run_and_assemble,
         question,
@@ -166,6 +230,8 @@ async def research(
         primary=primary,
         journal=journal,
         dry_run=dry_run,
+        resume=resume,
+        on_event=bridge,
     )
 
 

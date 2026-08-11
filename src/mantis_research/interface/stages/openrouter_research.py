@@ -23,6 +23,7 @@ import structlog
 
 from mantis_research.core.model_policy import resolve_openrouter_model
 from mantis_research.core.paths import topic_nn
+from mantis_research.core.progress import RunEvent, emit
 from mantis_research.core.retry import detect_rate_limit
 from mantis_research.core.stage import AttemptResult
 from mantis_research.core.state import SubsessionResult
@@ -146,6 +147,21 @@ class OpenRouterResearchStage:
                     resolved=resolution.model_id,
                     source=resolution.source,
                 )
+            # A substrate call is the longest single wait in the run; say which
+            # one is in flight and, afterwards, what it cost.
+            emit(
+                ctx.on_event,
+                RunEvent(
+                    kind='substrate_start',
+                    message=f'{subslug} researching on {resolution.model_id}',
+                    data={
+                        'stage': self.name,
+                        'topic_id': topic_id,
+                        'substrate': subslug,
+                        'model': resolution.model_id,
+                    },
+                ),
+            )
 
             # web_search_engine: 'native' for providers that have it
             # (Anthropic / OpenAI / xAI / Perplexity), 'exa' for everyone
@@ -177,6 +193,22 @@ class OpenRouterResearchStage:
                 model=resolution.model_id,
             )
             self._upsert_subsession(state, ss)
+            emit(
+                ctx.on_event,
+                RunEvent(
+                    kind='substrate_done',
+                    message=f'{subslug} {ss.status}'
+                    + (f' ({ss.output_bytes} bytes)' if ss.output_bytes else ''),
+                    data={
+                        'stage': self.name,
+                        'topic_id': topic_id,
+                        'substrate': subslug,
+                        'status': ss.status,
+                        'output_bytes': ss.output_bytes,
+                        'cost_usd': ss.cost_usd,
+                    },
+                ),
+            )
 
             if ss.status != 'done':
                 if ss.error == 'rate_limit' or detect_rate_limit(result.raw_output):

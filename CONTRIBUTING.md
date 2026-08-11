@@ -10,12 +10,21 @@ mechanics of making a change land cleanly.
 ```bash
 git clone https://github.com/grimaldost/mantis-research
 cd mantis-research
-uv sync                                # installs the dev dependency group
-uv run python -m pre_commit install    # wire the local hooks
+uv sync                                    # installs the dev dependency group
+git config core.hooksPath scripts/git-hooks # wire the local hooks
 ```
 
 Python ≥ 3.13; [uv](https://docs.astral.sh/uv/) provisions it. Run Python
 through `uv run` so the pinned interpreter and dependencies apply.
+
+**Why `core.hooksPath` and not `pre-commit install`.** The hook that
+`pre-commit install` writes calls the bare `pre-commit` executable shim, and
+bare `.exe` shims are blocked by Application Control on the machine this
+project is developed on — so that hook is written, never runs, and the gate
+quietly becomes advisory. `scripts/git-hooks/pre-commit` is the same gate
+invoked as `uv run python -m pre_commit`, which uses the project's own pinned
+interpreter and needs no shim. It is a checked-in file, so a fresh clone gets
+it with one `git config` rather than a remembered convention.
 
 ## Gates
 

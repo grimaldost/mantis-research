@@ -7,7 +7,142 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-11
+
+The delivery envelope around the research output. Every **Now** item in
+`docs/backlog.md` closed: the pipeline reports progress over its own primary
+transport, no internal wait outlasts the caller, a run is named before it
+dispatches and resumable after an interruption, a mute child is killed rather
+than left in flight, and the sidecar carries the question and typed source
+provenance. The synthesis prompt stops describing a pipeline that no longer
+exists.
+
+`mantis status` is gone — see **Removed**.
+
+### Changed
+
+- **The sidecar carries the question, and the write is gated** —
+  `sidecar_version` 2. `ResearchSidecar` had no `question` field at all, so
+  seven of seven sidecars across two runs were unusable as a citation surface
+  and an unidentifiable run's sidecar could be adopted as the answer to a
+  different question. The runner now fills `question` verbatim from the topic,
+  and `require_complete()` fails the synthesis stage when `question`,
+  `generated_at` or a non-empty `sources` is missing rather than shipping a
+  hollow artifact. Additive under invariant I4; `sidecar_version: 1` documents
+  on disk still validate. (MANT-B06)
+- **A run is named before it dispatches.** `run_research` minted `batch_name`
+  and the run directories before dispatch but returned them only in the final
+  manifest, so an aborted call could not say whether it had spent money or
+  written anything, and a completed run on disk could not be matched to the
+  question that produced it — a correctness hazard, not only a lost run. It now
+  writes `outputs/<batch_name>/run.json` (`status: "dispatching"`, rewritten to
+  `"complete"` at the end) and emits a `run_named` event before the first stage.
+  `run_research` takes an `on_event` callback and the manifest carries
+  `question_slug` and `outputs_dir`; `mantis research` prints the run's identity
+  to stderr as soon as it exists. (MANT-B03)
+- **Source provenance has a typed home** — `source_citations` (a per-substrate
+  citation inventory) and `source_overlaps` (which substrates cited the same
+  artifact, who never cited it, and whether they read incompatible figures out
+  of it) on the sidecar, with `source_overlaps` surfaced in the MCP projection.
+  `SourceRef` typed only `label / path / model_id / bytes`, so the pipeline's
+  sharpest measured result — two substrates citing the identical URL with
+  incompatible figures while a third never cited it, indicting the source —
+  could only be narrated, improvised into `Divergence.substrates` as free text.
+  Overlap membership is recomputed by the runner from the inventory; the model
+  supplies the conflict judgement alone. (MANT-B07)
+- **The `research` MCP tool defaults to `assurance: "fast"`** (was `standard`).
+  `standard` and `high` stay as explicit escalations; the tier is a choice about
+  how much checking the answer needs, not about how long the call takes.
+  `mantis research` on the CLI keeps its `standard` default — a shell caller has
+  no idle window to fit inside. (MANT-B04)
+
+### Added
+
+- **`mantis research --resume <run-dir>`, and a `resume` argument on the MCP
+  tool.** Invariant I5 already promised per-stage resumability and the state
+  files already delivered it — both runs that died at the client timeout had
+  written their per-model briefs — but nothing consumed that state, so recovery
+  meant harvesting the briefs by hand every time. Resume reads the run's own
+  record for the question and settings (nothing to retype, nothing to silently
+  disagree), skips what finished, and refuses a run whose owner process is still
+  alive. The offered directory must be *strictly* contained by the outputs root,
+  the same containment rule the sibling series engine resumes under. (MANT-B13)
+
+### Removed
+
+- **`mantis status` is folded into `mantis monitor --snapshot <config>`**
+  (ADR-0010). Two commands reported run progress — a follower and a snapshot —
+  answering the same question in two shapes, on a batch path with no live
+  consumers. There is now one progress surface; `interface/cli/status.py`
+  becomes `interface/cli/snapshot.py` and `status_cmd` becomes
+  `print_snapshot`. `mantis monitor` with neither a stage nor `--snapshot`
+  exits 2 naming both. (MANT-B43)
+
 ### Fixed
+
+- **The `research` tool reports progress instead of going silent.** The handler
+  never accepted a request context and never reported anything: the whole
+  multi-stage run hid behind one `asyncio.to_thread` await, so a client saw
+  silence from call to return and answered it the only way a client can — by
+  giving up. Six MCP invocations aborted at the 1800 s idle window while the
+  same questions succeeded 3/3 over the CLI. The handler now takes the FastMCP
+  `Context` (injected, not an agent-supplied parameter) and a `RunEvent` bridge
+  carries the run's boundaries onto the session's loop: the run being named,
+  each stage starting and finishing, each research substrate starting and
+  finishing, and a heartbeat every 10 s inside any backoff. A broken listener
+  cannot fail a run. (MANT-B01)
+- **The evaluation rubric scores what a Path-B run produces.** The stage has run
+  once in 19 runs and that record is a vacuous-gate signature — verdict PASS,
+  Q = 0.944, all three gates untriggered, five of six criteria at 3/3. Criterion
+  C5 scored the presence of a `§ 7` section that only the retired Path-A
+  scaffold produced, and scored 3/3 against a synthesis that could not contain
+  one. Fixed by inspection: C5 now scores actionable content rather than a
+  section, the `claude-original` / `gemini-originals` source blocks become one
+  N-peer-brief block, and the hardcoded `claude-opus-4-7` evaluator literal (the
+  model overrode it in the one real record) is gone. Whether the gates can
+  reject a deliberately degraded synthesis is still the open measurement, and
+  the stage's retirement stays conditional on it. (MANT-B14, partial)
+- **The synthesis prompt describes the run it is actually in.** The Path-B pivot
+  reached the code and the docs but never the prompt bodies: `SYNTHESIS` still
+  opened "merge two LLM-produced briefs", asked for divergences "between the
+  Claude and Gemini briefs", asserted "the structure follows Claude's brief",
+  explained a Gemini router quirk, and closed with an independence paragraph
+  describing one model integrating its own brief plus a cross-check. On a
+  default three-substrate run none of that was true — the model was told a false
+  story about its own inputs on every run, and every synthesis in one six-topic
+  batch independently detected and corrected the label mismatch. The template is
+  now substrate-neutral, takes its brief count, labels and substrate list from
+  the run, and carries a hard rule that agreement on a **named artifact** no
+  brief traces to a verifiable primary source is a co-hallucination flag rather
+  than corroboration — covering repository slugs, package names and URLs, not
+  only citations. It came out shorter than it went in. The playbook is rewritten
+  with it, and `tests/unit/test_synthesis_prompt.py` holds the neutrality.
+  (MANT-B05)
+- **Spawned local-seat children have a liveness contract.** No timeout, kill or
+  wait-for existed on the main CLI spawn, so a child producing zero output left
+  its topic `in_flight` with `last_error: null` indefinitely — three synthesis
+  children ran mute for 75+ minutes, the falsification children that spawned
+  against their never-written artifact hung identically, and all six were killed
+  by hand. Three additions, in the shape the sibling series engine already uses
+  rather than a second design: a watchdog on **silence** (`runner.child_idle_
+  timeout_minutes`, default 10) that kills a mute child and fails the attempt
+  with a reason; an explicit seat lock at `state/claude-seat.lock` carrying the
+  holder's PID, so concurrent runs queue visibly and a lock left by a dead owner
+  is reclaimed rather than waited out; and a `dead` topic status, distinct from
+  `failed`, set when a topic's recorded `owner_pid` is no longer a live process.
+  `dead` is not `done`, so such a topic is still re-attempted (I5). (MANT-B08)
+- **A backoff can no longer outlast the caller.** `rate_limit_backoff_minutes`
+  defaults to 30, exactly the MCP client's 1800 s idle window, so a rate-limited
+  substrate guaranteed the abort at every assurance tier. `RetryPolicy` now
+  carries `caller_idle_budget_seconds` (default 1500, configurable under
+  `runner`, `null` to disable) and waits `min(backoff, budget / 2)`. (MANT-B02)
+- **The pre-commit gate is installed in a form that runs.** `.git/hooks/` held
+  only the stock samples: `pre-commit install` writes a hook that calls the bare
+  `pre-commit` shim, which Application Control blocks on the development
+  machine, so the project's only enforcement layer was advisory. The hook is now
+  checked in at `scripts/git-hooks/pre-commit`, invokes
+  `uv run python -m pre_commit`, and is wired with
+  `git config core.hooksPath scripts/git-hooks`. (MANT-B11)
 
 - `mantis version` reported a stale number. `mantis_research.__version__` was a
   hand-maintained third copy of the version, left at `0.1.0` while

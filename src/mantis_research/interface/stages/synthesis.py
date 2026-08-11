@@ -21,7 +21,14 @@ from pydantic import ValidationError
 from mantis_research.core import prompts as default_prompts
 from mantis_research.core.model_policy import resolve_claude_model
 from mantis_research.core.paths import RunDirs, topic_stem
-from mantis_research.core.sidecar import Provenance, ResearchSidecar, SourceRef
+from mantis_research.core.sidecar import (
+    SIDECAR_VERSION,
+    Provenance,
+    ResearchSidecar,
+    SidecarContractError,
+    SourceRef,
+    derive_source_overlaps,
+)
 from mantis_research.core.stage import AttemptResult
 from mantis_research.core.state import OpenRouterResearchState
 from mantis_research.interface.adapters.claude_cli import (
@@ -235,6 +242,11 @@ class SynthesisStage:
             primary_label=briefs.primary_label,
             secondary_count=gemini_count,
             secondary_block=secondary_block,
+            # Substrate-neutral facts about THIS run, so the prompt can describe
+            # its own inputs instead of asserting a two-model shape the pipeline
+            # stopped producing (MANT-B05).
+            source_count=gemini_count + 1,
+            substrate_list=', '.join([briefs.primary_label, *(label for label, _ in secondaries)]),
             # Legacy aliases bound to the resolved primary — old templates work.
             claude_path=claude_path.as_posix(),
             claude_size_kb=primary_size_kb,
@@ -263,6 +275,8 @@ class SynthesisStage:
                 effort=effort,
                 session_id=session_id,
                 name=f'synthesis-topic-{topic_id}',
+                idle_timeout_s=ctx.child_idle_timeout_s,
+                seat_owner=ctx.seat_owner('synthesis', topic_id),
                 add_dirs=(
                     dirs.output('claude'),
                     dirs.output('gemini'),
@@ -296,18 +310,24 @@ class SynthesisStage:
         # A malformed sidecar must not fail the whole 2-turn attempt; the loop
         # re-asks on the same session up to twice before giving up (ADR-0003 §14).
         if not ctx.dry_run:
-            sidecar_ok = await self._emit_sidecar(
-                topic=topic,
-                dirs=dirs,
-                stem=stem,
-                synthesis_path=synthesis_path,
-                sidecar_path=sidecar_path,
-                briefs=briefs,
-                model=model,
-                effort=effort,
-                ts=ts,
-                state=state,
-            )
+            try:
+                sidecar_ok = await self._emit_sidecar(
+                    topic=topic,
+                    dirs=dirs,
+                    stem=stem,
+                    synthesis_path=synthesis_path,
+                    sidecar_path=sidecar_path,
+                    briefs=briefs,
+                    model=model,
+                    effort=effort,
+                    ts=ts,
+                    state=state,
+                )
+            except SidecarContractError as exc:
+                # The runner-authored zone is incomplete — fail loudly rather
+                # than ship a sidecar a consumer cannot cite (MANT-B06).
+                log.error('sidecar contract violated', topic_id=topic.id, error=str(exc))
+                return AttemptResult.fail(error=str(exc))
             if not sidecar_ok:
                 return AttemptResult.fail(
                     error=f'sidecar not valid after retries at {sidecar_path.name}',
@@ -341,6 +361,8 @@ class SynthesisStage:
             model=model,
             session_id=str(uuid.uuid4()) if not need_brief else None,
             resume_session_id=session_id if need_brief else None,
+            idle_timeout_s=ctx.child_idle_timeout_s,
+            seat_owner=ctx.seat_owner('synthesis-journal', topic_id),
             allowed_tools=('Read', 'Write'),
             add_dirs=(synthesis_dir, journal_dir),
         )
@@ -454,6 +476,10 @@ class SynthesisStage:
         except ValidationError as exc:
             return str(exc)
         merged = cls._fill_runner_fields(sc, topic, dirs, synthesis_path, briefs, state)
+        # Gate the write on the runner-authored zone (MANT-B06). This raises
+        # rather than returning an error string, because the missing field is
+        # ours: a re-ask would spend a Claude turn to produce the same gap.
+        merged.require_complete()
         sidecar_path.write_text(merged.to_json(), encoding='utf-8')
         return None
 
@@ -503,12 +529,26 @@ class SynthesisStage:
         )
         return sc.model_copy(
             update={
+                # The runner writes today's schema version regardless of what the
+                # model emitted: the merged document carries the runner-authored
+                # fields this version adds.
+                'sidecar_version': SIDECAR_VERSION,
+                # The question, verbatim. A topic's title IS the question for a
+                # request-level run (`build_config` sets it from the question) and
+                # is the closest thing a batch topic has to one.
+                'question': topic.title,
                 'topic_id': topic.id,
                 'slug': topic.slug,
                 'batch_name': dirs.batch_name,
                 'synthesis_path': synthesis_path.as_posix(),
                 'generated_at': datetime.now(UTC).isoformat(),
                 'sources': sources,
+                # Overlap membership is recomputed from the model's citation
+                # inventory rather than trusted as written: which substrates
+                # cited a source is data, not judgement (MANT-B07).
+                'source_overlaps': derive_source_overlaps(
+                    sc.source_citations, judgements=sc.source_overlaps
+                ),
                 'provenance': provenance,
             }
         )
