@@ -44,6 +44,18 @@ releases (starting with 0.1.0).
   `mantis research` on the CLI keeps its `standard` default — a shell caller has
   no idle window to fit inside. (MANT-B04)
 
+### Added
+
+- **`mantis research --resume <run-dir>`, and a `resume` argument on the MCP
+  tool.** Invariant I5 already promised per-stage resumability and the state
+  files already delivered it — both runs that died at the client timeout had
+  written their per-model briefs — but nothing consumed that state, so recovery
+  meant harvesting the briefs by hand every time. Resume reads the run's own
+  record for the question and settings (nothing to retype, nothing to silently
+  disagree), skips what finished, and refuses a run whose owner process is still
+  alive. The offered directory must be *strictly* contained by the outputs root,
+  the same containment rule the sibling series engine resumes under. (MANT-B13)
+
 ### Fixed
 
 - **The `research` tool reports progress instead of going silent.** The handler

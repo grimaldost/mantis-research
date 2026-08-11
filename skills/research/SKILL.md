@@ -56,6 +56,12 @@ Arguments:
   turn (markedly slower). Off by default; turn it on only when feeding a
   downstream mantis memory store.
 - `dry_run` — validate orchestration end-to-end without spending model calls.
+- `resume` — re-enter a run that was interrupted, instead of starting a new one.
+  Pass its output directory (the `outputs_dir` of the run you lost, e.g.
+  `outputs/research-my-question-20260811T101500Z`). Stages that already finished
+  are skipped, and the question and settings come from that run's own record, so
+  `question` is ignored. Cheaper and more faithful than re-asking: the per-model
+  briefs a lost run already paid for are reused rather than bought again.
 
 ## What comes back
 

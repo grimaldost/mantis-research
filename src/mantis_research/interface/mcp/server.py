@@ -38,7 +38,7 @@ from mcp.server.fastmcp import Context, FastMCP
 from pydantic import Field
 
 from mantis_research.core.sidecar import ResearchSidecar, project_for_agent
-from mantis_research.interface.research_service import run_research
+from mantis_research.interface.research_service import resume_research, run_research
 
 if TYPE_CHECKING:
     from mantis_research.core.progress import ProgressCallback, RunEvent
@@ -81,18 +81,22 @@ def _run_and_assemble(
     primary: str,
     journal: bool,
     dry_run: bool,
+    resume: str = '',
     on_event: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Run the pipeline and assemble the agent result (sync — runs off the loop)."""
-    manifest = run_research(
-        question,
-        assurance=assurance,
-        substrates=substrates,
-        primary=primary,
-        journal=journal,
-        dry_run=dry_run,
-        on_event=on_event,
-    )
+    if resume:
+        manifest = resume_research(Path(resume), dry_run=dry_run, on_event=on_event)
+    else:
+        manifest = run_research(
+            question,
+            assurance=assurance,
+            substrates=substrates,
+            primary=primary,
+            journal=journal,
+            dry_run=dry_run,
+            on_event=on_event,
+        )
     return _agent_result(manifest)
 
 
@@ -170,6 +174,18 @@ async def research(
         bool,
         Field(description='Validate orchestration without spending any model calls.'),
     ] = False,
+    resume: Annotated[
+        str,
+        Field(
+            description=(
+                'Re-enter an interrupted run instead of starting a new one: pass '
+                'its output directory (the "outputs_dir" of the run you lost, e.g. '
+                '"outputs/research-my-question-20260811T101500Z"). Stages that '
+                'already finished are skipped, and the question and settings come '
+                'from that run\'s own record, so "question" is ignored.'
+            )
+        ),
+    ] = '',
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Research a question across multiple models and return a cross-checked result.
@@ -197,6 +213,9 @@ async def research(
       - ``journal`` also emits a mantis-ingestion journal via a second synthesis
         turn (slower); off by default.
       - ``dry_run`` validates orchestration without spending model calls.
+      - ``resume`` re-enters an interrupted run by its output directory instead
+        of starting a new one; completed stages are skipped and the question and
+        settings are read from that run's own record.
     """
     # dispatch_stage_config nests asyncio.run per stage, so the synchronous
     # pipeline must run OFF this event loop or it raises RuntimeError (FM-1).
@@ -211,6 +230,7 @@ async def research(
         primary=primary,
         journal=journal,
         dry_run=dry_run,
+        resume=resume,
         on_event=bridge,
     )
 

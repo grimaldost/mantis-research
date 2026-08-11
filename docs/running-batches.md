@@ -175,6 +175,14 @@ manifest and `status: "complete"`. A run whose caller walked away is therefore
 still identifiable on disk — which question it was answering and whether it got
 past dispatch — rather than an orphan directory nothing can be matched to.
 
+That record is also what `mantis research --resume outputs/<batch_name>` reads
+to re-enter an interrupted run: the question and settings come from it, so
+nothing is retyped, completed stages and topics are skipped, and a run whose
+`owner_pid` is still a live process is refused rather than run twice. Resuming
+an abandoned run appends a `dead` entry to the record's `history` before it
+starts, so the record says what happened rather than being overwritten. The
+directory offered must be strictly inside `outputs/`.
+
 ## Cost
 
 Research substrates bill through OpenRouter (typically $2–6 per topic on a

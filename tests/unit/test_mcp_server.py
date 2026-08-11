@@ -29,7 +29,7 @@ async def test_research_tool_schema_documents_every_parameter() -> None:
     tools = await server.list_tools()
     tool = next(t for t in tools if t.name == 'research')
     props = tool.inputSchema['properties']
-    expected = {'question', 'assurance', 'substrates', 'primary', 'journal', 'dry_run'}
+    expected = {'question', 'assurance', 'substrates', 'primary', 'journal', 'dry_run', 'resume'}
     assert set(props) == expected
     for name in expected:
         assert props[name].get('description', '').strip(), f'{name} has no description'
