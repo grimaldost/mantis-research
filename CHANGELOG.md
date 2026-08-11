@@ -69,6 +69,22 @@ releases (starting with 0.1.0).
   each stage starting and finishing, each research substrate starting and
   finishing, and a heartbeat every 10 s inside any backoff. A broken listener
   cannot fail a run. (MANT-B01)
+- **The synthesis prompt describes the run it is actually in.** The Path-B pivot
+  reached the code and the docs but never the prompt bodies: `SYNTHESIS` still
+  opened "merge two LLM-produced briefs", asked for divergences "between the
+  Claude and Gemini briefs", asserted "the structure follows Claude's brief",
+  explained a Gemini router quirk, and closed with an independence paragraph
+  describing one model integrating its own brief plus a cross-check. On a
+  default three-substrate run none of that was true — the model was told a false
+  story about its own inputs on every run, and every synthesis in one six-topic
+  batch independently detected and corrected the label mismatch. The template is
+  now substrate-neutral, takes its brief count, labels and substrate list from
+  the run, and carries a hard rule that agreement on a **named artifact** no
+  brief traces to a verifiable primary source is a co-hallucination flag rather
+  than corroboration — covering repository slugs, package names and URLs, not
+  only citations. It came out shorter than it went in. The playbook is rewritten
+  with it, and `tests/unit/test_synthesis_prompt.py` holds the neutrality.
+  (MANT-B05)
 - **Spawned local-seat children have a liveness contract.** No timeout, kill or
   wait-for existed on the main CLI spawn, so a child producing zero output left
   its topic `in_flight` with `last_error: null` indefinitely — three synthesis

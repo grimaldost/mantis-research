@@ -14,10 +14,21 @@ meta-observations, saved to `research-outputs-synthesis/NN-slug.md`
 (`NN-slug.sidecar.json`), and the optional journal turn (see
 `journal-prompt.md`) runs when `stages.journal.enabled` allows it.
 
-This playbook governs Turn 1. Validated empirically on the topic-1
-(semiconductor) test: 65 KB Claude + 5.6 KB Gemini → 91.8 KB synthesis
-with 1 inline divergence block and 7 hallucination flags in the
-meta-observations section.
+This playbook governs Turn 1.
+
+**The template is substrate-neutral, and that is load-bearing.** A default
+run is Path B: N OpenRouter research substrates and no Claude research
+brief at all. The template therefore names no vendor. It takes the brief
+count, the primary label and the substrate list from the run itself, so
+the model is told the truth about its own inputs. Before this, the
+template opened "merge two LLM-produced briefs", asked for divergences
+"between the Claude and Gemini briefs", asserted "the structure follows
+Claude's brief", carried a Gemini router note, and closed with an
+independence paragraph describing one model integrating its own brief plus
+a cross-check — none of it true on a three-substrate run. Every synthesis
+in one six-topic batch independently detected and corrected the label
+mismatch, and one noted the template had no slot for a third brief at all.
+`tests/unit/test_synthesis_prompt.py` now holds the neutrality.
 
 ---
 
@@ -25,10 +36,12 @@ meta-observations section.
 
 The default template is packaged as `SYNTHESIS` in
 `src/mantis_research/core/prompts.py`; the runner injects the actual
-source paths. A batch can override it via `default_prompts.synthesis`
-and a topic via `stages.synthesis.prompt` — the resolution chain is
-documented in [batch-config.md](../../docs/batch-config.md#default_prompts).
-Two design notes shape its structure:
+source paths, labels and counts. A batch can override it via
+`default_prompts.synthesis` and a topic via `stages.synthesis.prompt` —
+the resolution chain is documented in
+[batch-config.md](../../docs/batch-config.md#default_prompts).
+
+Three design notes shape its structure:
 
 1. **U-shape attention bias** (Liu 2023, Hsieh 2024): tokens at the
    beginning and end of input receive disproportionate attention.
@@ -42,129 +55,54 @@ Two design notes shape its structure:
    block before answering anchors reasoning to real spans rather than
    to associatively-activated context.
 
-Template structure (the runner formats `{claude_path}`, `{gemini_block}`,
-etc. before sending):
+3. **Agreement is not corroboration.** Frontier models share substrate,
+   so mistake similarity grows with capability (Goel et al., ICML 2025).
+   The template says so twice: once as a general caution, and once as a
+   hard rule — agreement on a *named artifact* no brief traces to a
+   verifiable primary source is a co-hallucination flag. This exists
+   because two substrates co-hallucinated the same fake source and the
+   synthesis promoted it to a recommendation on the strength of their
+   agreement; the same class recurred as an entire invented repository
+   with detailed properties.
 
-```
-You are the synthesis stage of a multi-model research pipeline. Your
-job is to merge two LLM-produced briefs into one richer document with
-explicit divergence flagging and meta-observations on model biases and
-prompt quality.
+### Variables the runner supplies
 
-## Sources to read
+| Variable | Meaning |
+|---|---|
+| `{primary_label}` | The primary brief's label, e.g. `openrouter:openai` |
+| `{primary_path}` / `{primary_size_kb}` | The primary brief on disk |
+| `{secondary_count}` / `{secondary_block}` | The secondaries, one line each with label, path and size |
+| `{source_count}` | Total briefs being merged (primary + secondaries) |
+| `{substrate_list}` | Every label in the run, comma-joined — what the independence note names |
+| `{synthesis_path}` | Where to write the merged brief |
 
-<source role="primary" label="{primary_label}" effort="max">
-{claude_path} ({claude_size_kb:.1f} KB)
-</source>
+The legacy `{claude_path}` / `{claude_size_kb}` / `{gemini_count}` /
+`{gemini_block}` aliases are still bound to the resolved primary and the
+secondary block, so a config carrying an old custom prompt keeps working.
+Do not use them in new prompts: they name substrates a Path-B run does not
+have, which is exactly how the default template came to describe a
+pipeline that no longer existed.
 
-<source role="secondary" count="{gemini_count}">
-{gemini_block}
-</source>
+### Template structure
 
-Use the Read tool to read all sources before writing.
+Read the current text in `core/prompts.py` — it is the single source of
+truth and is short enough to read directly. Its shape:
 
-## Pre-synthesis quote extraction (mandatory first step)
-
-Before drafting the merged synthesis, output a `<quotes>` block
-containing 5-10 of the MOST DIVERGENT passages between the Claude and
-Gemini briefs — passages where the two sources make claims that
-disagree on a verifiable fact, frame the same concept from different
-angles, or where one source addresses something the other doesn't.
-Each quote: source path, brief, exact passage. This anchors the
-synthesis to real spans rather than to associatively-activated
-context.
-
-## What to produce
-
-Save the synthesis brief to {synthesis_path} using the Write tool.
-
-### Body — merged technical content
-
-**Concept-centric structure (mandatory).** Each paragraph's topic
-sentence is a CLAIM, not a model name or source name. Multiple sources
-cited per paragraph. Diagnostic test: read your topic sentences. If
-they are claims, the synthesis is concept-centric. If they are
-"Claude says X, Gemini says Y" sequential, it's an annotated
-bibliography (the failure mode arXiv moderators flagged in October
-2025).
-
-The structure follows Claude's brief (it's the comprehensive
-substrate). Fold in Gemini content where it adds detail, alternative
-framing, or cross-checks a Claude claim. The synthesis should be
-RICHER than either input alone — the union with conflicts explicit,
-not the intersection.
-
-Where the models agree on a substantive claim, state the merged claim
-cleanly. **Note: cross-model agreement is WEAKER signal than intuition
-suggests** (Goel et al., ICML 2025: mistake similarity grows with
-capability across frontier models because they share substrate).
-Agreement on a non-trivial verifiable claim is worth explicit
-flagging — list 2-3 such items in the meta-observations as candidates
-for external verification rather than treating them as confirmed.
-
-Where the models diverge, flag the divergence in-line with an explicit
-block. **Steelmanning required:**
-
-> **Divergence:** Claude argues <X-as-Claude's-strongest-version-would-defend-it>.
-> Gemini argues <Y-as-Gemini's-strongest-version-would-defend-it>.
-> <Your assessment of which is right, or whether both are valid
-> framings under different conditions — cite specific reasons or
-> sources. Don't quietly average; naming the disagreement is the
-> point.>
-
-If the briefs largely agree on the topic, **do NOT manufacture
-divergences to satisfy a count**. Flag the agreement explicitly
-("the briefs converge on X with the same source attribution Y"). The
-synthesis values flagged uncertainty over confident-wrongness, and
-flagged agreement over manufactured disagreement.
-
-### `## Synthesis Meta-Observations` — at the end
-
-This section is feedback signal for prompt engineering and model
-evaluation, not technical content. Cover:
-
-a) **Depth distribution.** Which sub-areas of the topic did Claude
-   treat well that Gemini thinned, and vice versa? Cite specific
-   section names or claims.
-
-b) **Notable biases.** Any framing that seemed off in either model.
-   Training-recency artifacts, vendor lock-in, ideological lean,
-   framing-as-marketing. Cite specific examples.
-
-c) **Prompt-signal quality.** Did both models interpret the prompt
-   the same way? If they diverged on what to research, the prompt was
-   ambiguous — call out which phrasing was the load-bearing source of
-   divergence. (For this pipeline specifically: the Claude prompt has
-   "mantis substrate / analogical-transfer" framing; Gemini prompts
-   strip it because that framing hijacks the gemini-3-flash router.
-   Note any drift the asymmetric prompts introduced.)
-
-d) **Hallucination flags.** Cross-model disagreement on factual
-   claims is the strongest signal. List 3-5 specific claims where
-   the models disagree on a verifiable fact (tool versions, file
-   format details, vendor attributions, recent events). For each,
-   state which is likely correct or that both are unverified pending
-   external check. Each flag should be specific enough that an
-   external verifier could resolve it: name the claim, the source
-   that's more credible, and the verifiable fact at issue.
-
-e) **Cross-model agreement worth verifying.** List 2-3 non-trivial
-   claims where Claude and Gemini AGREE on a specific fact (number,
-   date, name, version, regulatory paragraph). Cross-model agreement
-   on training-data-uniform claims is weak signal — both could be
-   wrong. Worth explicit verification before downstream reliance.
-
-f) **Independence note.** Acknowledge: this synthesis was produced by
-   Claude integrating its own brief plus a Gemini cross-check. Both
-   models share substrate (Common Crawl, Wikipedia, GitHub, ArXiv).
-   This is "tertiary independence" in the MRM/IEEE 1012 sense — not
-   the kind of judge-level independence that programmatic verifiers
-   or domain experts would provide. Treat the synthesis as
-   comprehensive cross-check, not as validation.
-
-The synthesis is the canonical reference document going forward; the
-individual research briefs are working notes.
-```
+- **Sources to read** — the primary in a `<source role="primary">` tag,
+  the secondaries in a `<source role="secondary" count=…>` tag.
+- **Pre-synthesis quote extraction** — a mandatory `<quotes>` block of
+  5-10 of the most divergent passages *across the briefs*.
+- **Body** — concept-centric structure (topic sentences are claims, not
+  source names), organised by the topic's own structure rather than any
+  one brief's; agreement stated cleanly but flagged, with the
+  co-hallucination rule above it; divergences in steelmanned
+  `> **Divergence:**` blocks; an explicit guard against manufacturing
+  divergences to satisfy a count.
+- **`## Synthesis Meta-Observations`** — six subsections (a) depth
+  distribution, (b) notable biases, (c) prompt-signal quality, (d)
+  hallucination flags, (e) cross-brief agreement worth verifying plus the
+  unverifiable named artifacts, (f) an independence note naming
+  `{substrate_list}`.
 
 ---
 
@@ -212,22 +150,21 @@ After Turn 1 completes, the synthesis at
 | Signal | Expected | Failure mode if violated |
 |---|---|---|
 | `<quotes>` block in stdout | Present at top of response, 5-10 entries | Missing — quote-first directive ignored; synthesis didn't anchor to real spans |
-| Size | ≥ Claude brief size | Synthesis is doing intersection, not union — rewrite prompt to require integration of Gemini-unique content |
-| Concept-centric paragraphs | Topic sentences are claims, not model names | Author-centric / annotated-bibliography failure |
-| Steelmanned divergence blocks | Each `> **Divergence:**` presents each model's *strongest* form | Weak-form straw arguments — re-emphasize steelmanning |
+| Size | ≥ the largest input brief | Synthesis is doing intersection, not union — require integration of content unique to each brief |
+| Concept-centric paragraphs | Topic sentences are claims, not source labels | Author-centric / annotated-bibliography failure |
+| Steelmanned divergence blocks | Each `> **Divergence:**` presents each brief's *strongest* form | Weak-form straw arguments — re-emphasize steelmanning |
 | Inline divergence blocks | ≥ 1 IF disagreement is real; 0 acceptable if convergence is genuine + flagged | Zero divergence blocks AND no convergence note = consensus-smoothing |
 | `## Synthesis Meta-Observations` present | Yes, at the end | Missing — prompt didn't anchor strongly enough |
 | All 6 meta-observation subsections (a–f) | Yes, all populated | Missing subsection — re-emphasize in prompt |
-| Hallucination flags concrete | Each flag names a specific claim, the more credible source, the verifiable fact | Handwavy ("Gemini was off somewhere") — demand named claims |
-| Cross-model agreement section | 2-3 verifiable claims listed for external verification | Missing — risk of inflated trust in shared-substrate agreement |
-| Independence note | Explicit acknowledgment of tertiary-only independence | Missing — risk of overclaiming validation |
+| Hallucination flags concrete | Each flag names a specific claim, the more credible source, the verifiable fact | Handwavy ("one brief was off somewhere") — demand named claims |
+| Co-hallucination candidates listed | Every agreed-on named artifact the briefs do not establish appears in (e) | Missing — an invented repository can reach a recommendation on agreement alone |
+| Independence note | Names the substrate set actually used; acknowledges tertiary-only independence | Missing, or naming substrates the run did not use — risk of overclaiming validation |
 
-Validated topic-1 numbers (under the v1 prompt without quote-first or
-steelmanning): 91.8 KB output, 1 inline divergence block, 7 hallucination
-flags, 5 meta-observation subsections populated. Re-running under the v2
-prompt (with quote-first + steelmanning + cross-model agreement section)
-should produce: more divergence blocks (or explicit convergence flagging),
-substantively similar size, and a populated cross-model-agreement section.
+No worked example is carried here. The one that used to be — a two-brief
+Claude+Gemini run with per-brief byte counts — described an input shape
+the pipeline no longer produces, and a stale example in a spec is worse
+than none: it teaches the shape it froze. Validate against a current
+three-substrate run instead.
 
 ---
 
@@ -235,29 +172,30 @@ substantively similar size, and a populated cross-model-agreement section.
 
 | Symptom | Fix |
 |---|---|
-| Synthesis ≤ Claude brief size | Rewrite prompt to require explicit integration of Gemini-unique content; smaller output = intersection-thinking, not union |
+| Synthesis smaller than its largest input | Require explicit integration of content unique to each brief; smaller output = intersection-thinking, not union |
 | No `<quotes>` block emitted | Quote-first directive ignored — strengthen "MANDATORY first step" framing |
-| Topic sentences are model names | Author-centric — re-emphasize concept-centric structure with diagnostic test |
-| Manufactured divergences | "Flag at least N divergences" prompts can produce hallucinated disagreement — pair with explicit "do NOT manufacture" guard |
-| Weak-form straw divergences | Steelmanning ignored — demand "strongest version each model would defend" |
+| Topic sentences are source labels | Author-centric — re-emphasize concept-centric structure with the diagnostic test |
+| Manufactured divergences | "Flag at least N divergences" prompts can produce hallucinated disagreement — pair with the explicit "do NOT manufacture" guard |
+| Weak-form straw divergences | Steelmanning ignored — demand "strongest version each brief would defend" |
 | Meta-observations vague | Demand specific section/claim citations, not general remarks |
-| Hallucination flags handwavy | Require named claims with concrete verdicts — items 1-2 in the validated topic-1 run did this well; items 3-7 marked as "verify externally" |
-| Body re-emits Gemini's framing verbatim | Synthesis should integrate, not paste. Re-emphasize "merged" wording |
-| Independence note missing or denied | Tertiary-only independence is a fact — demand explicit acknowledgment per Goel et al. ICML 2025 |
-| Cross-model agreement treated as validation | Add explicit "agreement is weak signal" framing; demand verification candidate list |
+| Hallucination flags handwavy | Require named claims with concrete verdicts |
+| A named artifact several briefs agree on reaches a recommendation | The co-hallucination rule was not applied — agreement without a traceable primary source is a flag, not corroboration |
+| Body re-emits one brief's framing verbatim | Synthesis should integrate, not paste. Re-emphasize "merged" wording |
+| Independence note missing, denied, or naming the wrong substrates | Tertiary-only independence is a fact, and the substrate list is supplied — demand both |
+| Cross-brief agreement treated as validation | The "agreement is weak signal" framing is in the template; demand the verification-candidate list |
+| The prompt names a vendor | A substrate-specific clause in a substrate-neutral template will be false on most runs — parameterise it or delete it |
 
 ---
 
 ## When the synthesis is the wrong tool
 
-If the topic genuinely had matched-quality output from both models
-(rare on the OAuth path — typically only happens on very short
-prompts that stayed on pro tier), the synthesis is doing meaningful
-merge work. If Gemini produced 5 KB of generic content that adds
-nothing the Claude brief doesn't have, the synthesis stage just
-adds latency and cost without value — in that case, the failure
-is upstream (Gemini prompt was too generic). Fix the Gemini
-prompt; don't try to make the synthesis stage compensate.
+The synthesis earns its cost when the briefs actually differ — in
+coverage, in framing, or in what they cite. If every substrate returned
+near-identical content, the stage adds latency without adding signal, and
+the fix is upstream: a research prompt too generic to produce distinct
+briefs, or a substrate set with too little substrate diversity (see
+`model-recommendations.md`). Do not try to make the synthesis stage
+compensate for briefs that had nothing to disagree about.
 
 ---
 

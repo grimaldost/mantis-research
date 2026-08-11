@@ -242,6 +242,11 @@ class SynthesisStage:
             primary_label=briefs.primary_label,
             secondary_count=gemini_count,
             secondary_block=secondary_block,
+            # Substrate-neutral facts about THIS run, so the prompt can describe
+            # its own inputs instead of asserting a two-model shape the pipeline
+            # stopped producing (MANT-B05).
+            source_count=gemini_count + 1,
+            substrate_list=', '.join([briefs.primary_label, *(label for label, _ in secondaries)]),
             # Legacy aliases bound to the resolved primary — old templates work.
             claude_path=claude_path.as_posix(),
             claude_size_kb=primary_size_kb,
