@@ -7,6 +7,18 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-11
+
+The delivery envelope around the research output. Every **Now** item in
+`docs/backlog.md` closed: the pipeline reports progress over its own primary
+transport, no internal wait outlasts the caller, a run is named before it
+dispatches and resumable after an interruption, a mute child is killed rather
+than left in flight, and the sidecar carries the question and typed source
+provenance. The synthesis prompt stops describing a pipeline that no longer
+exists.
+
+`mantis status` is gone — see **Removed**.
+
 ### Changed
 
 - **The sidecar carries the question, and the write is gated** —

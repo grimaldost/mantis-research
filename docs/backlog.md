@@ -73,234 +73,13 @@ here is in the delivery envelope around that output — the pipeline does not
 complete over its own primary transport, and the artifacts it does produce are
 written for the machine that made them.
 
-### MANT-B01 — Emit progress over the MCP channel so a long run is legible instead of indistinguishable from a hang
-
-- **Cause / evidence.** The `research` handler never accepts a request context
-  and never reports progress; the whole multi-stage run hides behind one
-  `asyncio.to_thread` await, so the client sees silence from call to return.
-  Six MCP invocations aborted at the 1800 s idle window in the
-  `2026-07-10 mcp-idle-timeout report` while the same questions succeeded 3/3
-  via the CLI; a second caller class abandoned the blocking call unilaterally
-  (`2026-07-11 deep-review report`); `2026-07-24-dispatch-research-batch` routed
-  around MCP entirely; `2026-07-25-community-tools-discovery-sweep` reproduced
-  the abort at `fast`, 2/2. Both full runs on 2026-08-11 aborted the same way
-  and lost the synthesis stage, while a `dry_run` probe returned in seconds —
-  the pipeline is reachable and the failure is purely silence under long work.
-- **Change.** Accept the FastMCP `Context` in the tool handler and thread a
-  progress callback through `interface/research_service.py`, emitting at stage
-  boundaries (per-substrate resolve and complete, synthesis start, falsification
-  start). Emit inside the retry wait loop too — a heartbeat during a backoff is
-  what resets the caller's idle clock, and without it MANT-B02 is load-bearing
-  rather than belt-and-braces.
-- **Effort.** M
-- **Source.** triage (T1a, 5 reports) + review (named the highest-value single
-  change in the repo)
-- **Disagreement to settle before building.** Triage proposes progress
-  notifications that keep the one call open. The review proposes going further —
-  return a run handle immediately and add a `research_status` tool the agent
-  polls, making the long run asynchronous by contract rather than by luck. The
-  polling design survives a client that ignores progress notifications; the
-  notification design is much smaller and needs no second tool. Build the
-  notification path first (it is a prerequisite for either), then decide whether
-  the poll tool is still needed once MANT-B02 and MANT-B03 have landed.
-- **Cross-review note — why MCP stays the primary transport.** The measured
-  record here favours the CLI outright: the same questions ran 3/3 clean over
-  the CLI and 0/6 over MCP. A sibling repo in the same collection is meanwhile
-  retiring its own MCP server on the argument that an agent already has Bash and
-  needs no server to reach a CLI. The decision recorded here is that MCP stays
-  primary and that the response to 0/6 is MANT-B01 and MANT-B02 rather than a
-  retirement. Two things separate this case from the sibling's. First, what this
-  tool returns is a typed manifest plus the bounded sidecar projection; a Bash
-  caller re-parses stdout to recover a contract the MCP path already carries,
-  which is the delivery envelope this whole section is about. Second, the
-  standing cost of an MCP tool is no longer its schema — the ecosystem brief
-  records that tool schemas are fetched on use rather than held resident in
-  every context, so an idle `research` tool costs a name and a line of
-  description, not the schema the count-of-tools argument prices against. That
-  fact is cited nowhere else in this backlog and it is the half of the argument
-  that runs in this tool's favour. Nothing is redesigned on the strength of this
-  note; it exists so the transport question is not reopened from the raw 0/6.
-
-### MANT-B02 — Cap the rate-limit backoff to the caller's idle budget
-
-- **Cause / evidence.** `core/retry.py` sets `rate_limit_backoff_minutes = 30`,
-  which is exactly the client's 1800 s default idle window. Any rate-limited
-  substrate therefore guarantees the abort at **any** assurance tier — which is
-  why the documented "drop to `fast`" remedy was followed to the letter and
-  failed twice (`2026-07-25-community-tools-discovery-sweep`, filed as a
-  blocker). The arithmetic is confirmed in source.
-- **Change.** `min(backoff, budget / 2)` in `RetryPolicy`, with the budget
-  configurable and defaulting comfortably under 1800 s. Leave the generic
-  five-minute backoff alone.
-- **Effort.** S
-- **Source.** triage (T1b)
-
-### MANT-B03 — Name the run before dispatch, so an interrupted call leaves an identified run rather than an orphan
-
-- **Cause / evidence.** `interface/research_service.py` mints `batch_name` and
-  the run directories before dispatch but returns them only in the final
-  manifest, so an aborted call leaves the caller unable to say whether it spent
-  money or wrote anything (`2026-07-10 mcp-idle-timeout report`). Per-stage
-  state was complete and per-substrate costs recoverable, yet salvage meant
-  hand-replicating synthesis and falsification (`2026-07-11 deep-review
-  report`). One completed run on disk could not be matched to the question that
-  produced it, and a consuming agent correctly refused to distil it
-  (`2026-07-25-community-tools-discovery-sweep`). That is a correctness hazard,
-  not only a lost run.
-- **Change.** Emit `{batch_name, outputs_dir, question_slug}` immediately after
-  config build and before stage dispatch — as the first progress notification
-  over MCP and in an early manifest write. This is a single early return and it
-  also removes the misattribution hazard behind MANT-B06.
-- **Effort.** S
-- **Source.** triage (T2a, 3 reports)
-
-### MANT-B04 — Make `fast` the default assurance for the MCP tool
-
-- **Cause / evidence.** `standard` is the default and adds the falsification
-  pass, taking a run from roughly 5–15 minutes to a documented 35–75 against a
-  client that gives up at 30. The default tier is the one that does not complete
-  over the tool's own primary transport. The landscape brief independently puts
-  fan-out and adversarial passes as escalation mechanisms rather than default
-  inference strategy, so the cheap default is also the better-argued posture.
-- **Change.** Default the MCP tool's `assurance` to `fast`; keep `standard` and
-  `high` as explicit escalations, and say so in the parameter description and in
-  `skills/research/SKILL.md`.
-- **Effort.** S
-- **Source.** review + research
-- **Disagreement to record.** The triage evidence shows the abort reproducing at
-  `fast`, 2/2, so this is **not** a fix for the timeout and must not be shipped
-  as one. It is worth doing on its own merits — the default should be the tier
-  most calls actually want — but MANT-B02 is what removes the guaranteed abort.
-  Any documentation change here rides MANT-B01/B02 and should be written
-  tier-independently, displacing the current tier-gated framing in
-  `SKILL.md` § Cost & latency rather than adding a fourth sentence of the advice
-  that already failed.
-- **Cross-review note.** Why MCP is the primary transport at all — against this
-  tool's own 0/6 record over it, and against a sibling retiring its own server —
-  is recorded once on MANT-B01 and not repeated here. It bears on this item in
-  the framing only: defaulting to `fast` is a decision about what the primary
-  transport does by default, not a hedge against a transport on its way out. And
-  because a tool's schema is now read at call time rather than held resident,
-  the parameter description and the escalation sentence in `SKILL.md` are the
-  surface the calling agent actually meets, which is where the words for this
-  default belong.
-
-### MANT-B05 — Rewrite the synthesis prompt substrate-neutral, and delete the pre-pivot clauses rather than writing around them
-
-- **Cause / evidence.** The Path-B pivot reached the code and the docs but never
-  the prompt bodies. `core/prompts.py`'s `SYNTHESIS` still opens "merge two
-  LLM-produced briefs", asks for the most divergent passages "between the Claude
-  and Gemini briefs", asserts that "the structure follows Claude's brief",
-  explains a Gemini router quirk, and closes with an independence paragraph
-  describing the run as one model integrating its own brief plus a cross-check.
-  None of that is true on a default three-substrate run: the model is told a
-  false story about its own inputs on every run, and the template half-works only
-  because the stage substitutes a primary label and a block of secondaries
-  underneath the wrong prose. All six syntheses in one batch independently
-  detected and corrected the label mismatch, one noting that the template has no
-  slot at all for a third brief (`2026-08-10 six-topic-batch report`). The
-  0.1.2 doc-truth sweep fixed this identical assumption in docstrings and docs
-  and left the prompt untouched (`2026-07-09-docs-overhaul`). Separately, two
-  substrates co-hallucinated the same fake source and the synthesis promoted it
-  to a recommendation on the strength of their agreement
-  (`2026-07-24-dispatch-research-batch`), and the same class recurred as a whole
-  invented repository with detailed properties
-  (`2026-07-25-community-tools-discovery-sweep`).
-- **Change.** Three edits in one change, in `core/prompts.py` and its playbook:
-  (a) parameterise the source labels and brief count from the run manifest,
-  which already carries `sources[]`; (b) sharpen the existing "flagged agreement
-  over manufactured disagreement" clause into a rule that treats agreement
-  without a verifiable primary source as a co-hallucination flag, covering named
-  artifacts — repository slugs, package names, URLs — not only citations; (c)
-  remove the router note, the "structure follows the primary brief" rule and the
-  two-model independence paragraph, replaced by one independence note naming the
-  substrate set actually used. The template must come out shorter than it went
-  in. Preserve the steelmanned divergence block format and the point that
-  cross-model agreement is weak signal because frontier models share substrate.
-  `prompts/playbooks/synthesis-prompt.md` is rewritten in the same change, as
-  the repo's own convention requires, and re-validated against a current
-  three-substrate run — its worked example is anchored to an input shape the
-  pipeline no longer produces.
-- **Effort.** M
-- **Source.** triage (T5a, T5b, T5d) + review (named the highest-leverage defect
-  in the repo, on the default path of every run)
-
-### MANT-B06 — Put the question in the sidecar, and fail the write when required fields are missing
-
-- **Cause / evidence.** `ResearchSidecar` has no `question` field, while the run
-  manifest already carries it. Seven of seven sidecars across two runs were
-  unusable as a citation surface for exactly this reason, found only when a
-  consuming design document needed it (`2026-08-11-t7-scenarios-consumption`),
-  and an unidentifiable run's sidecar can be adopted as the answer to a
-  different question (`2026-07-25-community-tools-discovery-sweep`). Nothing
-  validates the sidecar's own required fields at write time.
-- **Change.** Add `question` to the schema and populate it verbatim from the
-  manifest at emission; add a required-field assert (`question`,
-  `generated_at`, non-empty `sources`) that fails the synthesis stage loudly
-  rather than shipping a hollow artifact. Bump `sidecar_version` additively per
-  invariant I4.
-- **Effort.** S
-- **Source.** triage (T4a, 3 reports)
-
-### MANT-B07 — Give source provenance a typed home, because it is the mechanism the tool actually wins on
-
-- **Cause / evidence.** The sharpest result the tool has produced is not
-  averaging or voting. In the tool-selection run, divergence `d1` caught two
-  substrates citing the identical URL with incompatible figures while a third
-  never cited it at all, and concluded the source itself was suspect — a
-  hallucination class no single-provider run can surface. The landscape brief
-  reaches the same conclusion independently from the other direction: the hard
-  counter-evidence against ensembling is real (one good model dominating fusion
-  on quality-per-token, inter-model error correlation r ≈ 0.53–0.69), and what
-  survives it is comparing *sources and their quality* rather than answers. But
-  `SourceRef` types only `label / path / model_id / bytes`, so "did two
-  substrates cite the same URL and disagree about it" cannot be computed, only
-  narrated — the model is improvising it into `Divergence.substrates`, a field
-  documented for something else, as free text.
-- **Change.** Promote provenance to first-class typed fields on the sidecar: a
-  per-source citation inventory, cross-source URL overlap, and a flag for
-  same-source-different-figures. Extend `SYNTHESIS_SIDECAR` to populate them —
-  that template is already substrate-neutral and needs only the new fields.
-  Rides the schema bump from MANT-B06.
-- **Effort.** M
-- **Source.** review + research
-
-### MANT-B08 — Give spawned local-seat children a liveness contract
-
-- **Cause / evidence.** No timeout, kill or wait-for exists on the main CLI
-  spawn — the only `timeout=15` values are on two short version probes — so a
-  child producing zero output leaves the run `in_flight` with `last_error: null`
-  indefinitely. Three synthesis children produced zero bytes for 75+ minutes,
-  falsification children then spawned against a synthesis artifact that was
-  never written and hung identically, and all six were killed by hand
-  (`2026-07-11 deep-review report`). The review independently found no lock or
-  queue on the single local seat, so concurrent sibling agents serialise
-  invisibly rather than explicitly.
-- **Change.** A no-output-for-N-minutes watchdog on local-seat children
-  (configurable, ~10 min default) that kills, sets `status: failed` with
-  `last_error`, optionally retries once, and propagates a partial manifest
-  naming the completed stages. Add an explicit seat lock or queue so concurrent
-  runs serialise visibly, and document the contention in `SKILL.md`.
-- **Effort.** M
-- **Source.** triage (T3a) + review
-- **Settled, do not relitigate.** The original hypothesis — that concurrency
-  caused the hang — was falsified by `2026-07-24-dispatch-research-batch`, which
-  ran three simultaneous CLI runs to 3/3 clean completion. The watchdog is the
-  fix; the seat lock is for legibility and fair scheduling, not for the hang.
-- **Cross-review note — adopt the shape that already exists.** The series
-  engine in the same collection has built this contract already: the owner's PID
-  is written into the lock file and read back, so a lock left by a dead owner is
-  detectable rather than merely old; `dead` is a value in its status vocabulary,
-  distinct from a stage that failed; and an abandoned run gets a terminal record
-  appended instead of being left at its last live state. Adopt that shape here
-  rather than deriving a second one. It settles two things this item leaves
-  open: the seat lock wants the PID-and-read-back form for exactly the reason
-  above, and the watchdog's proposed `status: failed` conflates a child that
-  failed with a run whose owner vanished — a distinction the engine's vocabulary
-  already draws. Adding a `dead` value is additive under invariant I4. The
-  collection's anchor item (CRAF-B04) asks for one command shape across the
-  tools, not four, and this item plus MANT-B13 is where the second one would
-  otherwise have been invented.
+**Empty as of the 0.2.0 wave.** Every item that stood here — MANT-B01 through
+B08, plus B11 and B13 — is in **Landed** below. The delivery envelope is the
+work that closed: the pipeline now reports progress over MCP, no wait outlasts
+the caller, a run is named before it dispatches and can be resumed after an
+interruption, a mute child is killed rather than left in flight, and the sidecar
+carries the question and typed source provenance. Promote from **Next** when
+this section is refilled.
 
 ---
 
@@ -346,31 +125,6 @@ written for the machine that made them.
   MANT-B48 proposes retiring. Move the concrete gate bindings to
   `CONTRIBUTING.md` first, or do both in one change.
 
-### MANT-B11 — Make the pre-commit gate actually run
-
-- **Cause / evidence.** `.git/hooks/` holds only the stock samples — there is no
-  installed `pre-commit` hook — while the README states that the hooks and the
-  listed commands *are* the gate, with no hosted CI. Half that sentence is
-  untrue on this machine, which makes the project's only enforcement layer
-  advisory. The config itself records why installation was likely skipped: bare
-  `.exe` shims are blocked here.
-- **Change.** Install the hook in a form that works under the shim restriction —
-  a `core.hooksPath` script that invokes `uv run python -m pre_commit` — or add a
-  CI workflow so the gate exists somewhere that is not a local convention.
-  Record the choice in `CONTRIBUTING.md` and correct the README sentence either
-  way.
-- **Effort.** S
-- **Source.** review + operator observation
-- **Cross-review note.** Two sibling repos are planning pre-commit work in the
-  form that does not run on this machine: one proposes install-or-delete
-  (KEEL-B05), the other a new config (CONV-B15), and both assume the bare `.exe`
-  shim path that is blocked here. This backlog holds the working form — a
-  `core.hooksPath` script invoking `uv run python -m pre_commit`. It belongs in
-  the collection's exemption list (CRAF-B26), which is the existing shared home
-  for machine constraints of this kind, so the other two read it rather than
-  each rediscovering the shim block. Recording it there changes nothing about
-  what this item builds.
-
 ### MANT-B12 — Recalibrate the quoted cost, latency and concurrency numbers to measured bands
 
 - **Cause / evidence.** Quoted cost is 10–30× the measured band
@@ -389,27 +143,6 @@ written for the machine that made them.
 - **Effort.** S
 - **Source.** triage (T6c, 4 reports)
 
-### MANT-B13 — `mantis research --resume <run-dir>`
-
-- **Cause / evidence.** Invariant I5 already promises per-stage resumability and
-  the state files deliver it — both runs that died at the client timeout had
-  written their per-model briefs, and those briefs were harvested by hand into
-  two finished documents. There is no re-entry point that consumes that state,
-  so recovery is manual every time.
-- **Change.** `--resume <run-dir>` on the CLI plus a `resume` argument on the
-  MCP tool, skipping completed stages from the existing per-stage state. This is
-  a consumer of state that already exists, not new bookkeeping.
-- **Effort.** M
-- **Source.** triage (T2b) + review
-- **Cross-review note.** The resume rule is settled elsewhere too: the series
-  engine resumes by strict-ancestor containment — the run directory offered for
-  resume must be strictly contained by the root it claims, which is what stops a
-  resume from reaching across runs or up into a parent tree. Take that check
-  with the flag rather than deriving a path-equality rule here, and take the
-  liveness half from MANT-B08's note in the same change, since `--resume` is
-  what has to read a lock the abandoned owner left behind. Same anchor
-  (CRAF-B04): one command shape across the tools.
-
 ### MANT-B14 — Measure whether the evaluation gate can reject anything
 
 - **Cause / evidence.** The evaluation stage has run once in 19 runs, and that
@@ -424,9 +157,16 @@ written for the machine that made them.
 - **Change.** Replay the rubric against five archived syntheses plus two
   deliberately degraded ones (inject a fabricated citation; inject a vacuous
   claim). If gates 1 and 2 do not trigger on the degraded pair, the gate is
-  decoration — retire it with MANT-B50. If they do, fix the rubric: drop C5's
-  section criterion, replace the two named source blocks with the N-peer-brief
-  shape, and delete the hardcoded evaluator literal.
+  decoration — retire it with MANT-B50. If they do, the rubric is already
+  corrected.
+- **Half of this landed in 0.2.0** (`ce73a95`). The three fixes that rested on
+  inspection rather than on the replay are done: C5 scores actionable content
+  instead of a retired section, the `claude-original` / `gemini-originals`
+  blocks became one N-peer-brief block, and the hardcoded evaluator literal is
+  gone. What remains is the measurement itself — can gates 1 and 2 reject a
+  deliberately degraded synthesis — and it is what MANT-B50 waits on. The gates
+  and verdict logic were left untouched so the replay measures the gate that has
+  been running, not a new one.
 - **Effort.** M
 - **Source.** review
 - **Note.** The triage corpus is silent on evaluation — no report exercised it —
@@ -537,6 +277,12 @@ written for the machine that made them.
   after.
 - **Effort.** S
 - **Source.** cross-review
+- **The blocking edge cleared in 0.2.0.** MANT-B01 and MANT-B02 have landed, so
+  KEEL-B31's deletion is no longer blocked on this side. The second call pattern
+  is still uncaptured in design: an enrichment call is shorter and more frequent
+  than a research call, so `fast` as the default (MANT-B04) suits it, but the
+  progress stages a review panel wants to see are not the research stages, and
+  `core/progress.py`'s `RunEventKind` is now the place that would name them.
 
 ---
 
@@ -588,8 +334,9 @@ equal. Two small tests, same class: assert the token, not its neighbourhood.
 So a single model's outage cannot stall the pipeline indefinitely. Held
 deliberately: the alias design this would replace was independently credited for
 surviving model turnover (`2026-08-10 six-topic-batch report`), so only the
-no-fallback-under-outage half stands, and it has one report behind it. Do not
-build before MANT-B08. **M** · *triage (T3c)*
+no-fallback-under-outage half stands, and it has one report behind it. Its
+predicate is met: MANT-B08 landed in 0.2.0, so the watchdog it sits behind now
+exists. **M** · *triage (T3c)*
 
 ### MANT-B28 — Let a run pin its resolved model ids
 
@@ -757,17 +504,13 @@ run — yet costs a module, a state class, a registry row and a tier entry.
 **Replaced by:** an internal preparatory turn inside the evaluation stage. Its
 fate then follows MANT-B14. **S** · *review*
 
-### MANT-B43 — Fold `mantis status` into `mantis monitor`
-
-A cross-stage snapshot for batch runs, competing with `monitor` for one job on a
-path with no live consumers. **Replaced by:** `mantis monitor --snapshot`, so
-there is one progress surface. **S** · *review*
-
 ### MANT-B44 — Retire the Path-A research playbook
 
 360 lines governing the stage MANT-B37 retires. It is also the source of the
 section scaffold that leaked into the evaluation rubric and the augmentation
-prompt, where it now scores and mines a section Path-B briefs never contain.
+prompt, where it mines a section Path-B briefs never contain. (The rubric's
+half of that leak is closed — MANT-B14's C5 no longer scores the section — so
+what remains here is the playbook and the augmentation prompt.)
 **Replaced by:** salvage the block-scaffold section into
 `prompts/playbooks/README.md`, which already cites it as governing
 `research_prompt` generally, then delete the file. **S** · *review*
@@ -887,11 +630,23 @@ conflict with MANT-B48 in any case. *triage*
 
 # Landed
 
-Reconciled against `CHANGELOG.md` (0.1.0 → Unreleased) and history through
-`93d9ac9`. Recorded here so the same findings are not re-proposed.
+Reconciled against `CHANGELOG.md` (0.1.0 → 0.2.0) and history through
+`b4050b2`. Recorded here so the same findings are not re-proposed.
 
 | What | Release | Closes |
 |---|---|---|
+| Progress over the MCP channel: the handler takes the FastMCP `Context` and a `RunEvent` bridge carries run-named, per-stage, per-substrate and backoff-heartbeat events onto the session's loop | 0.2.0 (`f4140d7`) | **MANT-B01.** The notification path, per the recorded decision; whether a poll tool is still wanted is now answerable, since B02 and B03 have landed |
+| `RetryPolicy.caller_idle_budget_seconds` (default 1500, configurable, `null` to disable) caps every wait at half the budget | 0.2.0 (`413a899`) | **MANT-B02.** The 30-minute rate-limit backoff was exactly the client's 1800 s idle window |
+| `outputs/<batch>/run.json` written before dispatch, a `run_named` event ahead of the first stage, `question_slug` / `outputs_dir` on the manifest, and the run's identity on stderr from `mantis research` | 0.2.0 (`3e0ebf9`) | **MANT-B03.** An aborted call now leaves an identified run |
+| The `research` MCP tool defaults to `assurance: "fast"`; `standard` / `high` are explicit escalations, and `SKILL.md` § Cost & latency is written tier-independently | 0.2.0 (`8d8144f`) | **MANT-B04.** Shipped on its own merits, *not* as the timeout fix — the abort reproduced at `fast`, 2/2 |
+| The synthesis template is substrate-neutral: brief count, labels and substrate list come from the run; the pre-pivot router note, structure-follows-the-primary rule and two-model independence paragraph are gone; agreement on an untraceable named artifact is a co-hallucination flag. Shorter than it went in; playbook rewritten with it | 0.2.0 (`4a95550`) | **MANT-B05.** The numeric quotas stay until MANT-B15 measures them — removing them now would destroy that comparison |
+| `question` on the sidecar, filled verbatim from the topic, and `require_complete()` failing the synthesis stage on a missing `question` / `generated_at` / `sources` (`sidecar_version: 2`) | 0.2.0 (`c41090d`) | **MANT-B06.** Also removes the misattribution hazard: a sidecar can no longer be adopted as the answer to a different question |
+| `source_citations` and `source_overlaps` on the sidecar, with overlap membership recomputed by the runner from the inventory and `source_overlaps` in the MCP projection | 0.2.0 (`7522e12`) | **MANT-B07.** "Two substrates cited the same URL and disagreed about it" is computed, not narrated |
+| Liveness for local-seat children: a watchdog on silence (`runner.child_idle_timeout_minutes`, default 10), a PID-stamped seat lock at `state/claude-seat.lock`, and a `dead` topic status distinct from `failed` | 0.2.0 (`91a6405`) | **MANT-B08**, in the sibling engine's shape rather than a second design. MANT-B27 stays blocked on nothing now |
+| The pre-commit hook checked in at `scripts/git-hooks/pre-commit`, invoking `uv run python -m pre_commit`, wired with `core.hooksPath`; README and `CONTRIBUTING.md` corrected | 0.2.0 (`5b5e8c9`) | **MANT-B11.** The working form belongs in the collection's exemption list (CRAF-B26) — that entry is still owed |
+| `mantis research --resume <run-dir>` and a `resume` argument on the MCP tool, under strict-ancestor containment and an owner-liveness refusal | 0.2.0 (`4594b35`) | **MANT-B13.** A consumer of state that already existed |
+| The evaluation rubric's C5 scores actionable content rather than a retired section, the two named source blocks become one N-peer-brief block, and the hardcoded evaluator literal is gone | 0.2.0 (`ce73a95`) | **MANT-B14, partially** — the rubric half, justified by inspection. The replay measurement is still open, and MANT-B50 still waits on it |
+| `mantis status` folded into `mantis monitor --snapshot <config>` (ADR-0010) | 0.2.0 (`b4050b2`) | **MANT-B43.** One progress surface |
 | Per-parameter descriptions on every `research` tool argument, and the full agent-facing surface in `skills/research/SKILL.md`, guarded by a schema test | 0.1.1 (2026-07-04) | The undescribed-parameter finding as a class — the test holds it, not prose |
 | Six documentation falsehoods fixed as instances: the env var named correctly in the runtime error, the stage table and `--only` syntax, mypy guidance, invariant I6 restored, the playbooks README rewritten to the shipped pipeline, and a docs information architecture | 0.1.2 (2026-07-09) | Every instance in `2026-07-09-docs-overhaul`. The *gate* that would have caught them is MANT-B10, still open |
 | `__version__` derived from installed distribution metadata (three copies became two) and a `mantis version` subcommand | Unreleased (2026-07-31) | Partially — the `--version` flag alias and the cwd-relative artifact root remain (MANT-B23), as does the equality assertion between the two survivors (MANT-B26) |
