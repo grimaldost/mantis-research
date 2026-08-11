@@ -90,12 +90,14 @@ async def research(
         str,
         Field(
             description=(
-                'How far the pipeline runs: "fast" (research + synthesis), '
-                '"standard" (+ a falsification pass), or "high" (+ a Claude-prior '
-                'baseline and an evaluation pass).'
+                'How far the pipeline runs. "fast" (the default) is research + '
+                'synthesis. Escalate explicitly when the extra checking is worth '
+                'the extra Claude-seat time: "standard" adds an adversarial '
+                'falsification pass over the finished synthesis, "high" adds a '
+                'Claude-prior baseline and a rubric evaluation on top.'
             )
         ),
-    ] = 'standard',
+    ] = 'fast',
     substrates: Annotated[
         list[str] | None,
         Field(
@@ -141,9 +143,10 @@ async def research(
     ``OPENROUTER_API_KEY``.
 
     Parameters:
-      - ``assurance`` (``fast`` | ``standard`` | ``high``) chooses depth: ``fast``
-        runs research + synthesis, ``standard`` adds a falsification pass, ``high``
-        adds a Claude-prior baseline and an evaluation pass.
+      - ``assurance`` (``fast`` | ``standard`` | ``high``) chooses depth. ``fast``
+        — research + synthesis — is the default and what most calls want;
+        ``standard`` adds a falsification pass and ``high`` adds a Claude-prior
+        baseline and an evaluation pass, as explicit escalations.
       - ``substrates`` overrides the OpenRouter research vendors (slugs such as
         ``openai``, ``deepseek``, ``google``, ``anthropic``, ``qwen``, ``x-ai``,
         ``meta-llama``, ``mistralai``, ``perplexity``); each runs as its newest

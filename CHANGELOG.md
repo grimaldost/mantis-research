@@ -7,7 +7,28 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+### Changed
+
+- **The `research` MCP tool defaults to `assurance: "fast"`** (was `standard`).
+  `standard` and `high` stay as explicit escalations; the tier is a choice about
+  how much checking the answer needs, not about how long the call takes.
+  `mantis research` on the CLI keeps its `standard` default — a shell caller has
+  no idle window to fit inside. (MANT-B04)
+
 ### Fixed
+
+- **A backoff can no longer outlast the caller.** `rate_limit_backoff_minutes`
+  defaults to 30, exactly the MCP client's 1800 s idle window, so a rate-limited
+  substrate guaranteed the abort at every assurance tier. `RetryPolicy` now
+  carries `caller_idle_budget_seconds` (default 1500, configurable under
+  `runner`, `null` to disable) and waits `min(backoff, budget / 2)`. (MANT-B02)
+- **The pre-commit gate is installed in a form that runs.** `.git/hooks/` held
+  only the stock samples: `pre-commit install` writes a hook that calls the bare
+  `pre-commit` shim, which Application Control blocks on the development
+  machine, so the project's only enforcement layer was advisory. The hook is now
+  checked in at `scripts/git-hooks/pre-commit`, invokes
+  `uv run python -m pre_commit`, and is wired with
+  `git config core.hooksPath scripts/git-hooks`. (MANT-B11)
 
 - `mantis version` reported a stale number. `mantis_research.__version__` was a
   hand-maintained third copy of the version, left at `0.1.0` while

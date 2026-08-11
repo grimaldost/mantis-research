@@ -23,10 +23,13 @@ Arguments:
 - `question` (required) — the research question.
 - `assurance` — how far the pipeline runs. Each tier adds stages (deeper
   checking), not more research breadth:
-  - `fast` — research → synthesis (quickest, cheapest).
-  - `standard` (default) — adds a **falsification** pass: one adversarial Claude
-    turn that reads the finished synthesis and hunts for counter-evidence against
-    its claims.
+  - `fast` (default) — research → synthesis. This is what most calls want: the
+    cross-model briefs, the merged synthesis and the epistemic sidecar are all
+    produced here.
+  - `standard` — adds a **falsification** pass: one adversarial Claude turn that
+    reads the finished synthesis and hunts for counter-evidence against its
+    claims. Escalate to it when the answer will carry a decision you cannot
+    cheaply revisit.
   - `high` — also adds a **Claude-prior baseline** (a title-only, no-sources
     answer) and an **evaluation** pass that scores the synthesis against a rubric,
     using that baseline to detect training-consensus parroting (whether the
@@ -104,6 +107,13 @@ dollars — so all three tiers cost about the same for a given substrate set:
   ~50–100+ min — the falsification and evaluation passes are each full Claude
   runs. Substrates run concurrently, so the research stage tracks the slowest one.
 
+Pick the tier by how much checking the answer needs, not by how long you are
+willing to wait. Waiting is bounded independently: no single internal backoff
+exceeds half the caller's idle budget (`runner.caller_idle_budget_seconds`,
+default 1500 s), so a rate-limited substrate can no longer sit silently past a
+client's idle window — a failure that used to look like the tier's fault and was
+never fixed by dropping to `fast`.
+
 Use `dry_run: true` first — it validates the whole pipeline for free, then drop it
 for the real run.
 
@@ -151,10 +161,14 @@ scratch — **no clone needed** (`uv` must be installed):
 
 ## Example
 
-Ask for a standard-assurance run:
+Ask for a default (`fast`) run:
 
 > Use the research tool with question "What changed in ISO 20022 migration for
-> Brazilian banks in 2025?" and assurance "standard".
+> Brazilian banks in 2025?".
+
+Escalate only when the extra checking earns its Claude-seat time:
+
+> …and assurance "standard".
 
 Start with `dry_run: true` to validate the pipeline end to end without spending
 model calls, then drop it for the real run.

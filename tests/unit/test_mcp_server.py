@@ -37,6 +37,26 @@ async def test_research_tool_schema_documents_every_parameter() -> None:
     assert 'deepseek' in props['substrates']['description']
 
 
+async def test_research_tool_defaults_to_fast_assurance() -> None:
+    # MANT-B04: the default tier is the one most calls want and the one that
+    # actually completes over this tool's own transport. standard/high stay as
+    # explicit escalations.
+    server = build_server()
+    tools = await server.list_tools()
+    tool = next(t for t in tools if t.name == 'research')
+    assert tool.inputSchema['properties']['assurance']['default'] == 'fast'
+
+
+async def test_research_tool_assurance_description_names_the_escalations() -> None:
+    server = build_server()
+    tools = await server.list_tools()
+    tool = next(t for t in tools if t.name == 'research')
+    description = tool.inputSchema['properties']['assurance']['description']
+    assert 'default' in description.lower()
+    for tier in ('fast', 'standard', 'high'):
+        assert tier in description
+
+
 async def test_research_tool_projects_sidecar_and_paths(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
