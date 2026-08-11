@@ -116,6 +116,8 @@ class FalsificationStage:
             effort=synth_model_cfg.effort or 'max',
             session_id=state.session_id or str(uuid.uuid4()),
             name=f'falsification-topic-{topic_id}',
+            idle_timeout_s=ctx.child_idle_timeout_s,
+            seat_owner=ctx.seat_owner('falsification', topic_id),
             add_dirs=(dirs.output('synthesis'), dirs.output('falsification')),
             allowed_tools=('WebSearch', 'WebFetch', 'Read', 'Write'),
         )

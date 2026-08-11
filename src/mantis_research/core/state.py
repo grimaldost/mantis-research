@@ -20,9 +20,14 @@ Within a single run (the orchestrator's retry loop):
                   └──────▶ RATE_LIMITED ─▶ (after backoff) PENDING
     PENDING ─▶ BLOCKED_UPSTREAM (upstream gate failed)
 
+Across runs, an IN_FLIGHT topic whose recorded ``owner_pid`` is no longer a live
+process is marked DEAD before anything is re-attempted — a terminal record for
+the abandoned attempt, and a different fact from FAILED (an attempt that ran and
+lost).
+
 Across runs (re-invoking ``mantis run <stage>`` on the same batch): only DONE
-is skipped. Every other status — FAILED, RATE_LIMITED, BLOCKED_UPSTREAM, and an
-interrupted IN_FLIGHT — is selected as pending and re-attempted
+is skipped. Every other status — FAILED, RATE_LIMITED, BLOCKED_UPSTREAM, DEAD,
+and an interrupted IN_FLIGHT — is selected as pending and re-attempted
 (``Orchestrator._is_pending`` returns ``status is not DONE``); BLOCKED_UPSTREAM
 re-runs its upstream gate. So there is no cross-run "terminal" state other than
 DONE — a failed or rate-limited topic is retried on the next invocation, which
@@ -55,6 +60,11 @@ class TopicStatus(StrEnum):
     FAILED = 'failed'
     RATE_LIMITED = 'rate_limited'
     BLOCKED_UPSTREAM = 'blocked_upstream'
+    # The process that claimed this topic is gone. Distinct from FAILED, which
+    # means an attempt ran and lost: DEAD means nobody is coming back. Without
+    # the distinction an abandoned run reads as a stage defect, and the
+    # difference decides whether you debug the prompt or just re-run.
+    DEAD = 'dead'
 
 
 class TopicState(BaseModel):
@@ -74,6 +84,11 @@ class TopicState(BaseModel):
     started_at: str | None = None
     completed_at: str | None = None
     last_error: str | None = None
+    # PID of the process that put this topic IN_FLIGHT, written in so a later
+    # run can read it back and tell an owner that is still working from one that
+    # is gone. Additive optional field (I4); absent on every historical state
+    # file, which reads as "unknown owner".
+    owner_pid: int | None = None
 
     # ── persistence helpers ──
 
@@ -103,10 +118,11 @@ class TopicState(BaseModel):
 
     # ── transition helpers (immutable updates by reassignment) ──
 
-    def mark_in_flight(self) -> None:
+    def mark_in_flight(self, owner_pid: int | None = None) -> None:
         self.status = TopicStatus.IN_FLIGHT
         self.attempts += 1
         self.started_at = _iso_now()
+        self.owner_pid = owner_pid
 
     def mark_done(self) -> None:
         self.status = TopicStatus.DONE
@@ -120,6 +136,17 @@ class TopicState(BaseModel):
     def mark_rate_limited(self, error: str = 'rate_limit') -> None:
         self.status = TopicStatus.RATE_LIMITED
         self.last_error = error
+
+    def mark_dead(self, reason: str) -> None:
+        """Record that the process which claimed this topic is gone.
+
+        A terminal record for the abandoned attempt, rather than leaving the
+        topic at its last live state where it reads as still working. DEAD is
+        not DONE, so the next invocation re-attempts it (I5).
+        """
+        self.status = TopicStatus.DEAD
+        self.last_error = reason
+        self.owner_pid = None
 
     def mark_blocked(self, reason: str) -> None:
         self.status = TopicStatus.BLOCKED_UPSTREAM

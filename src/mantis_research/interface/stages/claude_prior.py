@@ -77,6 +77,8 @@ class ClaudePriorStage:
             effort=models.effort or 'max',
             session_id=state.session_id or str(uuid.uuid4()),
             name=f'claude-prior-{topic_id}',
+            idle_timeout_s=ctx.child_idle_timeout_s,
+            seat_owner=ctx.seat_owner('claude-prior', topic_id),
             add_dirs=(output_dir,),
             # No web search: the baseline is deliberately from general knowledge.
             allowed_tools=('Write',),

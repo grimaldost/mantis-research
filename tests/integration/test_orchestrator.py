@@ -8,6 +8,10 @@ external CLI or HTTP — a fake Stage controls success/failure modes.
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -27,6 +31,13 @@ if TYPE_CHECKING:
 
 
 # ── fake stage and helpers ───────────────────────────────────────────
+
+
+def _exited_pid() -> int:
+    """A pid we know is dead, because we watched the process exit."""
+    proc = subprocess.Popen([sys.executable, '-c', ''])
+    proc.wait()
+    return proc.pid
 
 
 @dataclass
@@ -115,6 +126,62 @@ def _make_orchestrator(
 
 
 # ── tests ────────────────────────────────────────────────────────────
+
+
+class TestAbandonedTopics:
+    """MANT-B08 — a topic left in flight by a vanished owner is DEAD, not busy."""
+
+    @pytest.mark.asyncio
+    async def test_a_topic_left_by_a_dead_owner_is_reaped_then_re_attempted(
+        self, tmp_path: Path
+    ) -> None:
+        state_dir = tmp_path / 'state'
+        state_dir.mkdir(parents=True)
+        dead_pid = _exited_pid()
+        (state_dir / '1.json').write_text(
+            json.dumps(
+                {'id': '1', 'slug': 'topic-1', 'status': 'in_flight', 'owner_pid': dead_pid}
+            ),
+            encoding='utf-8',
+        )
+        stage = FakeStage(results={'1': [AttemptResult.ok(output_bytes=10)]})
+        rc = await _make_orchestrator(stage, _config_with_topics(1), tmp_path).run()
+        assert rc == 0
+        # It was re-attempted (DEAD is not DONE) and the reap left a reason
+        # naming the vanished owner rather than a null last_error.
+        assert stage.calls == ['1']
+        record = json.loads((state_dir / '1.json').read_text(encoding='utf-8'))
+        assert record['status'] == 'done'
+
+    @pytest.mark.asyncio
+    async def test_a_topic_held_by_a_live_owner_is_left_alone(self, tmp_path: Path) -> None:
+        # Our own pid stands in for "someone is still working on this".
+        state_dir = tmp_path / 'state'
+        state_dir.mkdir(parents=True)
+        (state_dir / '1.json').write_text(
+            json.dumps(
+                {'id': '1', 'slug': 'topic-1', 'status': 'in_flight', 'owner_pid': os.getpid()}
+            ),
+            encoding='utf-8',
+        )
+        orch = _make_orchestrator(
+            FakeStage(results={'1': [AttemptResult.ok()]}), _config_with_topics(1), tmp_path
+        )
+        orch._reap_abandoned(list(orch.config.topics))
+        record = json.loads((state_dir / '1.json').read_text(encoding='utf-8'))
+        assert record['status'] == 'in_flight'
+
+    @pytest.mark.asyncio
+    async def test_the_owner_pid_is_recorded_while_in_flight(self, tmp_path: Path) -> None:
+        seen: list[int | None] = []
+
+        class Watching(FakeStage):
+            async def run_attempt(self, topic, state, ctx):  # type: ignore[no-untyped-def]
+                seen.append(state.owner_pid)
+                return AttemptResult.ok()
+
+        await _make_orchestrator(Watching(), _config_with_topics(1), tmp_path).run()
+        assert seen == [os.getpid()]
 
 
 class TestHappyPath:

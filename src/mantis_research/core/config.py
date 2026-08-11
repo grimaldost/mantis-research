@@ -203,6 +203,12 @@ class RunnerBlock(BaseModel):
     # longer outlast the MCP client's 1800 s default. ``null`` disables the cap
     # (a caller with no idle window). Additive optional field (I4).
     caller_idle_budget_seconds: float | None = DEFAULT_CALLER_IDLE_BUDGET_SECONDS
+    # How long a spawned local-seat child may produce no output at all before
+    # the watchdog kills it and the attempt fails. A clock on silence, not on
+    # runtime — it resets on every line. ``null`` disables the watchdog, which
+    # is what let a mute child hold a topic ``in_flight`` forever. Additive
+    # optional field (I4).
+    child_idle_timeout_minutes: float | None = 10.0
     # Run-directory layout (ADR-0006). 'legacy' (default) keeps the flat
     # directories every committed batch uses; 'batch' scopes state/outputs/
     # transcripts under <batch_name>/ so request-level runs never collide.

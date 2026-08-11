@@ -57,6 +57,19 @@ releases (starting with 0.1.0).
   each stage starting and finishing, each research substrate starting and
   finishing, and a heartbeat every 10 s inside any backoff. A broken listener
   cannot fail a run. (MANT-B01)
+- **Spawned local-seat children have a liveness contract.** No timeout, kill or
+  wait-for existed on the main CLI spawn, so a child producing zero output left
+  its topic `in_flight` with `last_error: null` indefinitely — three synthesis
+  children ran mute for 75+ minutes, the falsification children that spawned
+  against their never-written artifact hung identically, and all six were killed
+  by hand. Three additions, in the shape the sibling series engine already uses
+  rather than a second design: a watchdog on **silence** (`runner.child_idle_
+  timeout_minutes`, default 10) that kills a mute child and fails the attempt
+  with a reason; an explicit seat lock at `state/claude-seat.lock` carrying the
+  holder's PID, so concurrent runs queue visibly and a lock left by a dead owner
+  is reclaimed rather than waited out; and a `dead` topic status, distinct from
+  `failed`, set when a topic's recorded `owner_pid` is no longer a live process.
+  `dead` is not `done`, so such a topic is still re-attempted (I5). (MANT-B08)
 - **A backoff can no longer outlast the caller.** `rate_limit_backoff_minutes`
   defaults to 30, exactly the MCP client's 1800 s idle window, so a rate-limited
   substrate guaranteed the abort at every assurance tier. `RetryPolicy` now

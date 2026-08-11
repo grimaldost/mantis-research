@@ -270,6 +270,8 @@ class SynthesisStage:
                 effort=effort,
                 session_id=session_id,
                 name=f'synthesis-topic-{topic_id}',
+                idle_timeout_s=ctx.child_idle_timeout_s,
+                seat_owner=ctx.seat_owner('synthesis', topic_id),
                 add_dirs=(
                     dirs.output('claude'),
                     dirs.output('gemini'),
@@ -354,6 +356,8 @@ class SynthesisStage:
             model=model,
             session_id=str(uuid.uuid4()) if not need_brief else None,
             resume_session_id=session_id if need_brief else None,
+            idle_timeout_s=ctx.child_idle_timeout_s,
+            seat_owner=ctx.seat_owner('synthesis-journal', topic_id),
             allowed_tools=('Read', 'Write'),
             add_dirs=(synthesis_dir, journal_dir),
         )

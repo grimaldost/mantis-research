@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import signal
 import sys
 from datetime import UTC, datetime
@@ -30,6 +31,7 @@ from mantis_research.core.progress import RunEvent, emit, progress_payload
 from mantis_research.core.retry import RetryPolicy, classify_failure
 from mantis_research.core.stage import AttemptResult, RunContext, Stage
 from mantis_research.core.state import TopicState, TopicStatus
+from mantis_research.interface.seat import process_is_alive
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -95,6 +97,7 @@ class Orchestrator:
             self._clear_state(topics)
 
         self.state_dir.mkdir(parents=True, exist_ok=True)
+        self._reap_abandoned(topics)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.transcript_dir.mkdir(parents=True, exist_ok=True)
 
@@ -188,7 +191,7 @@ class Orchestrator:
             if stop.is_set():
                 bound.info('stop signal — exiting attempt loop')
                 return
-            state.mark_in_flight()
+            state.mark_in_flight(owner_pid=os.getpid())
             state.save(self.state_dir)
 
             try:
@@ -303,6 +306,37 @@ class Orchestrator:
         wanted = set(only)
         return [t for t in self.config.topics if t.id in wanted]
 
+    def _reap_abandoned(self, topics: Sequence[TopicConfig]) -> None:
+        """Mark DEAD every topic left IN_FLIGHT by a process that is now gone.
+
+        The owner's PID was written in when the topic went in flight, so a
+        stranded topic is *detectable* rather than merely old — no guess about
+        how long is too long. It stays re-attemptable (DEAD is not DONE); what
+        changes is that the record says nobody is coming back, instead of
+        claiming work is still under way.
+        """
+        me = os.getpid()
+        for topic in topics:
+            state = self.state_class.load_or_create(self.state_dir, topic.id, topic.slug)
+            if state.status is not TopicStatus.IN_FLIGHT:
+                continue
+            pid = state.owner_pid
+            if pid == me or (pid is not None and process_is_alive(pid)):
+                continue
+            reason = (
+                f'owner pid {pid} is gone'
+                if pid is not None
+                else 'left in flight by an unknown owner'
+            )
+            log.warning(
+                'reaping an abandoned topic',
+                stage=self.stage.name,
+                topic_id=topic.id,
+                owner_pid=pid,
+            )
+            state.mark_dead(reason)
+            state.save(self.state_dir)
+
     def _clear_state(self, topics: Sequence[TopicConfig]) -> None:
         for t in topics:
             sp = self.state_dir / f'{t.id}.json'
@@ -320,7 +354,11 @@ class Orchestrator:
         for s in states:
             counts[s.status.value] = counts.get(s.status.value, 0) + 1
         log.info('batch summary', stage=self.stage.name, **counts)
-        failed = [s for s in states if s.status in (TopicStatus.FAILED, TopicStatus.RATE_LIMITED)]
+        failed = [
+            s
+            for s in states
+            if s.status in (TopicStatus.FAILED, TopicStatus.RATE_LIMITED, TopicStatus.DEAD)
+        ]
         if failed:
             ids = ' '.join(s.id for s in failed)
             log.warning(

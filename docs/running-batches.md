@@ -119,6 +119,21 @@ the cross-run rules are described in
   (default 5). Both sleeps are interruptible, and both are capped at half of
   `caller_idle_budget_seconds` (default 1500) — so the longest a caller waits
   in silence is 12.5 minutes, well inside the MCP client's 1800 s idle window.
+- **A mute child is killed.** A spawned Claude CLI child that produces no output
+  for `child_idle_timeout_minutes` (default 10) is terminated and its attempt
+  fails with a reason, instead of leaving the topic `in_flight` with no error
+  forever. The clock is on silence, not runtime — it resets on every line.
+- **One local seat, one holder.** The synthesis-family stages drive the machine's
+  single authenticated `claude` CLI, so each call takes a lock at
+  `state/claude-seat.lock` that records the holder's PID and a name like
+  `<batch>/synthesis:<topic>`. Concurrent runs queue and say who they are waiting
+  for; a lock whose recorded PID is gone is reclaimed immediately rather than
+  waited out.
+- **An abandoned topic is `dead`, not `failed`.** Every topic records the PID
+  that put it `in_flight`. A later run reads that back, and a topic whose owner
+  is no longer a live process is marked `dead` (marker `DD` in `mantis status`)
+  with a reason naming the vanished owner, then re-attempted. `failed` keeps its
+  meaning: an attempt ran and lost.
 - **Ctrl+C is graceful**: scheduling stops, in-flight topics finish, state is
   saved, and the process exits with a per-status summary. Resume later with
   the same command.

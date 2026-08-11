@@ -54,6 +54,7 @@ def _status_marker(status: TopicStatus | None) -> str:
         TopicStatus.FAILED: 'XX',
         TopicStatus.RATE_LIMITED: 'RL',
         TopicStatus.BLOCKED_UPSTREAM: 'BL',
+        TopicStatus.DEAD: 'DD',
     }.get(status, '?')
 
 

@@ -60,6 +60,15 @@ def transcripts_root() -> Path:
     return project_root() / 'transcripts'
 
 
+def seat_lock_path() -> Path:
+    """Return the lock file for the machine's single local Claude seat.
+
+    Machine-scoped, not run-scoped: the seat is one authenticated CLI, so every
+    run on this checkout queues on the same file (MANT-B08).
+    """
+    return state_root() / 'claude-seat.lock'
+
+
 # ── topic filename stems ──────────────────────────────────────────────
 
 

@@ -143,6 +143,8 @@ class EvaluationStage:
             effort=synth_model_cfg.effort or 'max',
             session_id=state.session_id or str(uuid.uuid4()),
             name=f'evaluate-topic-{topic_id}',
+            idle_timeout_s=ctx.child_idle_timeout_s,
+            seat_owner=ctx.seat_owner('evaluation', topic_id),
             add_dirs=(
                 dirs.output('synthesis'),
                 dirs.output('claude'),

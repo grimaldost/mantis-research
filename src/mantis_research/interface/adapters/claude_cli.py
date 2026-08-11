@@ -15,12 +15,18 @@ import shutil
 import subprocess
 import time
 import uuid
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import structlog
 
-from mantis_research.interface.adapters._subprocess import run_streaming
+from mantis_research.core.paths import seat_lock_path
+from mantis_research.interface.adapters._subprocess import (
+    DEFAULT_CHILD_IDLE_TIMEOUT_S,
+    run_streaming,
+)
+from mantis_research.interface.seat import async_seat_lock
 from mantis_research.interface.transcripts import TranscriptWriter
 
 if TYPE_CHECKING:
@@ -48,6 +54,13 @@ class ClaudeCliOptions:
     name: str | None = None  # --name human-readable
     output_format: str = 'text'
     extra_args: tuple[str, ...] = field(default_factory=tuple)
+    # Watchdog on silence: kill a child that has produced no output for this
+    # long. None disables it. See _subprocess.DEFAULT_CHILD_IDLE_TIMEOUT_S.
+    idle_timeout_s: float | None = DEFAULT_CHILD_IDLE_TIMEOUT_S
+    # When set, this call holds the single local Claude seat for its duration,
+    # so concurrent runs queue visibly instead of interleaving invisibly. The
+    # value is the queue-legible owner name, e.g. 'batch-name/synthesis'.
+    seat_owner: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +73,7 @@ class ClaudeCliResult:
     raw_output: str = ''  # full stdout+stderr for rate-limit detection
     error: str | None = None
     session_id: str | None = None  # echo the id used (for state.session_id tracking)
+    timed_out: bool = False  # the watchdog killed a silent child
 
 
 class ClaudeCliAdapter:
@@ -129,7 +143,13 @@ class ClaudeCliAdapter:
         *,
         dry_run: bool = False,
     ) -> ClaudeCliResult:
-        """Run one ``claude -p`` invocation. Captures transcript + raw output."""
+        """Run one ``claude -p`` invocation. Captures transcript + raw output.
+
+        Two liveness guarantees (MANT-B08): the child is killed if it produces
+        nothing for ``options.idle_timeout_s``, and — when ``options.seat_owner``
+        is set — the call holds the machine's single local Claude seat for its
+        duration, so a concurrent run queues visibly instead of interleaving.
+        """
         session_id = options.session_id or str(uuid.uuid4())
         cmd = self._build_cmd(prompt, options, session_id)
 
@@ -144,24 +164,42 @@ class ClaudeCliAdapter:
             )
 
         start = time.monotonic()
-        async with TranscriptWriter(transcript_path, list(cmd)) as tx:
-            exit_code, raw = await run_streaming(cmd, tx)
+        async with AsyncExitStack() as stack:
+            if options.seat_owner:
+                await stack.enter_async_context(
+                    async_seat_lock(seat_lock_path(), options.seat_owner)
+                )
+            tx = await stack.enter_async_context(TranscriptWriter(transcript_path, list(cmd)))
+            stream = await run_streaming(cmd, tx, idle_timeout_s=options.idle_timeout_s)
         duration = time.monotonic() - start
 
-        if exit_code != 0:
+        if stream.timed_out:
             return ClaudeCliResult(
                 success=False,
-                exit_code=exit_code,
+                exit_code=stream.exit_code,
                 duration_s=duration,
-                raw_output=raw,
-                error=f'claude exited {exit_code}',
+                raw_output=stream.output,
+                error=(
+                    f'claude produced no output for {options.idle_timeout_s:.0f}s '
+                    f'— killed by the watchdog'
+                ),
+                session_id=session_id,
+                timed_out=True,
+            )
+        if stream.exit_code != 0:
+            return ClaudeCliResult(
+                success=False,
+                exit_code=stream.exit_code,
+                duration_s=duration,
+                raw_output=stream.output,
+                error=f'claude exited {stream.exit_code}',
                 session_id=session_id,
             )
         return ClaudeCliResult(
             success=True,
             exit_code=0,
             duration_s=duration,
-            raw_output=raw,
+            raw_output=stream.output,
             session_id=session_id,
         )
 

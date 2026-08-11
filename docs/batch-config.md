@@ -56,6 +56,7 @@ an explicit id (e.g. `claude-opus-4-8`) is used verbatim. `effort` defaults to
 | `rate_limit_backoff_minutes` | `30` | Sleep after a rate-limited attempt (interruptible). |
 | `generic_failure_backoff_minutes` | `5` | Sleep after other failures (interruptible). |
 | `caller_idle_budget_seconds` | `1500.0` | How long the caller waits without hearing anything before abandoning the call. Every backoff is capped at half of it, so a rate-limited substrate cannot outlast the MCP client's 1800 s idle default. `null` disables the cap. |
+| `child_idle_timeout_minutes` | `10.0` | Watchdog on a spawned local-seat child: kill it if it produces no output for this long, and fail the attempt. A clock on silence, not on runtime — it resets on every line. `null` disables it. |
 | `layout` | `'legacy'` | `'legacy'` = the flat directories at the root; `'batch'` scopes state/outputs/transcripts under `<batch_name>/` ([ADR-0006](adr/0006-batch-scoped-run-layout.md)). Where files land: [running-batches.md](running-batches.md#where-files-land). |
 
 ## `default_prompts`
