@@ -116,7 +116,9 @@ the cross-run rules are described in
 - Within a run, a failing topic retries up to `runner.max_retries_per_stage`
   times. A rate-limited attempt backs off `rate_limit_backoff_minutes`
   (default 30); other failures back off `generic_failure_backoff_minutes`
-  (default 5). Both sleeps are interruptible.
+  (default 5). Both sleeps are interruptible, and both are capped at half of
+  `caller_idle_budget_seconds` (default 1500) — so the longest a caller waits
+  in silence is 12.5 minutes, well inside the MCP client's 1800 s idle window.
 - **Ctrl+C is graceful**: scheduling stops, in-flight topics finish, state is
   saved, and the process exits with a per-status summary. Resume later with
   the same command.

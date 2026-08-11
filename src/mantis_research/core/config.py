@@ -19,6 +19,8 @@ from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from mantis_research.core.retry import DEFAULT_CALLER_IDLE_BUDGET_SECONDS
+
 # ── per-topic stage configs ──────────────────────────────────────────
 
 
@@ -196,6 +198,11 @@ class RunnerBlock(BaseModel):
     max_retries_per_stage: int = 2
     rate_limit_backoff_minutes: int = 30
     generic_failure_backoff_minutes: int = 5
+    # The idle window the caller will tolerate without hearing anything. Any
+    # single backoff is capped at half of it, so a rate-limited substrate can no
+    # longer outlast the MCP client's 1800 s default. ``null`` disables the cap
+    # (a caller with no idle window). Additive optional field (I4).
+    caller_idle_budget_seconds: float | None = DEFAULT_CALLER_IDLE_BUDGET_SECONDS
     # Run-directory layout (ADR-0006). 'legacy' (default) keeps the flat
     # directories every committed batch uses; 'batch' scopes state/outputs/
     # transcripts under <batch_name>/ so request-level runs never collide.

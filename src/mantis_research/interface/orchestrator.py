@@ -71,6 +71,7 @@ class Orchestrator:
             max_retries_per_stage=config.runner.max_retries_per_stage,
             rate_limit_backoff_minutes=config.runner.rate_limit_backoff_minutes,
             generic_failure_backoff_minutes=config.runner.generic_failure_backoff_minutes,
+            caller_idle_budget_seconds=config.runner.caller_idle_budget_seconds,
         )
 
     # ── public entry point ──────────────────────────────────────
