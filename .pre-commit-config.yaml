@@ -4,7 +4,11 @@
 #     uv run python -m pre_commit run --all-files
 #
 # (On this machine, bare `.exe` shims are blocked by Application Control — invoke
-# pre-commit via `uv run python -m pre_commit`, not the `pre-commit` shim.)
+# pre-commit via `uv run python -m pre_commit`, not the `pre-commit` shim. That is
+# also why the git hook is NOT installed with `pre-commit install`: the checked-in
+# `scripts/git-hooks/pre-commit` is wired with
+#     git config core.hooksPath scripts/git-hooks
+# and calls this config through `uv run python -m pre_commit`.)
 repos:
   - repo: local
     hooks:

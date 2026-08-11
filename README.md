@@ -217,7 +217,10 @@ uv run python -m pre_commit run --all-files
 
 (`mypy` is a secondary cross-check and is not in the dev group — run it as
 `uvx mypy src` when you want the second opinion. There is no hosted CI; the
-pre-commit hooks and the commands above are the gate.)
+pre-commit hooks and the commands above are the gate — which means the hooks
+have to actually be wired, once per clone, with `git config core.hooksPath
+scripts/git-hooks`. `pre-commit install` is the wrong install here; see
+[CONTRIBUTING.md](CONTRIBUTING.md) for why.)
 
 Setup, gates, style, and how to land common changes: [CONTRIBUTING.md](CONTRIBUTING.md).
 
