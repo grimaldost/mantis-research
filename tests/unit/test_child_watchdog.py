@@ -16,11 +16,15 @@ import sys
 import time
 from typing import TYPE_CHECKING
 
+from mantis_research.core.retry import FailureKind, classify_failure
 from mantis_research.interface.adapters._subprocess import run_streaming
+from mantis_research.interface.adapters.claude_cli import ClaudeCliAdapter, ClaudeCliOptions
 from mantis_research.interface.transcripts import TranscriptWriter
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    import pytest
 
 _MUTE_CHILD = 'import time; time.sleep(30)'
 _TALKING_CHILD = (
@@ -65,3 +69,68 @@ class TestWatchdog:
         result = await _run(_TALKING_CHILD, tmp_path, None)
         assert result.timed_out is False
         assert result.exit_code == 0
+
+
+class TestTheTripPathThroughTheAdapter:
+    """What the *stage* sees when the watchdog fires.
+
+    0.2.0 tested the watchdog at ``run_streaming`` and stopped there, so the
+    translation into a ``ClaudeCliResult`` — the thing every stage actually reads
+    — had no test at all. That translation is where a trip either becomes a
+    retryable failed attempt with a reason, or becomes a silent success.
+
+    Only the argv is substituted — a stalling Python child stands in for a
+    ``claude`` binary that goes mute. Everything else is real: the spawn, the
+    watchdog, the kill, the transcript finalize and the adapter's translation of
+    the result. Substituting the argv rather than the binary is what keeps the
+    adapter's own ``-p``-first cmdline out of the test's way.
+    """
+
+    @staticmethod
+    async def _trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        async def mute_instead(cmd, transcript, *, idle_timeout_s):
+            return await run_streaming(
+                [sys.executable, '-c', _MUTE_CHILD], transcript, idle_timeout_s=idle_timeout_s
+            )
+
+        monkeypatch.setattr(
+            'mantis_research.interface.adapters.claude_cli.run_streaming', mute_instead
+        )
+        adapter = ClaudeCliAdapter(binary='/fake/claude')
+        options = ClaudeCliOptions(model='irrelevant', session_id='s', idle_timeout_s=0.3)
+        return await adapter.run('prompt', options, tmp_path / 'tx.log')
+
+    async def test_a_tripped_watchdog_is_a_failed_attempt_not_a_success(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result = await self._trip(tmp_path, monkeypatch)
+        assert result.success is False
+        assert result.timed_out is True
+
+    async def test_the_reason_names_the_watchdog_and_the_window(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A stage surfaces this string as the topic's `last_error`. "no output
+        # for 0s — killed by the watchdog" is the difference between a diagnosis
+        # and the `last_error: null` that made the original bug unreadable.
+        result = await self._trip(tmp_path, monkeypatch)
+        assert result.error is not None
+        assert 'watchdog' in result.error
+        assert 'no output' in result.error
+
+    async def test_the_trip_is_retryable_rather_than_a_rate_limit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The orchestrator buckets an attempt by its raw output. A mute child
+        # produced none, so the classification must fall to GENERIC — a 5-minute
+        # backoff and a retry, not the 30-minute rate-limit wait.
+        result = await self._trip(tmp_path, monkeypatch)
+        assert classify_failure(result.raw_output) is FailureKind.GENERIC
+
+    async def test_the_session_id_survives_the_trip(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The stage writes this back to state; losing it on the trip path would
+        # strand the killed session as unresumable.
+        result = await self._trip(tmp_path, monkeypatch)
+        assert result.session_id == 's'

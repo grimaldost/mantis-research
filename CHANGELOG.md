@@ -9,6 +9,36 @@ releases (starting with 0.1.0).
 
 ### Fixed
 
+- **A briefs-only run is reported as a failure instead of returned as a
+  result.** The `research` MCP tool assembled its result from whatever the run
+  left behind, so a run whose synthesis stage failed came back as a structured
+  object carrying three real brief paths, a `synthesis` and `sidecar` path that
+  pointed at nothing, and a `sidecar_available: false` next to an `ok` flag —
+  a shape an agent has every reason to read as an answer. It happened in the
+  field on 2026-08-11: `outputs/vf-selfverif-live/run.json` records `synthesis`
+  at `exit_code: 1`, and the transcript beside it ends `Failed to authenticate.
+  API Error: 401 OAuth access token has expired`. The epistemic sidecar **is**
+  the product (ADR-0003), so a live run that produced none now raises
+  `IncompleteRunError`, naming the missing sidecar, the stage that did not
+  deliver it, and the run directory to pass back as `resume` — the briefs are
+  already paid for and must not be bought twice. A dry run is exempt on the
+  manifest's own `dry_run` flag, which now travels to the caller.
+- **The local Claude seat is checked before anything is dispatched.** Every
+  assurance tier ends in a stage that drives the machine's authenticated
+  `claude` CLI, but nothing asked whether that seat was usable until the
+  synthesis stage reached its own preflight — which is *after* the OpenRouter
+  research stage has run and been paid for. Three runs on 2026-08-11 bought
+  their briefs and only then found the seat's token had expired; the briefs are
+  still on disk and the syntheses were never written.
+  `require_local_claude_seat` now probes the seat up front for any tier
+  containing a `LOCAL_SEAT_STAGES` member and raises
+  `LocalSeatUnavailableError` naming the precondition, so a run that cannot
+  deliver its product stops before it spends. The probe is the `SeatProbe`
+  Protocol (`core/stage.py`), so the check is testable without a seat.
+  Nesting is **not** the precondition: a `claude` child spawned from inside a
+  Claude Code session runs normally, confirmed end to end on CLI 2.1.228 with
+  `CLAUDECODE=1` set (synthesis and sidecar turns both exit 0), so nothing
+  scrubs the parent's environment for the child.
 - **A dry run can no longer be mistaken for a completed run.** `--dry-run`
   short-circuits every adapter but the orchestrator still wrote terminal
   `status: "done"` into the batch state directory, so a real run under the same

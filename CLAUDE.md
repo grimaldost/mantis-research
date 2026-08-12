@@ -166,6 +166,13 @@ The tool is served to agents as a **local stdio MCP server** exposing a
   seatless/remote deployment (`ANTHROPIC_API_KEY` synthesis) is deferred
   (ADR-0009). The tool handler runs `run_research` off the event loop via
   `asyncio.to_thread` (`dispatch_stage_config` nests `asyncio.run` per stage).
+- **The seat is a precondition, checked before dispatch.**
+  `research_service.require_local_claude_seat` probes it (through the `SeatProbe`
+  Protocol) for any tier containing a `LOCAL_SEAT_STAGES` member, and raises
+  `LocalSeatUnavailableError` before a cent is spent on research the run could
+  not synthesise. And a run that produced no sidecar produced no answer: the MCP
+  handler raises `IncompleteRunError` rather than returning a briefs-only result
+  a caller would read as complete. A dry run is exempt from both.
 - **Logs go to stderr, never stdout** (`core/logging.py`) — stdout carries the
   stdio MCP JSON-RPC stream and the `mantis research` manifest.
 
