@@ -7,6 +7,22 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-12
+
+Two defects found in real field use on 2026-08-11, both in the gap between what
+a run reported and what it had actually produced. One let a dry run settle a
+topic, so a real run under the same batch name skipped the work and reported
+success over an empty tree. The other let the primary serving path hand back
+research briefs, with the synthesis and its sidecar missing, in a shape a caller
+reads as an answer. Neither announced itself: the first surfaced as a downstream
+failure pointing at the wrong stage, the second as a research result that was
+quietly half a product.
+
+Minor rather than patch: the state schema gains a field, `--dry-run` no longer
+leaves a topic looking finished, and the `research` tool now raises where it
+previously returned. Existing state files and past runs are unaffected —
+the new field is additive and Optional under invariant I4.
+
 ### Fixed
 
 - **A briefs-only run is reported as a failure instead of returned as a
