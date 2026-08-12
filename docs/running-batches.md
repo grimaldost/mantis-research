@@ -70,7 +70,10 @@ Per-stage flags:
 
 - `--parallel/-p <n>` — override `runner.max_parallel_topics` for this run.
 - `--dry-run` — no model calls, no preflight; exercises the whole
-  orchestration path.
+  orchestration path. The per-topic state a dry run writes is marked
+  `"dry_run": true` and is disregarded by every later run: a dry run cannot
+  leave a topic looking finished, so running the same command for real after
+  it re-executes the stage rather than skipping it.
 - `--only <id> --only <id>` — restrict to specific topic ids (repeat the flag
   per id).
 - `--force` — clear the stage's state for the selected topics and re-run them
@@ -108,11 +111,16 @@ Logs are structured (structlog) and go to **stderr**; each run also appends to
 
 ## Resume, retries, interruption
 
-Re-running the same command **is** the resume mechanism: topics already `done`
-are skipped, everything else (`pending`, `failed`, `rate_limited`,
-`blocked_upstream`, a stale `in_flight`) is re-attempted. The status model and
-the cross-run rules are described in
+Re-running the same command **is** the resume mechanism: topics a live run
+already finished (`done`) are skipped, everything else (`pending`, `failed`,
+`rate_limited`, `blocked_upstream`, a stale `in_flight`) is re-attempted. The
+status model and the cross-run rules are described in
 [architecture.md](architecture.md#state-and-resumability).
+
+- **A dry run's `done` is not one of them.** Every record carries `dry_run`,
+  which says which kind of run wrote it, and a record a dry run wrote is
+  disregarded whatever its status. `done` is skippable only because it means
+  the artifact is on disk, and a dry run short-circuits every adapter.
 
 - Within a run, a failing topic retries up to `runner.max_retries_per_stage`
   times. A rate-limited attempt backs off `rate_limit_backoff_minutes`

@@ -7,6 +7,25 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A dry run can no longer be mistaken for a completed run.** `--dry-run`
+  short-circuits every adapter but the orchestrator still wrote terminal
+  `status: "done"` into the batch state directory, so a real run under the same
+  batch name skipped every topic: the stage reported `exit_code: 0` and the
+  manifest listed brief paths that did not exist, and the only visible symptom
+  was a downstream synthesis failure pointing at the wrong stage. `done` is
+  skippable precisely because it means the artifact is on disk, so this was
+  invariant I5 read backwards — resume is "re-run the same command", and the
+  state directory was lying to it. Every record now carries `dry_run`, which
+  says which kind of run wrote it; `TopicState.settled` — the query the
+  orchestrator skips on — disregards a `done` a dry run wrote, and a real run
+  clears the marker it inherits, so the tree self-corrects on the next live
+  invocation. The run manifest and `run.json` carry `dry_run` for the same
+  reason: every path under `outputs` is where an artifact goes, not proof one is
+  there. Additive and Optional under invariant I4 — the field is absent from
+  every historical state file, which reads as "a real run wrote this".
+
 ## [0.2.0] - 2026-08-11
 
 The delivery envelope around the research output. Every **Now** item in

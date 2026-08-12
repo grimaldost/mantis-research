@@ -117,6 +117,7 @@ def _manifest(
     slug: str,
     substrates: list[str],
     results: dict[str, int],
+    dry_run: bool,
 ) -> dict[str, Any]:
     dirs = RunDirs('batch', batch_name)
     stem = topic_stem('1', slug)
@@ -138,6 +139,11 @@ def _manifest(
         'assurance': assurance,
         'layout': 'batch',
         'outputs_dir': str(dirs.root()),
+        # Every path under ``outputs`` is *where an artifact goes*, not proof one
+        # is there — under a dry run none of them exist. Saying so on the
+        # manifest and in the run record is what stops a dry run's result being
+        # read, by an agent or by a person, as a finished one.
+        'dry_run': dry_run,
         'stages': {stage: {'exit_code': rc} for stage, rc in results.items()},
         'outputs': outputs,
         'cost': _read_cost(dirs, stem),
@@ -347,6 +353,7 @@ def run_research(
         'substrates': subs,
         'layout': 'batch',
         'outputs_dir': str(dirs.root()),
+        'dry_run': dry_run,
     }
     _write_run_record(
         dirs,
@@ -410,6 +417,7 @@ def run_research(
         slug=slug,
         substrates=subs,
         results=results,
+        dry_run=dry_run,
     )
     _write_run_record(dirs, {**manifest, 'status': 'complete', 'finished_at': _now_iso()})
     emit(

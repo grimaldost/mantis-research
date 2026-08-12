@@ -56,6 +56,10 @@ Arguments:
   turn (markedly slower). Off by default; turn it on only when feeding a
   downstream mantis memory store.
 - `dry_run` — validate orchestration end-to-end without spending model calls.
+  The result is marked `"dry_run": true` and every path under `outputs` is where
+  an artifact *would* go: none of them exist. A dry run leaves no state a later
+  real run will mistake for finished work, so the same call for real afterwards
+  runs the whole pipeline.
 - `resume` — re-enter a run that was interrupted, instead of starting a new one.
   Pass its output directory (the `outputs_dir` of the run you lost, e.g.
   `outputs/research-my-question-20260811T101500Z`). Stages that already finished
