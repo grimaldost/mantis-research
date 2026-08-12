@@ -186,6 +186,22 @@ class ResearchResult:
 
 
 @runtime_checkable
+class SeatProbe(Protocol):
+    """The one thing a precondition check needs from a local-seat adapter.
+
+    ``ClaudeCliAdapter.preflight`` verifies the ``claude`` binary is reachable
+    and authenticated, and raises with a message naming what is wrong. Narrowing
+    that to a Protocol is what lets the request-level precondition
+    (``interface/research_service.py``) be checked, and tested, without a
+    Claude seat — the seam invariant I3 exists for.
+    """
+
+    def preflight(self) -> None:
+        """Verify the local seat is usable. Raise ``RuntimeError`` if it is not."""
+        ...
+
+
+@runtime_checkable
 class ProviderAdapter(Protocol):
     """Contract every provider driver implements (Claude CLI, Gemini CLI, OpenRouter HTTP)."""
 

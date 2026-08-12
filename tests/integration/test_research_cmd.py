@@ -16,6 +16,7 @@ from mantis_research.interface.cli.research import (
     research_cmd,
     run_research,
 )
+from mantis_research.interface.research_service import LocalSeatUnavailableError
 
 
 def test_default_substrates_exclude_dead_perplexity() -> None:
@@ -265,3 +266,81 @@ class TestRunIdentityBeforeDispatch:
         assert manifest['stages']['synthesis']['exit_code'] == 1
         assert 'falsification' not in manifest['stages']  # broke after synthesis
         assert calls == ['openrouter', 'synthesis']
+
+
+class TestSeatPreconditionRunsBeforeAnythingIsSpent:
+    """The local Claude seat is checked before the first stage dispatches.
+
+    Field failure, 2026-08-11: three runs bought their OpenRouter briefs and only
+    then discovered the seat was unusable — the synthesis transcripts end
+    ``Failed to authenticate. API Error: 401 OAuth access token has expired`` at
+    ``Exit code: 1``. Nothing had asked the seat anything until the synthesis
+    stage reached its own preflight, which is after the money.
+    """
+
+    @pytest.fixture
+    def rooted(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+        for fn in ('state_root', 'outputs_root', 'transcripts_root', 'logs_root'):
+            monkeypatch.setattr(f'mantis_research.core.paths.{fn}', lambda fn=fn: tmp_path / fn)
+        return tmp_path
+
+    def test_the_seat_is_probed_before_the_first_dispatch(
+        self, rooted: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        order: list[str] = []
+        monkeypatch.setattr(
+            'mantis_research.interface.research_service.require_local_claude_seat',
+            lambda **kwargs: order.append('seat:' + ','.join(kwargs['stages'])),
+        )
+        monkeypatch.setattr(
+            'mantis_research.interface.cli.dispatch.dispatch_stage_config',
+            lambda stage, cfg, **_: order.append('dispatch:' + stage) or 0,
+        )
+        run_research('q', assurance='fast', batch_name='b', log_level='CRITICAL')
+        assert order[0] == 'seat:openrouter,synthesis'
+        assert order[1] == 'dispatch:openrouter'
+
+    def test_an_unusable_seat_stops_the_run_before_any_stage(
+        self, rooted: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        dispatched: list[str] = []
+
+        def refuse(**_: object) -> None:
+            raise LocalSeatUnavailableError('no seat')
+
+        monkeypatch.setattr(
+            'mantis_research.interface.research_service.require_local_claude_seat', refuse
+        )
+        monkeypatch.setattr(
+            'mantis_research.interface.cli.dispatch.dispatch_stage_config',
+            lambda stage, cfg, **_: dispatched.append(stage) or 0,
+        )
+        with pytest.raises(LocalSeatUnavailableError):
+            run_research('q', assurance='fast', batch_name='b', log_level='CRITICAL')
+        assert dispatched == [], 'a stage ran despite an unusable seat'
+
+    def test_a_dry_run_does_not_need_a_seat(
+        self, rooted: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A dry run spends nothing and spawns nothing, so requiring a seat would
+        # refuse the one command whose whole purpose is checking the plumbing
+        # offline. --dry-run already skips every stage preflight for this reason.
+        probed: list[object] = []
+        monkeypatch.setattr(
+            'mantis_research.interface.research_service.require_local_claude_seat',
+            lambda **kwargs: probed.append(kwargs),
+        )
+        run_research('q', assurance='fast', batch_name='b', dry_run=True, log_level='CRITICAL')
+        assert probed == []
+
+    def test_a_real_runs_manifest_says_it_was_not_a_dry_run(
+        self, rooted: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            'mantis_research.interface.cli.dispatch.dispatch_stage_config',
+            lambda stage, cfg, **_: 0,
+        )
+        manifest = run_research(
+            'q', assurance='fast', batch_name='b', dry_run=False, log_level='CRITICAL'
+        )
+        assert manifest['dry_run'] is False

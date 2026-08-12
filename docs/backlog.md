@@ -81,6 +81,13 @@ interruption, a mute child is killed rather than left in flight, and the sidecar
 carries the question and typed source provenance. Promote from **Next** when
 this section is refilled.
 
+**0.3.0 arrived from the field rather than from this list.** Two defects found
+in use on 2026-08-11 — a dry run settling a topic, and the serving path
+returning a briefs-only run as a result — were fixed directly and are recorded
+in **Landed**. Neither had a backlog item, and neither was findable from one:
+both are gaps between what a run reported and what it produced, which only real
+use exposes. The new item they did generate is MANT-B57, in **Later**.
+
 ---
 
 # Next
@@ -288,6 +295,22 @@ this section is refilled.
 
 # Later
 
+### MANT-B57 — Make it impossible for a test to reach a live provider
+
+A test written during the 0.3.0 wave called `run_research(dry_run=False)` with
+the dispatch seam unpatched. It passed — by fanning out to three OpenRouter
+substrates and then driving a real `claude` synthesis and sidecar turn. $0.070
+and about eight minutes of seat time, spent by `uv run pytest`. The only reason
+it was noticed is that it later timed out under a narrower invocation; a
+green suite reported nothing. `tests/conftest.py` already keeps the suite off
+the machine's real Claude seat with an autouse fixture, so the shape of the
+guard is established — what is missing is the same guard for the paid path.
+Blank `settings.OPENROUTER_API_KEY` per test by default, with the adapter tests
+that need a key opting back in, so a test that reaches the real provider fails
+on preflight instead of billing. Held out of the 0.3.0 wave deliberately: it
+touches the openrouter adapter tests, and a defect-fix release is the wrong
+place to churn them. **S** · *operator observation*
+
 ### MANT-B21 — Stamp the assurance tier in the synthesis header
 
 A `fast` synthesis is structurally indistinguishable from a falsified one
@@ -423,6 +446,28 @@ has already cost a paid run on that harness. This is the most expensive item on
 the list, and running it before those close buys the same two defects a third
 time — at this tool's expense, and with a number that reads as a measurement of
 this tool rather than of the harness.
+
+**Status: UNMEASURED.** The moat-precondition bank is authored and validated,
+and it has **never run** — there is no number here, in either direction. What
+exists is a staged $2 pilot in the harness's own repo, sized to check whether
+the serving defect fixed in 0.3.0 reproduces inside a spawned trial before the
+full bank's ~$70 is committed. Nothing about the moat claim has been tested
+yet, and the item should not be read as partially answered.
+
+**Whatever the bank returns while the serving defect is live is a reproduction
+of that defect, not a refutation of the moat claim.** The defect returned
+research briefs with no synthesis and no sidecar in a shape that reads as a
+complete result — so a trial scoring that output is scoring an amputated
+pipeline while believing it scored the whole one, and would report the fusion
+arm as adding nothing. That is the exact conclusion the landscape brief's
+counter-evidence predicts, which is what makes the confusion expensive: the
+wrong answer here is indistinguishable from the answer the reviewer already
+half-expects. Read any pre-0.3.0 pilot result as evidence about the harness's
+arming and this tool's serving path, and re-run before it is read as evidence
+about fusion. The 0.3.0 fix is what makes a spawned trial's silence
+impossible — the run now raises rather than handing back the briefs — so the
+pilot's first job is to confirm that refusal actually surfaces through the
+harness, not to produce a score.
 
 ---
 
@@ -647,6 +692,9 @@ Reconciled against `CHANGELOG.md` (0.1.0 → 0.2.0) and history through
 | `mantis research --resume <run-dir>` and a `resume` argument on the MCP tool, under strict-ancestor containment and an owner-liveness refusal | 0.2.0 (`4594b35`) | **MANT-B13.** A consumer of state that already existed |
 | The evaluation rubric's C5 scores actionable content rather than a retired section, the two named source blocks become one N-peer-brief block, and the hardcoded evaluator literal is gone | 0.2.0 (`ce73a95`) | **MANT-B14, partially** — the rubric half, justified by inspection. The replay measurement is still open, and MANT-B50 still waits on it |
 | `mantis status` folded into `mantis monitor --snapshot <config>` (ADR-0010) | 0.2.0 (`b4050b2`) | **MANT-B43.** One progress surface |
+| A dry run no longer settles a topic: `TopicState.dry_run` records which kind of run wrote a record and `settled` disregards a dry run's `done`, so a real run under the same batch name re-executes instead of skipping. The manifest and `run.json` carry `dry_run` too | 0.3.0 | No item — found in field use 2026-08-11, not on this list. `state/research-test-20260811T175640Z/openrouter/1.json` is the artifact: `status: "done"` beside an `outputs/` tree holding only `run.json` |
+| The `research` MCP tool raises `IncompleteRunError` rather than returning a run with no sidecar, and `require_local_claude_seat` refuses a tier whose local seat is unusable before any stage dispatches | 0.3.0 | No item — found in field use 2026-08-11. Also settles the nesting question by measurement: a `claude` child spawned from inside a Claude Code session runs normally, so nothing scrubs the parent environment |
+| The watchdog's trip path is tested where a stage reads it — the translation into `ClaudeCliResult`, not just `run_streaming` | 0.3.0 | The gap MANT-B08 left open in 0.2.0 |
 | Per-parameter descriptions on every `research` tool argument, and the full agent-facing surface in `skills/research/SKILL.md`, guarded by a schema test | 0.1.1 (2026-07-04) | The undescribed-parameter finding as a class — the test holds it, not prose |
 | Six documentation falsehoods fixed as instances: the env var named correctly in the runtime error, the stage table and `--only` syntax, mypy guidance, invariant I6 restored, the playbooks README rewritten to the shipped pipeline, and a docs information architecture | 0.1.2 (2026-07-09) | Every instance in `2026-07-09-docs-overhaul`. The *gate* that would have caught them is MANT-B10, still open |
 | `__version__` derived from installed distribution metadata (three copies became two) and a `mantis version` subcommand | Unreleased (2026-07-31) | Partially — the `--version` flag alias and the cwd-relative artifact root remain (MANT-B23), as does the equality assertion between the two survivors (MANT-B26) |

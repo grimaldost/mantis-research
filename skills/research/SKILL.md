@@ -56,6 +56,10 @@ Arguments:
   turn (markedly slower). Off by default; turn it on only when feeding a
   downstream mantis memory store.
 - `dry_run` — validate orchestration end-to-end without spending model calls.
+  The result is marked `"dry_run": true` and every path under `outputs` is where
+  an artifact *would* go: none of them exist. A dry run leaves no state a later
+  real run will mistake for finished work, so the same call for real afterwards
+  runs the whole pipeline.
 - `resume` — re-enter a run that was interrupted, instead of starting a new one.
   Pass its output directory (the `outputs_dir` of the run you lost, e.g.
   `outputs/research-my-question-20260811T101500Z`). Stages that already finished
@@ -76,8 +80,14 @@ the sidecar's epistemic content merged in at the top level.
 - `outputs` — file **paths**: `briefs` (one per substrate), `synthesis`,
   `sidecar`, plus `falsification` / `evaluation` when those ran. The synthesis and
   briefs are referenced by path, never inlined — read those files for full text.
+- `dry_run` (bool) — whether this was a dry run. When true, every path under
+  `outputs` is a destination and none of the files exist.
 - `sidecar_available` (bool) — if `false`, none of the sidecar keys below are
-  present.
+  present. On a live run this cannot happen: a run that produced no sidecar
+  produced no answer, and the tool **raises** rather than returning the research
+  briefs on their own. The error names the failing stage and the run directory to
+  pass back as `resume`, so the briefs already paid for are not bought twice.
+  `false` therefore only ever accompanies `dry_run: true`.
 
 Sidecar keys (present when `sidecar_available`). Each list is capped at 20 items
 and long free-text is clipped:
@@ -156,8 +166,12 @@ for the real run.
   transforming text you already have. This produces a cited brief + epistemic
   sidecar, not a coding or general-purpose agent; use it to *ground* such work,
   not to do it.
-- **No local Claude seat** — without one, only research-only (OpenRouter) runs
-  work, so a full-assurance request won't complete.
+- **No local Claude seat** — every assurance tier includes the synthesis stage,
+  which drives the local `claude` CLI, so without a usable seat the call is
+  refused up front rather than half-run: the tool checks the seat before it
+  dispatches anything and raises naming the precondition, so no research is
+  bought that could not be synthesised. Fix the seat (`claude auth login`, no
+  `--console`) or use `dry_run` to exercise the plumbing offline.
 
 ## Setup (first run)
 
@@ -176,7 +190,11 @@ scratch — **no clone needed** (`uv` must be installed):
 3. **Claude seat** — synthesis / journal / falsification / evaluation drive the
    local `claude` CLI (`claude --version`), so run on a machine with an
    authenticated Claude Code seat (ADR-0009, local-first). Research-only runs
-   (OpenRouter substrates) work without it.
+   (OpenRouter substrates) work without it. The seat is checked before a run
+   dispatches anything, so an expired token is reported as a refusal rather than
+   discovered after the research has been paid for. Nesting is fine: a `claude`
+   child spawned from inside a Claude Code session runs normally, which is what
+   makes calling this tool from an agent session work at all.
 4. **Register as an MCP server** so agents get the `research` tool:
    `claude mcp add mantis-research --scope user -- mantis-mcp`.
 5. **Verify** with no spend: `mantis research "smoke test" --dry-run` should print

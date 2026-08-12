@@ -85,7 +85,7 @@ The other flags:
 | `--primary` | `openrouter:<first substrate>` | Which brief anchors the synthesis, e.g. `openrouter:openai`. |
 | `--journal` / `--no-journal` | off | Also emit a mantis-ingestion journal. |
 | `--batch-name` | `research-<slug>-<timestamp>` | Names the run's directory tree. |
-| `--dry-run` | off | Validate the whole pipeline with no model calls. |
+| `--dry-run` | off | Validate the whole pipeline with no model calls. The manifest is marked `"dry_run": true` and writes no state a later real run treats as finished. |
 | `--log-level` | `INFO` | Level for the structured logs on stderr. The batch subcommands have no level flag. |
 
 The manifest lists every output path (briefs, synthesis, sidecar, falsification,

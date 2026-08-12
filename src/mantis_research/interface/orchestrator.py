@@ -157,9 +157,13 @@ class Orchestrator:
         bound = log.bind(stage=self.stage.name, topic_id=topic.id, slug=topic.slug)
         try:
             state = self.state_class.load_or_create(self.state_dir, topic.id, topic.slug)
-            if state.status is TopicStatus.DONE:
+            if state.settled:
                 bound.debug('already DONE — skipping')
                 return
+            # This run now owns the record, so the record says which kind of run
+            # is writing it. A real run clears a marker it inherits from a dry
+            # run, which is how the dry run's DONE stops being load-bearing.
+            state.dry_run = True if self.dry_run else None
 
             if not self.stage.is_enabled(topic, self.config):
                 bound.info('stage disabled for this topic — skipping')
@@ -346,7 +350,7 @@ class Orchestrator:
 
     def _is_pending(self, topic: TopicConfig) -> bool:
         state = self.state_class.load_or_create(self.state_dir, topic.id, topic.slug)
-        return state.status is not TopicStatus.DONE
+        return not state.settled
 
     def _final_summary(self, topics: Sequence[TopicConfig]) -> int:
         states = [self.state_class.load_or_create(self.state_dir, t.id, t.slug) for t in topics]

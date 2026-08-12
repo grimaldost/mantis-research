@@ -32,13 +32,76 @@ from mantis_research.core.state import OpenRouterResearchState
 from mantis_research.interface.seat import process_is_alive
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
 
     from mantis_research.core.progress import ProgressCallback
+    from mantis_research.core.stage import SeatProbe
 
 #: The run-level record, written before dispatch and rewritten at the end. Its
 #: presence is what turns an abandoned call into an identified run.
 RUN_RECORD_NAME = 'run.json'
+
+#: Stages driven by the machine's single authenticated ``claude`` CLI, and so by
+#: the local seat this deployment is built around (ADR-0009, local-first). Any
+#: tier containing one of these needs that seat before it is worth spending a
+#: cent on research.
+LOCAL_SEAT_STAGES = frozenset(
+    {'claude', 'synthesis', 'journal-passes', 'falsification', 'evaluation', 'claude-prior'}
+)
+
+
+class LocalSeatUnavailableError(RuntimeError):
+    """The run needs the local ``claude`` seat and that seat is not usable.
+
+    Raised at dispatch, before any stage runs, so a caller is told the
+    precondition rather than handed a briefs-only result to interpret.
+    """
+
+
+def require_local_claude_seat(
+    *,
+    stages: Sequence[str],
+    probe: SeatProbe | None = None,
+) -> None:
+    """Refuse the run up front if its tier needs a local seat it cannot have.
+
+    The synthesis family drives the local ``claude`` CLI, so a tier containing
+    any of :data:`LOCAL_SEAT_STAGES` cannot deliver its product without one.
+    Nothing asked that question until the synthesis stage reached its own
+    ``preflight`` — which is *after* the OpenRouter research stage has run and
+    been paid for. Three runs on 2026-08-11 bought their briefs and only then
+    found the seat's OAuth token had expired; the briefs are still on disk and
+    the syntheses were never written.
+
+    Raising here is deliberate over the alternative of making the child spawn
+    work by other means: the failure this guards is a precondition of the
+    deployment, and a run that cannot produce a sidecar must stop before it
+    spends rather than return what it managed to buy.
+    """
+    needed = [s for s in stages if s in LOCAL_SEAT_STAGES]
+    if not needed:
+        return
+    if probe is None:
+        # Imported at call time: the adapter pulls in the subprocess and
+        # transcript machinery, and a research-only tier never needs it.
+        from mantis_research.interface.adapters.claude_cli import ClaudeCliAdapter
+
+        probe = ClaudeCliAdapter()
+    try:
+        probe.preflight()
+    except RuntimeError as exc:
+        msg = (
+            f'this run needs the local claude CLI seat for {", ".join(needed)}, '
+            f'and that seat is not usable: {exc}. '
+            f"The synthesis family drives the machine's authenticated `claude` "
+            f'CLI (ADR-0009), so the run is refused before it spends anything on '
+            f'research it could not synthesise. Fix the seat (`claude auth login`, '
+            f'no --console) and re-run, or pass dry_run to exercise the '
+            f'orchestration offline.'
+        )
+        raise LocalSeatUnavailableError(msg) from exc
+
 
 # Default Path B substrate set (model-recommendations.md): each vendor resolves
 # to its newest frontier model via the `auto:<vendor>` sentinel at run time.
@@ -117,6 +180,7 @@ def _manifest(
     slug: str,
     substrates: list[str],
     results: dict[str, int],
+    dry_run: bool,
 ) -> dict[str, Any]:
     dirs = RunDirs('batch', batch_name)
     stem = topic_stem('1', slug)
@@ -138,6 +202,11 @@ def _manifest(
         'assurance': assurance,
         'layout': 'batch',
         'outputs_dir': str(dirs.root()),
+        # Every path under ``outputs`` is *where an artifact goes*, not proof one
+        # is there — under a dry run none of them exist. Saying so on the
+        # manifest and in the run record is what stops a dry run's result being
+        # read, by an agent or by a person, as a finished one.
+        'dry_run': dry_run,
         'stages': {stage: {'exit_code': rc} for stage, rc in results.items()},
         'outputs': outputs,
         'cost': _read_cost(dirs, stem),
@@ -322,6 +391,13 @@ def run_research(
         msg = 'no substrates given'
         raise ValueError(msg)
     primary_ref = primary or f'openrouter:{subs[0]}'
+    stages = _TIER_STAGES[assurance]
+    # Before anything is minted or dispatched: a tier that cannot deliver its
+    # product must say so rather than buy the research half of it. A dry run
+    # spends nothing and spawns nothing, so it is exempt for the same reason
+    # ``--dry-run`` already skips every stage preflight.
+    if not dry_run:
+        require_local_claude_seat(stages=stages)
     ts = datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')
     name = batch_name or f'research-{_slugify(question)}-{ts}'
 
@@ -347,6 +423,7 @@ def run_research(
         'substrates': subs,
         'layout': 'batch',
         'outputs_dir': str(dirs.root()),
+        'dry_run': dry_run,
     }
     _write_run_record(
         dirs,
@@ -360,7 +437,6 @@ def run_research(
             'history': _resume_history or [],
         },
     )
-    stages = _TIER_STAGES[assurance]
     emit(
         on_event,
         RunEvent(
@@ -410,6 +486,7 @@ def run_research(
         slug=slug,
         substrates=subs,
         results=results,
+        dry_run=dry_run,
     )
     _write_run_record(dirs, {**manifest, 'status': 'complete', 'finished_at': _now_iso()})
     emit(

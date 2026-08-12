@@ -46,6 +46,38 @@ if TYPE_CHECKING:
 _SERVER_NAME = 'mantis-research'
 
 
+class IncompleteRunError(RuntimeError):
+    """The run produced no epistemic sidecar, so it produced no answer.
+
+    Raised instead of returning the partial result. The sidecar is the product
+    (ADR-0003); a result carrying only research briefs is a run that failed, and
+    handing it back as an ordinary tool result lets a caller read it as a
+    delivered answer — which is precisely what happened in the field.
+    """
+
+
+def _incomplete(manifest: dict[str, Any], sidecar_path: Path) -> IncompleteRunError:
+    """Build the refusal, naming what is missing, what failed, and the way back."""
+    failed = sorted(
+        stage for stage, rc in manifest['stages'].items() if rc.get('exit_code', 0) != 0
+    )
+    blame = (
+        f'{", ".join(failed)} exited non-zero'
+        if failed
+        else 'every stage exited 0, so the artifact was lost rather than refused'
+    )
+    outputs_dir = manifest.get('outputs_dir') or manifest.get('batch_name', '')
+    return IncompleteRunError(
+        f'the run produced no epistemic sidecar at {sidecar_path} — {blame}. '
+        f'The sidecar is the product (ADR-0003): research briefs without a '
+        f'synthesis and its sidecar are not an answer, so this is reported as a '
+        f'failure rather than returned as a partial result. The briefs that were '
+        f'paid for are on disk — re-enter the run with '
+        f'resume="{outputs_dir}" once the cause is fixed, rather than asking '
+        f'again and buying them twice.'
+    )
+
+
 def _agent_result(manifest: dict[str, Any]) -> dict[str, Any]:
     """Assemble the agent-facing result from a run manifest and its sidecar.
 
@@ -54,9 +86,17 @@ def _agent_result(manifest: dict[str, Any]) -> dict[str, Any]:
     queue, via :func:`project_for_agent`). The synthesis and briefs stay
     referenced by path in ``outputs`` — never inlined (§3). Synchronous file I/O,
     so it runs inside the worker thread the async tool offloads to (FM-1).
+
+    A live run with no sidecar on disk raises :class:`IncompleteRunError` rather
+    than returning. Every path in ``outputs`` is a destination, not evidence, so
+    a briefs-only result is indistinguishable at a glance from a complete one —
+    an agent that reads `outputs` and finds three real brief files has no reason
+    to doubt the rest. A dry run is exempt on the manifest's own ``dry_run``
+    flag: it legitimately writes nothing, and says so in the result.
     """
     result: dict[str, Any] = {
         'ok': manifest['ok'],
+        'dry_run': manifest.get('dry_run', False),
         'question': manifest['question'],
         'assurance': manifest['assurance'],
         'cost': manifest['cost'],
@@ -68,8 +108,10 @@ def _agent_result(manifest: dict[str, Any]) -> dict[str, Any]:
         sc = ResearchSidecar.from_model_json(sidecar_path.read_text(encoding='utf-8'))
         result['sidecar_available'] = True
         result.update(project_for_agent(sc))
-    else:
-        result['sidecar_available'] = False
+        return result
+    if not result['dry_run']:
+        raise _incomplete(manifest, sidecar_path)
+    result['sidecar_available'] = False
     return result
 
 

@@ -107,7 +107,7 @@ so adding a stage is a new module plus one registry row (invariant I2; see
 
 Every stage persists one JSON file per topic (`<id>.json`) in its state
 directory, written atomically (temp file + replace) so an interrupt can never
-truncate state. A topic is in one of six statuses:
+truncate state. A topic is in one of seven statuses:
 
 | Status | Meaning | On the next run |
 |---|---|---|
@@ -117,11 +117,22 @@ truncate state. A topic is in one of six statuses:
 | `failed` | attempts exhausted this run | re-attempted |
 | `rate_limited` | provider limit hit; backoff applied | re-attempted |
 | `blocked_upstream` | required input briefs missing | re-attempted |
+| `dead` | the process that claimed it is gone | re-attempted |
 
 Only `done` survives across runs — re-running the same command is the resume
 mechanism, `--only` narrows it, and `--force` clears state first (invariant
 I5). On-disk state schemas evolve additively only (invariant I4), pinned by
 golden-file tests, so old state files keep loading across releases.
+
+`done` is skippable because it means the artifact is on disk, so a record a
+**dry run** wrote does not qualify: a dry run short-circuits every adapter and
+produces nothing. Every record therefore carries `dry_run`, and `TopicState.
+settled` — the query the orchestrator skips on — disregards a `done` a dry run
+wrote. A real run clears the marker it inherits, so the tree self-corrects on
+the next live invocation. The field failure this closes: a dry run left
+`status: "done"` behind, the real run under the same batch name skipped every
+topic, and the manifest reported `exit_code: 0` with brief paths that did not
+exist.
 
 ## Run layouts
 

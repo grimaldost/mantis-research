@@ -7,6 +7,71 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-12
+
+Two defects found in real field use on 2026-08-11, both in the gap between what
+a run reported and what it had actually produced. One let a dry run settle a
+topic, so a real run under the same batch name skipped the work and reported
+success over an empty tree. The other let the primary serving path hand back
+research briefs, with the synthesis and its sidecar missing, in a shape a caller
+reads as an answer. Neither announced itself: the first surfaced as a downstream
+failure pointing at the wrong stage, the second as a research result that was
+quietly half a product.
+
+Minor rather than patch: the state schema gains a field, `--dry-run` no longer
+leaves a topic looking finished, and the `research` tool now raises where it
+previously returned. Existing state files and past runs are unaffected —
+the new field is additive and Optional under invariant I4.
+
+### Fixed
+
+- **A briefs-only run is reported as a failure instead of returned as a
+  result.** The `research` MCP tool assembled its result from whatever the run
+  left behind, so a run whose synthesis stage failed came back as a structured
+  object carrying three real brief paths, a `synthesis` and `sidecar` path that
+  pointed at nothing, and a `sidecar_available: false` next to an `ok` flag —
+  a shape an agent has every reason to read as an answer. It happened in the
+  field on 2026-08-11: `outputs/vf-selfverif-live/run.json` records `synthesis`
+  at `exit_code: 1`, and the transcript beside it ends `Failed to authenticate.
+  API Error: 401 OAuth access token has expired`. The epistemic sidecar **is**
+  the product (ADR-0003), so a live run that produced none now raises
+  `IncompleteRunError`, naming the missing sidecar, the stage that did not
+  deliver it, and the run directory to pass back as `resume` — the briefs are
+  already paid for and must not be bought twice. A dry run is exempt on the
+  manifest's own `dry_run` flag, which now travels to the caller.
+- **The local Claude seat is checked before anything is dispatched.** Every
+  assurance tier ends in a stage that drives the machine's authenticated
+  `claude` CLI, but nothing asked whether that seat was usable until the
+  synthesis stage reached its own preflight — which is *after* the OpenRouter
+  research stage has run and been paid for. Three runs on 2026-08-11 bought
+  their briefs and only then found the seat's token had expired; the briefs are
+  still on disk and the syntheses were never written.
+  `require_local_claude_seat` now probes the seat up front for any tier
+  containing a `LOCAL_SEAT_STAGES` member and raises
+  `LocalSeatUnavailableError` naming the precondition, so a run that cannot
+  deliver its product stops before it spends. The probe is the `SeatProbe`
+  Protocol (`core/stage.py`), so the check is testable without a seat.
+  Nesting is **not** the precondition: a `claude` child spawned from inside a
+  Claude Code session runs normally, confirmed end to end on CLI 2.1.228 with
+  `CLAUDECODE=1` set (synthesis and sidecar turns both exit 0), so nothing
+  scrubs the parent's environment for the child.
+- **A dry run can no longer be mistaken for a completed run.** `--dry-run`
+  short-circuits every adapter but the orchestrator still wrote terminal
+  `status: "done"` into the batch state directory, so a real run under the same
+  batch name skipped every topic: the stage reported `exit_code: 0` and the
+  manifest listed brief paths that did not exist, and the only visible symptom
+  was a downstream synthesis failure pointing at the wrong stage. `done` is
+  skippable precisely because it means the artifact is on disk, so this was
+  invariant I5 read backwards — resume is "re-run the same command", and the
+  state directory was lying to it. Every record now carries `dry_run`, which
+  says which kind of run wrote it; `TopicState.settled` — the query the
+  orchestrator skips on — disregards a `done` a dry run wrote, and a real run
+  clears the marker it inherits, so the tree self-corrects on the next live
+  invocation. The run manifest and `run.json` carry `dry_run` for the same
+  reason: every path under `outputs` is where an artifact goes, not proof one is
+  there. Additive and Optional under invariant I4 — the field is absent from
+  every historical state file, which reads as "a real run wrote this".
+
 ## [0.2.0] - 2026-08-11
 
 The delivery envelope around the research output. Every **Now** item in

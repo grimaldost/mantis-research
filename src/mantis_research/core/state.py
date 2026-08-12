@@ -25,13 +25,20 @@ process is marked DEAD before anything is re-attempted — a terminal record for
 the abandoned attempt, and a different fact from FAILED (an attempt that ran and
 lost).
 
-Across runs (re-invoking ``mantis run <stage>`` on the same batch): only DONE
-is skipped. Every other status — FAILED, RATE_LIMITED, BLOCKED_UPSTREAM, DEAD,
-and an interrupted IN_FLIGHT — is selected as pending and re-attempted
-(``Orchestrator._is_pending`` returns ``status is not DONE``); BLOCKED_UPSTREAM
-re-runs its upstream gate. So there is no cross-run "terminal" state other than
-DONE — a failed or rate-limited topic is retried on the next invocation, which
-is what makes a batch resumable (I5).
+Across runs (re-invoking ``mantis run <stage>`` on the same batch): only a DONE
+a real run wrote is skipped. Every other status — FAILED, RATE_LIMITED,
+BLOCKED_UPSTREAM, DEAD, and an interrupted IN_FLIGHT — is selected as pending
+and re-attempted (``Orchestrator._is_pending`` returns ``not state.settled``);
+BLOCKED_UPSTREAM re-runs its upstream gate. So there is no cross-run "terminal"
+state other than DONE — a failed or rate-limited topic is retried on the next
+invocation, which is what makes a batch resumable (I5).
+
+A DONE a **dry run** wrote is not one of them: ``dry_run`` records which kind of
+run wrote the record, and ``settled`` disregards a dry run's. A dry run
+short-circuits every adapter, so it can report the orchestration is wired up
+without any artifact reaching disk; left indistinguishable from a real DONE it
+made the next real run under the same batch name skip every topic and report
+success over an output tree nothing had written.
 
 These are mutable models — the orchestrator updates and re-saves between
 attempts. We use pydantic v2 for round-trip JSON validation against the
@@ -89,6 +96,26 @@ class TopicState(BaseModel):
     # is gone. Additive optional field (I4); absent on every historical state
     # file, which reads as "unknown owner".
     owner_pid: int | None = None
+    # True when a **dry run** wrote this record. A dry run short-circuits every
+    # adapter, so its DONE means "the orchestration is wired up", not "the
+    # artifact is on disk" — and DONE is only skippable because it means the
+    # latter (I5). Recording which kind of run wrote the record is what lets a
+    # later real run tell the two apart. Additive optional field (I4); absent on
+    # every historical state file, which reads as "a real run wrote this".
+    dry_run: bool | None = None
+
+    # ── queries ──
+
+    @property
+    def settled(self) -> bool:
+        """True when this topic is finished for good and can be skipped.
+
+        Only a DONE a **real** run wrote settles anything. A dry run's DONE is
+        disregarded by every run, dry or real, so re-running the same command —
+        which is the whole of resume (I5) — always re-executes work a dry run
+        only pretended to do.
+        """
+        return self.status is TopicStatus.DONE and not self.dry_run
 
     # ── persistence helpers ──
 
