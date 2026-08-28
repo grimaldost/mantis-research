@@ -12,6 +12,7 @@ from mantis_research.core.retry import (
     RetryPolicy,
     classify_failure,
     detect_rate_limit,
+    resolve_failure_kind,
 )
 
 
@@ -111,7 +112,7 @@ class TestRetryPolicy:
         self, attempt_number: int, is_final: bool
     ) -> None:
         p = RetryPolicy(max_retries_per_stage=2)
-        assert p.is_final_attempt(attempt_number) is is_final
+        assert p.is_final_attempt(attempt_number, FailureKind.GENERIC) is is_final
 
 
 class TestIdleBudgetCap:
@@ -202,5 +203,62 @@ class TestRetryPolicyHypothesis:
     def test_is_final_attempt_monotonic(self, max_retries: int, attempt: int) -> None:
         p = RetryPolicy(max_retries_per_stage=max_retries)
         # Property: once is_final returns True, every higher attempt is also final.
-        if p.is_final_attempt(attempt):
-            assert p.is_final_attempt(attempt + 1)
+        if p.is_final_attempt(attempt, FailureKind.GENERIC):
+            assert p.is_final_attempt(attempt + 1, FailureKind.GENERIC)
+
+
+class TestAPreconditionFailureIsNotRetried:
+    """MANT-B59 — retry budget is a function of the failure's class.
+
+    A rate limit is transient: the environment changes while you wait, so
+    waiting is the fix. A watchdog kill is not: the same command goes back into
+    the same environment and produces the same silence. On 2026-08-23 that was
+    three strikes of 600 s per run, four runs deep, serialised on one seat —
+    2.5 hours to learn what the first attempt already knew.
+    """
+
+    def test_a_precondition_failure_gets_no_second_attempt(self) -> None:
+        policy = RetryPolicy()
+        assert policy.attempts_for(FailureKind.PRECONDITION) == 1
+
+    def test_a_rate_limit_still_gets_the_full_budget(self) -> None:
+        policy = RetryPolicy(max_retries_per_stage=2)
+        assert policy.attempts_for(FailureKind.RATE_LIMIT) == 3
+
+    def test_a_generic_failure_still_gets_the_full_budget(self) -> None:
+        policy = RetryPolicy(max_retries_per_stage=2)
+        assert policy.attempts_for(FailureKind.GENERIC) == 3
+
+    def test_a_precondition_failure_never_waits(self) -> None:
+        # There is nothing to wait for; the backoff would only hold the seat.
+        assert RetryPolicy().backoff_seconds(FailureKind.PRECONDITION) == 0.0
+
+    def test_the_final_attempt_depends_on_the_kind(self) -> None:
+        policy = RetryPolicy(max_retries_per_stage=2)
+        assert policy.is_final_attempt(1, FailureKind.PRECONDITION) is True
+        assert policy.is_final_attempt(1, FailureKind.GENERIC) is False
+
+
+class TestWhoDecidesTheFailureKind:
+    """The producer knows; the classifier was guessing from text.
+
+    `classify_failure` regexes the child's output, so a watchdog kill — which
+    by definition produced no output — read as GENERIC and got the transient
+    budget. The signal existed on the result the whole time and died at the
+    `AttemptResult` boundary.
+    """
+
+    def test_a_declared_kind_wins_over_the_text(self) -> None:
+        assert (
+            resolve_failure_kind(declared=FailureKind.PRECONDITION, error_output='rate limit')
+            is FailureKind.PRECONDITION
+        )
+
+    def test_the_text_is_used_when_nothing_was_declared(self) -> None:
+        assert (
+            resolve_failure_kind(declared=None, error_output='429 too many requests')
+            is FailureKind.RATE_LIMIT
+        )
+
+    def test_an_empty_output_with_no_declaration_is_generic(self) -> None:
+        assert resolve_failure_kind(declared=None, error_output='') is FailureKind.GENERIC

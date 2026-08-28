@@ -118,6 +118,7 @@ class FalsificationStage:
             name=f'falsification-topic-{topic_id}',
             idle_timeout_s=ctx.child_idle_timeout_s,
             seat_owner=ctx.seat_owner('falsification', topic_id),
+            on_event=ctx.on_event,
             add_dirs=(dirs.output('synthesis'), dirs.output('falsification')),
             allowed_tools=('WebSearch', 'WebFetch', 'Read', 'Write'),
         )
@@ -134,12 +135,14 @@ class FalsificationStage:
         if not result.success:
             return AttemptResult.fail(
                 error=result.error or 'falsification turn failed',
-                error_output=result.raw_output,
+                error_output=result.prose_output,
+                failure_kind=result.failure_kind,
             )
         if not ctx.dry_run and not falsification.exists():
             return AttemptResult.fail(
                 error=f'falsification file not produced at {falsification.name}',
-                error_output=result.raw_output,
+                error_output=result.prose_output,
+                failure_kind=result.failure_kind,
             )
         state.falsification_bytes = falsification.stat().st_size if falsification.exists() else 0
         return AttemptResult.ok(output_bytes=state.falsification_bytes)

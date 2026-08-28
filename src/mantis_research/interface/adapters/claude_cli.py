@@ -21,7 +21,9 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from mantis_research.core.cli_stream import ClaudeOutputFormat, parse_stream
 from mantis_research.core.paths import seat_lock_path
+from mantis_research.core.retry import FailureKind
 from mantis_research.interface.adapters._subprocess import (
     DEFAULT_CHILD_IDLE_TIMEOUT_S,
     run_streaming,
@@ -31,6 +33,8 @@ from mantis_research.interface.transcripts import TranscriptWriter
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from mantis_research.core.progress import ProgressCallback
 
 log = structlog.get_logger(__name__)
 
@@ -52,7 +56,11 @@ class ClaudeCliOptions:
     session_id: str | None = None
     resume_session_id: str | None = None
     name: str | None = None  # --name human-readable
-    output_format: str = 'text'
+    # Streaming by default, and not merely as a preference: `idle_timeout_s`
+    # below is a clock on SILENCE, and only a streaming child produces the
+    # lines that reset it. `__post_init__` refuses the mute pairing rather
+    # than letting the two drift apart again (MANT-B58).
+    output_format: ClaudeOutputFormat = ClaudeOutputFormat.STREAM_JSON
     extra_args: tuple[str, ...] = field(default_factory=tuple)
     # Watchdog on silence: kill a child that has produced no output for this
     # long. None disables it. See _subprocess.DEFAULT_CHILD_IDLE_TIMEOUT_S.
@@ -61,6 +69,22 @@ class ClaudeCliOptions:
     # so concurrent runs queue visibly instead of interleaving invisibly. The
     # value is the queue-legible owner name, e.g. 'batch-name/synthesis'.
     seat_owner: str | None = None
+    # Where this call reports what it is doing. A callable on a dataclass of
+    # options is deliberate: it has to travel with every other per-call concern
+    # or it gets forgotten at one of the sites, which is exactly what happened —
+    # the seat wait emitted a `waiting` event that no caller could receive,
+    # because the one place that acquires the seat passed no callback at all
+    # (MANT-B63).
+    on_event: ProgressCallback | None = None
+
+    def __post_init__(self) -> None:
+        """Refuse a silence watchdog over a child that is mute by design.
+
+        The check lives here because this is where the pair is constructed:
+        every stage builds one of these, so no stage can assemble the
+        combination that turned the watchdog into a runtime cap.
+        """
+        self.output_format.cadence.validate_watchdog(self.idle_timeout_s)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +98,30 @@ class ClaudeCliResult:
     error: str | None = None
     session_id: str | None = None  # echo the id used (for state.session_id tracking)
     timed_out: bool = False  # the watchdog killed a silent child
+    # What the CLI *said*, separated from how it said it. `raw_output` is the
+    # NDJSON envelope, whose own vocabulary includes `rate_limit_event` on
+    # healthy runs — handing that to the rate-limit classifier would read every
+    # run as rate-limited. Stages pass `prose_output` instead (MANT-B58).
+    prose_output: str = ''
+    # The turn's dollar cost, off the stream's result line. The local seat is a
+    # subscription, so nothing metered this before.
+    cost_usd: float | None = None
+    #: Set when the child could not be reaped and was left running.
+    abandoned_pid: int | None = None
+
+    @property
+    def failure_kind(self) -> FailureKind | None:
+        """The failure's class, when this result knows it.
+
+        A child killed for silence, or one that could not be reaped, is a
+        precondition failure: the same command into the same environment will
+        do the same thing, and a second attempt on an abandoned child spawns a
+        live tree beside the one still running. Anything else declares nothing
+        and lets the text classifier decide (MANT-B59).
+        """
+        if self.timed_out or self.abandoned_pid is not None:
+            return FailureKind.PRECONDITION
+        return None
 
 
 class ClaudeCliAdapter:
@@ -167,11 +215,26 @@ class ClaudeCliAdapter:
         async with AsyncExitStack() as stack:
             if options.seat_owner:
                 await stack.enter_async_context(
-                    async_seat_lock(seat_lock_path(), options.seat_owner)
+                    async_seat_lock(
+                        seat_lock_path(),
+                        options.seat_owner,
+                        on_event=options.on_event,
+                    )
                 )
             tx = await stack.enter_async_context(TranscriptWriter(transcript_path, list(cmd)))
-            stream = await run_streaming(cmd, tx, idle_timeout_s=options.idle_timeout_s)
+            stream = await run_streaming(
+                cmd,
+                tx,
+                cadence=options.output_format.cadence,
+                idle_timeout_s=options.idle_timeout_s,
+                on_event=options.on_event,
+                label=options.name or 'claude',
+            )
         duration = time.monotonic() - start
+        # What the CLI said, split from how it said it. Under stream-json the
+        # raw output is an envelope whose own vocabulary would mislead the
+        # rate-limit classifier, so every return below reports the prose.
+        summary = parse_stream(stream.output)
 
         if stream.timed_out:
             return ClaudeCliResult(
@@ -185,6 +248,9 @@ class ClaudeCliAdapter:
                 ),
                 session_id=session_id,
                 timed_out=True,
+                prose_output=summary.prose,
+                cost_usd=summary.cost_usd,
+                abandoned_pid=stream.abandoned_pid,
             )
         if stream.exit_code != 0:
             return ClaudeCliResult(
@@ -194,6 +260,9 @@ class ClaudeCliAdapter:
                 raw_output=stream.output,
                 error=f'claude exited {stream.exit_code}',
                 session_id=session_id,
+                prose_output=summary.prose,
+                cost_usd=summary.cost_usd,
+                abandoned_pid=stream.abandoned_pid,
             )
         return ClaudeCliResult(
             success=True,
@@ -201,6 +270,8 @@ class ClaudeCliAdapter:
             duration_s=duration,
             raw_output=stream.output,
             session_id=session_id,
+            prose_output=summary.prose,
+            cost_usd=summary.cost_usd,
         )
 
     # ── cmd assembly ──────────────────────────────────────────────
@@ -225,7 +296,10 @@ class ClaudeCliAdapter:
         if options.effort:
             # Synthesis runner uses --effort even on resume; keep symmetry.
             cmd += ['--effort', options.effort]
-        cmd += ['--output-format', options.output_format]
+        cmd += ['--output-format', options.output_format.value]
+        if options.output_format.needs_verbose:
+            # The CLI refuses `--output-format stream-json` without it.
+            cmd += ['--verbose']
 
         for d in options.add_dirs:
             cmd += ['--add-dir', str(d)]

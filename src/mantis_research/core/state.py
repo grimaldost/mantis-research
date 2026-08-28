@@ -87,6 +87,10 @@ class TopicState(BaseModel):
     id: str
     slug: str
     status: TopicStatus = TopicStatus.PENDING
+    #: The CLI session this topic's last attempt used, where the stage drives a
+    #: session-based child. Declared once here rather than six times over,
+    #: because the retry contract above has to be able to clear it.
+    session_id: str | None = None
     attempts: int = 0
     started_at: str | None = None
     completed_at: str | None = None
@@ -184,6 +188,16 @@ class TopicState(BaseModel):
         self.status = TopicStatus.PENDING
         self.last_error = error
 
+    def clear_session(self) -> None:
+        """Drop the session identity so the next attempt mints its own.
+
+        Reusing it made two of three retries in the original field incident die
+        on ``Session ID ... is already in use`` rather than on the cause they
+        were retrying — so the retry destroyed the evidence of the failure
+        (MANT-B59).
+        """
+        self.session_id = None
+
 
 # ── stage-specific state classes ─────────────────────────────────────
 
@@ -195,7 +209,6 @@ class ClaudeResearchState(TopicState):
     compatibility (I6).
     """
 
-    session_id: str | None = None
     turn_1_duration_s: float | None = None
     research_file_bytes: int | None = None
 
@@ -242,7 +255,6 @@ class OpenRouterResearchState(TopicState):
 class SynthesisState(TopicState):
     """Stage 3 (synthesis + journal) per-topic state."""
 
-    session_id: str | None = None
     turn_1_duration_s: float | None = None
     turn_2_duration_s: float | None = None
     synthesis_bytes: int | None = None
@@ -253,7 +265,6 @@ class SynthesisState(TopicState):
 class JournalPassesState(TopicState):
     """Stage 3.5 (journal augmentation) per-topic state."""
 
-    session_id: str | None = None
     duration_s: float | None = None
     augmentation_bytes: int | None = None
 
@@ -261,7 +272,6 @@ class JournalPassesState(TopicState):
 class FalsificationState(TopicState):
     """Stage 4 (falsification) per-topic state."""
 
-    session_id: str | None = None
     duration_s: float | None = None
     falsification_bytes: int | None = None
 
@@ -269,7 +279,6 @@ class FalsificationState(TopicState):
 class EvaluationState(TopicState):
     """Stage 5 (evaluation) per-topic state."""
 
-    session_id: str | None = None
     duration_s: float | None = None
     eval_bytes: int | None = None
     verdict: str | None = None
@@ -279,7 +288,6 @@ class EvaluationState(TopicState):
 class ClaudePriorState(TopicState):
     """Stage 5-input (claude-prior baseline) per-topic state."""
 
-    session_id: str | None = None
     duration_s: float | None = None
     baseline_bytes: int | None = None
 

@@ -12,14 +12,19 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import structlog
 
+from mantis_research.core.progress import RunEvent, emit
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from mantis_research.core.cli_stream import OutputCadence
+    from mantis_research.core.progress import ProgressCallback
     from mantis_research.interface.transcripts import TranscriptWriter
 
 log = structlog.get_logger(__name__)
@@ -32,6 +37,19 @@ log = structlog.get_logger(__name__)
 #: their never-written artifact hung the same way.
 DEFAULT_CHILD_IDLE_TIMEOUT_S = 600.0
 
+#: Seconds between the progress events a talking child generates. A streaming
+#: child emits many lines a second; forwarding each one would flood the MCP
+#: channel to say one thing — that the stage is still alive.
+ANNOUNCE_EVERY_S = 20.0
+
+#: How long to wait for a killed child to be reaped before giving up on it.
+#: The wait after the kill used to be unbounded, and the seat lock is released
+#: only when this function returns — so a child that resisted termination held
+#: the machine's single Claude seat, and the next run queued behind a process
+#: nobody was waiting for. Returning without the corpse is worse bookkeeping and
+#: better behaviour: the pid is reported so the caller can say what was left.
+REAP_TIMEOUT_S = 10.0
+
 
 @dataclass(frozen=True, slots=True)
 class StreamResult:
@@ -40,13 +58,19 @@ class StreamResult:
     exit_code: int
     output: str  # merged stdout+stderr, for rate-limit classification
     timed_out: bool = False  # the watchdog killed a child that produced nothing
+    #: Set when the child could not be reaped within :data:`REAP_TIMEOUT_S`.
+    #: A process was left running; the seat was released anyway.
+    abandoned_pid: int | None = None
 
 
 async def run_streaming(
     cmd: Sequence[str],
     transcript: TranscriptWriter,
     *,
+    cadence: OutputCadence,
     idle_timeout_s: float | None = DEFAULT_CHILD_IDLE_TIMEOUT_S,
+    on_event: ProgressCallback | None = None,
+    label: str = 'child',
 ) -> StreamResult:
     """Run ``cmd``, stream stdout+stderr to transcript, return the outcome.
 
@@ -60,9 +84,25 @@ async def run_streaming(
     as a failed attempt. ``None`` disables it. Without this a child producing
     zero output left its topic ``in_flight`` with ``last_error: null``
     indefinitely — a run that never ends and never says why.
+
+    ``cadence`` is required, and is the fact that claim depends on: a child
+    that only speaks when it finishes has no silence to measure, so pairing it
+    with a watchdog produces a cap on total runtime instead. That pairing is
+    refused here rather than trusted to the caller, because it is exactly what
+    happened — the format said `text`, the timeout said 600 s, and between them
+    they killed 28% of the local-seat stages this tool had been completing.
+
+    Every line also becomes a ``thinking`` event, rate-limited to one per
+    :data:`ANNOUNCE_EVERY_S`. A stage that reports nothing between its start and
+    its end is indistinguishable from a hang for however long it runs, which is
+    the whole reason the caller gives up.
     """
+    cadence.validate_watchdog(idle_timeout_s)
     process = await asyncio.create_subprocess_exec(
         *cmd,
+        # Closed, not inherited: the CLI otherwise waits three seconds for
+        # input on every turn and prints a non-JSON warning into the envelope.
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
@@ -72,6 +112,8 @@ async def run_streaming(
 
     captured: list[str] = []
     timed_out = False
+    last_announced = 0.0
+    started = time.monotonic()
     while True:
         try:
             line_bytes = await asyncio.wait_for(process.stdout.readline(), timeout=idle_timeout_s)
@@ -89,11 +131,39 @@ async def run_streaming(
         line = line_bytes.decode('utf-8', errors='replace')
         transcript.append_line(line)
         captured.append(line)
+        now = time.monotonic()
+        if on_event is not None and now - last_announced >= ANNOUNCE_EVERY_S:
+            last_announced = now
+            emit(
+                on_event,
+                RunEvent(
+                    kind='thinking',
+                    message=f'{label} is working ({now - started:.0f}s, {len(captured)} lines)',
+                    data={'label': label, 'elapsed_s': round(now - started, 1)},
+                ),
+            )
 
-    await process.wait()
-    exit_code = process.returncode or 0
+    abandoned_pid: int | None = None
+    try:
+        await asyncio.wait_for(process.wait(), timeout=REAP_TIMEOUT_S)
+    except TimeoutError:
+        abandoned_pid = process.pid
+        log.error(
+            'child could not be reaped — releasing the seat and leaving it running',
+            pid=process.pid,
+            reap_timeout_s=REAP_TIMEOUT_S,
+        )
+
+    # `returncode or 0` would read None — a child that is still running — as a
+    # clean exit. That is the one value this must never invent.
+    exit_code = -1 if process.returncode is None else process.returncode
     transcript.finalize(exit_code=exit_code)
-    return StreamResult(exit_code=exit_code, output=''.join(captured), timed_out=timed_out)
+    return StreamResult(
+        exit_code=exit_code,
+        output=''.join(captured),
+        timed_out=timed_out,
+        abandoned_pid=abandoned_pid,
+    )
 
 
 async def _terminate(process: asyncio.subprocess.Process) -> None:

@@ -19,6 +19,7 @@ import pytest
 
 from mantis_research.core.config import BatchConfig, load_batch_config
 from mantis_research.core.paths import run_state_dir
+from mantis_research.core.retry import FailureKind
 from mantis_research.core.stage import AttemptResult
 from mantis_research.core.state import ClaudeResearchState, TopicStatus
 from mantis_research.interface.orchestrator import Orchestrator
@@ -515,3 +516,81 @@ class TestConcurrency:
 
         # Peak concurrency must be ≤ parallel cap.
         assert peak <= 3
+
+
+class TestAPreconditionFailureStopsAtOneAttempt:
+    """MANT-B59 — the orchestrator honours the failure's class.
+
+    Before this, every failure drew the same budget: three attempts and two
+    backoffs. A watchdog kill produces no output at all, so the text classifier
+    could only call it GENERIC, and the run spent 40 minutes per stage learning
+    what the first 600 s already said.
+    """
+
+    @staticmethod
+    def _orch(stage: FakeStage, tmp_path: Path):
+        cfg = _config_with_topics(1)
+        return Orchestrator(
+            stage=stage,
+            state_class=ClaudeResearchState,
+            config=cfg,
+            state_dir=tmp_path / 'state',
+            output_dir=tmp_path / 'out',
+            transcript_dir=tmp_path / 'tx',
+        )
+
+    async def test_a_declared_precondition_failure_is_attempted_once(self, tmp_path: Path) -> None:
+        stage = FakeStage(
+            results={
+                '1': [
+                    AttemptResult.fail(
+                        error='claude produced no output for 600s — killed by the watchdog',
+                        failure_kind=FailureKind.PRECONDITION,
+                    )
+                ]
+            }
+        )
+        await self._orch(stage, tmp_path).run()
+        assert stage.calls == ['1']
+
+    async def test_a_generic_failure_still_gets_every_attempt(self, tmp_path: Path) -> None:
+        stage = FakeStage(results={'1': [AttemptResult.fail(error='transient wobble')]})
+        await self._orch(stage, tmp_path).run()
+        assert stage.calls == ['1', '1', '1']
+
+    async def test_the_run_still_reports_failure(self, tmp_path: Path) -> None:
+        stage = FakeStage(
+            results={'1': [AttemptResult.fail(error='mute', failure_kind=FailureKind.PRECONDITION)]}
+        )
+        assert await self._orch(stage, tmp_path).run() == 1
+
+
+class TestARetryDoesNotReuseADeadSession:
+    """MANT-B59 — regenerating the session identity between attempts.
+
+    Two of the three retries in the original field incident died on
+    `Session ID ... is already in use` rather than on the original cause, so the
+    retry mechanism destroyed the evidence of the failure it was retrying.
+    """
+
+    async def test_the_session_id_is_cleared_before_the_next_attempt(self, tmp_path: Path) -> None:
+        seen: list[str | None] = []
+
+        @dataclass
+        class Recording(FakeStage):
+            async def run_attempt(self, topic, state, ctx):  # type: ignore[no-untyped-def]
+                seen.append(state.session_id)
+                state.session_id = 'session-from-this-attempt'
+                return AttemptResult.fail(error='failed after minting a session')
+
+        stage = Recording(results={'1': [AttemptResult.fail(error='x')]})
+        cfg = _config_with_topics(1)
+        await Orchestrator(
+            stage=stage,
+            state_class=ClaudeResearchState,
+            config=cfg,
+            state_dir=tmp_path / 'state',
+            output_dir=tmp_path / 'out',
+            transcript_dir=tmp_path / 'tx',
+        ).run()
+        assert seen == [None, None, None]

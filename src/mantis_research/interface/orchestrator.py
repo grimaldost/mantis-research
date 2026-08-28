@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 from mantis_research.core.progress import RunEvent, emit, progress_payload
-from mantis_research.core.retry import RetryPolicy, classify_failure
+from mantis_research.core.retry import RetryPolicy, resolve_failure_kind
 from mantis_research.core.stage import AttemptResult, RunContext, Stage
 from mantis_research.core.state import TopicState, TopicStatus
 from mantis_research.interface.seat import process_is_alive
@@ -210,7 +210,9 @@ class Orchestrator:
                 bound.info('attempt succeeded', attempt=attempt, output_bytes=result.output_bytes)
                 return
 
-            kind = classify_failure(result.error_output)
+            kind = resolve_failure_kind(
+                declared=result.failure_kind, error_output=result.error_output
+            )
             error_msg = result.error or 'unknown failure'
             bound.info(
                 'attempt failed',
@@ -219,7 +221,7 @@ class Orchestrator:
                 error=error_msg,
             )
 
-            if self.retry_policy.is_final_attempt(attempt):
+            if self.retry_policy.is_final_attempt(attempt, kind):
                 if kind.value == 'rate_limit':
                     state.mark_rate_limited(error_msg)
                 else:
@@ -233,6 +235,8 @@ class Orchestrator:
                 state.mark_rate_limited(error_msg)
             else:
                 state.reset_for_retry(error_msg)
+            # The next attempt mints its own session (MANT-B59).
+            state.clear_session()
             state.save(self.state_dir)
             await self._stop_aware_sleep(
                 self.retry_policy.backoff_seconds(kind),
