@@ -121,7 +121,9 @@ class TestResume:
         run_dir = _abandoned_run(rooted, owner_pid=_exited_pid())
         resume_research(run_dir, dry_run=True, log_level='CRITICAL')
         record = json.loads((run_dir / 'run.json').read_text(encoding='utf-8'))
-        assert record['status'] == 'complete'
+        # `validated` rather than `complete`: this resume is a dry run, so it
+        # settled the record without writing any of the artifacts it names.
+        assert record['status'] == 'validated'
         assert [h['status'] for h in record['history']] == ['dead']
         assert 'was gone at resume' in record['history'][0]['note']
 

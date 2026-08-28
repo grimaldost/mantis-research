@@ -102,6 +102,12 @@ class OpenRouterResearchStage:
                 SubsessionResult(subslug=str(e['subslug']), status='pending') for e in entries
             ]
 
+        # The live catalog is a network call, so a dry run must not make it:
+        # `--dry-run` is sold as validating the pipeline for free, and it was a
+        # DNS lookup away from that being false. Hoisted out of the loop as
+        # well — it was asked once per subsession for one cached answer.
+        catalog = None if ctx.dry_run else self._catalog.models()
+
         rate_limit_hit = False
         other_failure_msg: str | None = None
         last_raw_output = ''
@@ -126,7 +132,7 @@ class OpenRouterResearchStage:
             # config field alongside a bare 'auto'.
             resolution = resolve_openrouter_model(
                 entry.get('model'),
-                catalog=self._catalog.models(),
+                catalog=catalog,
                 vendor_hint=entry.get('vendor'),
             )
             if resolution.model_id is None:
