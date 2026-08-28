@@ -31,19 +31,34 @@ which a client cannot distinguish from a hang, and answers by giving up.
 from __future__ import annotations
 
 import asyncio
+import json
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
+import structlog
 from mcp.server.fastmcp import Context, FastMCP
 from pydantic import Field
 
 from mantis_research.core.sidecar import ResearchSidecar, project_for_agent
-from mantis_research.interface.research_service import resume_research, run_research
+from mantis_research.interface.research_service import (
+    RUN_RECORD_NAME,
+    resume_research,
+    run_research,
+)
+from mantis_research.interface.seat import process_is_alive
 
 if TYPE_CHECKING:
     from mantis_research.core.progress import ProgressCallback, RunEvent
 
 _SERVER_NAME = 'mantis-research'
+
+#: How long a detached call waits for the run to name itself. The run emits
+#: `run_named` after building its config and before dispatching any stage, so
+#: this bounds config validation, not research.
+_NAMING_TIMEOUT_S = 30.0
+
+log = structlog.get_logger(__name__)
 
 
 class IncompleteRunError(RuntimeError):
@@ -176,6 +191,135 @@ def _progress_bridge(ctx: Any, loop: asyncio.AbstractEventLoop) -> ProgressCallb
     return deliver
 
 
+def _project(record: dict[str, Any]) -> dict[str, Any]:
+    """Describe a run from its record, without judging it.
+
+    Deliberately not :func:`_agent_result`: that raises when a live run owed a
+    sidecar and has none, which is right for the call that was supposed to
+    deliver one and wrong for a caller asking how a run went. Polling must
+    answer the question, not hand back an exception to interpret.
+    """
+    status = str(record.get('status', ''))
+    if status == 'dispatching':
+        owner = record.get('owner_pid')
+        alive = isinstance(owner, int) and process_is_alive(owner)
+        state = 'running' if alive else 'abandoned'
+    else:
+        state = 'finished'
+    return {
+        'state': state,
+        'batch_name': record.get('batch_name'),
+        'outputs_dir': record.get('outputs_dir'),
+        'question': record.get('question'),
+        'assurance': record.get('assurance'),
+        'ok': record.get('ok'),
+        'stages': record.get('stages') or {},
+        'cost': record.get('cost') or {},
+        'outputs': record.get('outputs') or {},
+    }
+
+
+async def research_status(
+    outputs_dir: Annotated[
+        str,
+        Field(
+            description=(
+                'The output directory of a run to report on — the "outputs_dir" '
+                "a detached `research` call returned. Reads the run's own record "
+                'and per-stage state; it never starts or changes anything.'
+            )
+        ),
+    ],
+) -> dict[str, Any]:
+    """Report how a run is going, without waiting for it.
+
+    Returns its state (``running`` / ``finished`` / ``abandoned`` / ``unknown``),
+    per-stage exit codes, cost so far and output paths. A finished run's full
+    epistemic result is fetched by calling ``research`` again with
+    ``resume=<outputs_dir>``, which skips the stages already done.
+    """
+    record_path = Path(outputs_dir) / RUN_RECORD_NAME
+    if not record_path.exists():
+        return {
+            'state': 'unknown',
+            'outputs_dir': outputs_dir,
+            'detail': (
+                f'no run record at {record_path}. Either the run never started, '
+                f'or this is not a run directory.'
+            ),
+        }
+    try:
+        record = json.loads(record_path.read_text(encoding='utf-8'))
+    except (OSError, ValueError) as exc:
+        return {'state': 'unknown', 'outputs_dir': outputs_dir, 'detail': str(exc)}
+    return _project(record)
+
+
+def _detach(
+    question: str,
+    *,
+    assurance: str,
+    substrates: list[str] | None,
+    primary: str,
+    journal: bool,
+    dry_run: bool,
+    name: str,
+    resume: str,
+) -> dict[str, Any]:
+    """Start the run, hand back its identity, and let it work.
+
+    A background thread rather than a detached process: ``dispatch_stage_config``
+    nests ``asyncio.run`` per stage, so the work cannot sit on this loop, and a
+    thread inherits the server's resolved paths without a new environment
+    contract. The run is therefore bound to the server's lifetime — which is the
+    session that will do the polling — and a run lost with its session is
+    re-entered through ``resume``.
+
+    The handle carries no epistemic payload. There is nothing to report yet, and
+    a result shaped like an answer is exactly what let a briefs-only run read as
+    one.
+    """
+    started = threading.Event()
+    identity: dict[str, Any] = {}
+
+    def note(event: RunEvent) -> None:
+        if event.kind == 'run_named' and not identity:
+            identity.update(event.data)
+            started.set()
+
+    def work() -> None:
+        try:
+            _run_and_assemble(
+                question,
+                assurance=assurance,
+                substrates=substrates,
+                primary=primary,
+                journal=journal,
+                dry_run=dry_run,
+                name=name,
+                resume=resume,
+                on_event=note,
+            )
+        except BaseException:  # the thread must never take the server down
+            log.exception('detached run failed')
+        finally:
+            started.set()
+
+    thread = threading.Thread(target=work, name='mantis-research-run', daemon=True)
+    thread.start()
+    # The run names itself before it dispatches anything, so this waits only for
+    # the config to build — not for the research to happen.
+    started.wait(timeout=_NAMING_TIMEOUT_S)
+    if not identity:
+        msg = (
+            'the detached run did not name itself within '
+            f'{_NAMING_TIMEOUT_S:.0f}s — it failed before dispatch. Re-run '
+            'without detach to see the error.'
+        )
+        raise RuntimeError(msg)
+    return {'state': 'running', **identity}
+
+
 async def research(
     question: Annotated[str, Field(description='The research question to investigate.')],
     assurance: Annotated[
@@ -227,6 +371,20 @@ async def research(
     dry_run: Annotated[
         bool,
         Field(description='Validate orchestration without spending any model calls.'),
+    ] = False,
+    detach: Annotated[
+        bool,
+        Field(
+            description=(
+                'Start the run and return its identity immediately instead of '
+                'waiting for it. A full run takes many minutes and can outlast '
+                'the time a client will hold one tool call open; with this, poll '
+                '`research_status` with the returned "outputs_dir", then call '
+                '`research` again with `resume=<outputs_dir>` to collect the '
+                'finished result. Off by default: a plain call still blocks and '
+                'returns the answer.'
+            )
+        ),
     ] = False,
     name: Annotated[
         str,
@@ -288,6 +446,17 @@ async def research(
     # pipeline must run OFF this event loop or it raises RuntimeError (FM-1).
     # The bridge is built here, on the loop, and closes over it: the worker
     # thread hands events back rather than touching the session directly.
+    if detach:
+        return _detach(
+            question,
+            assurance=assurance,
+            substrates=substrates,
+            primary=primary,
+            journal=journal,
+            dry_run=dry_run,
+            name=name,
+            resume=resume,
+        )
     bridge = _progress_bridge(ctx, asyncio.get_running_loop()) if ctx is not None else None
     return await asyncio.to_thread(
         _run_and_assemble,
@@ -307,4 +476,5 @@ def build_server() -> FastMCP:
     """Construct the MCP server with the ``research`` tool registered."""
     server = FastMCP(_SERVER_NAME)
     server.tool()(research)
+    server.tool()(research_status)
     return server

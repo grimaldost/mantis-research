@@ -36,3 +36,43 @@ def test_changelog_has_distinct_agent_serving_grouping() -> None:
     changelog = (_ROOT / 'CHANGELOG.md').read_text(encoding='utf-8')
     assert 'agent-serving' in changelog.lower()
     assert '0002-agent-serving-mcp-plugin' in changelog
+
+
+def _skill() -> str:
+    return (Path(__file__).resolve().parents[2] / 'skills' / 'research' / 'SKILL.md').read_text(
+        encoding='utf-8'
+    )
+
+
+class TestTheSkillDoesNotOverstateLiveness:
+    """MANT-B64 — prose and code cite the same number.
+
+    The section shipped in 0.2.0 told an agent that "a silent minute means
+    something is wrong; silence is no longer the normal case". Both halves were
+    false: a local-seat stage was silent for up to its whole idle window by
+    construction, and the seat wait reached no caller at all. This is the second
+    rewrite of the same paragraph in two releases, so the claim now has a test
+    rather than a third rewrite.
+    """
+
+    def test_the_retired_claim_is_gone(self) -> None:
+        skill = _skill()
+        assert 'silence is no longer the normal case' not in skill
+        assert 'A silent minute means something is wrong' not in skill
+
+    def test_the_skill_says_silence_is_normal(self) -> None:
+        # Absence alone would stay green if the paragraph were simply deleted.
+        assert 'silent while the model thinks' in _skill()
+
+    def test_the_quoted_cadence_is_the_one_the_code_emits(self) -> None:
+        from mantis_research.interface.adapters._subprocess import ANNOUNCE_EVERY_S
+
+        assert f'{int(ANNOUNCE_EVERY_S)} s of silence' in _skill()
+
+    def test_the_stale_cost_band_is_gone(self) -> None:
+        assert '6** on the default substrate set' not in _skill()
+
+    def test_the_skill_teaches_the_detached_shape(self) -> None:
+        skill = _skill()
+        assert 'detach: true' in skill
+        assert 'research_status' in skill

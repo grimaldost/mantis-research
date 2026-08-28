@@ -245,10 +245,11 @@ with templates in [docs/method/](docs/method/README.md).
 
 ## Cost and subscription notes
 
-Research substrates bill through OpenRouter. Earlier runs came in at roughly
-$1–6 per question on the default three-substrate set and $2–6 per topic on a
-four-substrate batch, down to cents on a lean or narrow run; the per-substrate
-cost-per-call figures those came from are tabulated in
+Research substrates bill through OpenRouter. Measured across 20 runs, a focused
+technical question comes in at roughly $0.15–0.50 on the default three-substrate
+set, with broad or real-time questions reaching $1–6 and $2–6 per topic on a
+four-substrate batch; the per-substrate cost-per-call figures those came from
+are tabulated in
 [model-recommendations.md](prompts/playbooks/model-recommendations.md). They are
 observed ranges from past batches, not a current quote — provider rates move.
 Synthesis, journal, falsification, evaluation, and claude-prior run on the
