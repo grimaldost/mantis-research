@@ -125,6 +125,7 @@ class JournalPassesStage:
             name=f'journal-augment-topic-{topic_id}',
             idle_timeout_s=ctx.child_idle_timeout_s,
             seat_owner=ctx.seat_owner('journal-passes', topic_id),
+            on_event=ctx.on_event,
             add_dirs=(dirs.output('synthesis'), dirs.output('journals')),
             allowed_tools=('Read', 'Write'),
         )
@@ -141,12 +142,12 @@ class JournalPassesStage:
         if not result.success:
             return AttemptResult.fail(
                 error=result.error or 'augmentation turn failed',
-                error_output=result.raw_output,
+                error_output=result.prose_output,
             )
         if not ctx.dry_run and not augmented.exists():
             return AttemptResult.fail(
                 error=f'augmentation file not produced at {augmented.name}',
-                error_output=result.raw_output,
+                error_output=result.prose_output,
             )
         state.augmentation_bytes = augmented.stat().st_size if augmented.exists() else 0
         return AttemptResult.ok(output_bytes=state.augmentation_bytes)

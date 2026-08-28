@@ -153,6 +153,7 @@ class EvaluationStage:
             name=f'evaluate-topic-{topic_id}',
             idle_timeout_s=ctx.child_idle_timeout_s,
             seat_owner=ctx.seat_owner('evaluation', topic_id),
+            on_event=ctx.on_event,
             add_dirs=(
                 dirs.output('synthesis'),
                 dirs.output('claude'),
@@ -174,12 +175,12 @@ class EvaluationStage:
         if not result.success:
             return AttemptResult.fail(
                 error=result.error or 'evaluation turn failed',
-                error_output=result.raw_output,
+                error_output=result.prose_output,
             )
         if not ctx.dry_run and not eval_path.exists():
             return AttemptResult.fail(
                 error=f'evaluation JSON not produced at {eval_path.name}',
-                error_output=result.raw_output,
+                error_output=result.prose_output,
             )
         if eval_path.exists():
             state.eval_bytes = eval_path.stat().st_size

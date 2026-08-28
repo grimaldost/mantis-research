@@ -97,6 +97,7 @@ class ClaudeResearchStage:
             name=f'research-topic-{topic_id}',
             idle_timeout_s=ctx.child_idle_timeout_s,
             seat_owner=ctx.seat_owner('claude', topic_id),
+            on_event=ctx.on_event,
         )
 
         result = await self._adapter.run(
@@ -113,7 +114,7 @@ class ClaudeResearchStage:
         if not result.success:
             return AttemptResult.fail(
                 error=result.error or 'unknown subprocess error',
-                error_output=result.raw_output,
+                error_output=result.prose_output,
             )
 
         if not ctx.dry_run and not output_path.exists():
@@ -124,7 +125,7 @@ class ClaudeResearchStage:
             )
             return AttemptResult.fail(
                 error=f'output file not produced at {output_path.name}',
-                error_output=result.raw_output,
+                error_output=result.prose_output,
             )
 
         size = output_path.stat().st_size if output_path.exists() else 0

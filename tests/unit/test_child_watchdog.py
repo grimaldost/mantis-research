@@ -16,6 +16,9 @@ import sys
 import time
 from typing import TYPE_CHECKING
 
+import pytest
+
+from mantis_research.core.cli_stream import OutputCadence
 from mantis_research.core.retry import FailureKind, classify_failure
 from mantis_research.interface.adapters._subprocess import run_streaming
 from mantis_research.interface.adapters.claude_cli import ClaudeCliAdapter, ClaudeCliOptions
@@ -24,7 +27,7 @@ from mantis_research.interface.transcripts import TranscriptWriter
 if TYPE_CHECKING:
     from pathlib import Path
 
-    import pytest
+    from mantis_research.core.progress import RunEvent
 
 _MUTE_CHILD = 'import time; time.sleep(30)'
 _TALKING_CHILD = (
@@ -35,10 +38,22 @@ _TALKING_CHILD = (
 )
 
 
-async def _run(script: str, tmp_path: Path, idle_timeout_s: float | None):
+async def _run(script: str, tmp_path: Path, idle_timeout_s: float | None, **kw):
     cmd = [sys.executable, '-c', script]
     async with TranscriptWriter(tmp_path / 'tx.log', list(cmd)) as tx:
-        return await run_streaming(cmd, tx, idle_timeout_s=idle_timeout_s)
+        return await run_streaming(
+            cmd,
+            tx,
+            cadence=OutputCadence.STREAMING,
+            idle_timeout_s=idle_timeout_s,
+            **kw,
+        )
+
+
+@pytest.fixture(autouse=True)
+def _spawn_allowed(allow_child_spawn: None) -> None:
+    """This whole module is about the spawn, so it opts out of that ring."""
+    return
 
 
 class TestWatchdog:
@@ -88,10 +103,8 @@ class TestTheTripPathThroughTheAdapter:
 
     @staticmethod
     async def _trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        async def mute_instead(cmd, transcript, *, idle_timeout_s):
-            return await run_streaming(
-                [sys.executable, '-c', _MUTE_CHILD], transcript, idle_timeout_s=idle_timeout_s
-            )
+        async def mute_instead(cmd, transcript, **kwargs):
+            return await run_streaming([sys.executable, '-c', _MUTE_CHILD], transcript, **kwargs)
 
         monkeypatch.setattr(
             'mantis_research.interface.adapters.claude_cli.run_streaming', mute_instead
@@ -134,3 +147,64 @@ class TestTheTripPathThroughTheAdapter:
         # strand the killed session as unresumable.
         result = await self._trip(tmp_path, monkeypatch)
         assert result.session_id == 's'
+
+
+class TestTheCadenceContract:
+    """`run_streaming` refuses a watchdog it cannot honour (MANT-B58).
+
+    The caller declares whether the child speaks while it works. That is the
+    fact the watchdog depends on and the fact nobody was tracking — so the
+    runner now requires it rather than assuming it.
+    """
+
+    async def test_a_watchdog_over_a_mute_cadence_is_refused(self, tmp_path: Path) -> None:
+        cmd = [sys.executable, '-c', _TALKING_CHILD]
+        async with TranscriptWriter(tmp_path / 'tx.log', list(cmd)) as tx:
+            with pytest.raises(ValueError, match='silence'):
+                await run_streaming(cmd, tx, cadence=OutputCadence.TERMINAL, idle_timeout_s=5.0)
+
+    async def test_a_mute_cadence_without_a_watchdog_still_runs(self, tmp_path: Path) -> None:
+        cmd = [sys.executable, '-c', _TALKING_CHILD]
+        async with TranscriptWriter(tmp_path / 'tx.log', list(cmd)) as tx:
+            result = await run_streaming(
+                cmd, tx, cadence=OutputCadence.TERMINAL, idle_timeout_s=None
+            )
+        assert result.exit_code == 0
+
+
+class TestTheChildIsAudibleWhileItWorks:
+    """The events that make a long run legible (MANT-B58/B64).
+
+    Progress bridging shipped in 0.2.0 and reached the MCP path, but no event
+    was emitted between a stage starting and finishing — so the longest part of
+    the run was still silence, and the caller still gave up.
+    """
+
+    async def test_a_line_from_the_child_becomes_an_event(self, tmp_path: Path) -> None:
+        seen: list[RunEvent] = []
+        result = await _run(_TALKING_CHILD, tmp_path, 5.0, on_event=seen.append, label='synthesis')
+        assert result.exit_code == 0
+        assert seen, 'a talking child produced no events'
+        assert all(e.kind == 'thinking' for e in seen)
+
+    async def test_the_event_names_the_stage_that_is_working(self, tmp_path: Path) -> None:
+        seen: list[RunEvent] = []
+        await _run(_TALKING_CHILD, tmp_path, 5.0, on_event=seen.append, label='synthesis')
+        assert 'synthesis' in seen[0].message
+
+    async def test_a_broken_listener_does_not_fail_the_run(self, tmp_path: Path) -> None:
+        def explode(_event: RunEvent) -> None:
+            raise RuntimeError('the audience left')
+
+        result = await _run(_TALKING_CHILD, tmp_path, 5.0, on_event=explode)
+        assert result.exit_code == 0
+
+
+class TestTheChildGetsNoStdin:
+    async def test_the_child_sees_end_of_input_immediately(self, tmp_path: Path) -> None:
+        # Without this the CLI waits 3 s for stdin on every single turn and
+        # prints a warning that is not JSON into the middle of the envelope.
+        script = 'import sys; print(repr(sys.stdin.read()), flush=True)'
+        result = await _run(script, tmp_path, 5.0)
+        assert result.exit_code == 0
+        assert "''" in result.output

@@ -31,6 +31,11 @@ RunEventKind = Literal[
     'substrate_done',
     'stage_done',
     'waiting',
+    # A spawned child is still working. Emitted from the streaming runner as
+    # the child's own output arrives, rate-limited: without it the longest
+    # phase of a run — the local-seat turn — reported nothing between
+    # `stage_start` and `stage_done`, which is indistinguishable from a hang.
+    'thinking',
     'run_done',
 ]
 

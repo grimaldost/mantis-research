@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from mantis_research.core.cli_stream import ClaudeOutputFormat
 from mantis_research.interface.adapters.claude_cli import (
     ClaudeCliAdapter,
     ClaudeCliOptions,
@@ -30,8 +31,11 @@ class TestCmdAssembly:
         assert 'claude-opus-4-7' in cmd
         assert '--effort' in cmd
         assert 'max' in cmd  # default effort
-        assert '--output-format' in cmd
-        assert 'text' in cmd
+        # Adjacent pair, not membership: `'text' in cmd` also passes when any
+        # unrelated argv element happens to equal 'text'.
+        fmt = cmd.index('--output-format')
+        assert cmd[fmt + 1] == 'stream-json'
+        assert '--verbose' in cmd  # the CLI refuses stream-json without it
         # Prompt is the last arg, after the `--` terminator.
         assert cmd[-2] == '--'
         assert cmd[-1] == 'hello prompt'
@@ -130,3 +134,107 @@ class TestDryRun:
         # Transcript was created with a DRY RUN marker.
         assert transcript_path.exists()
         assert 'DRY RUN' in transcript_path.read_text(encoding='utf-8')
+
+
+class TestTheFormatAndTheWatchdogAgree:
+    """MANT-B58 — the pair that drifted apart is now checked where it is built.
+
+    The adapter asked for `text` (which emits nothing until the turn ends) and
+    the stage set a 600 s watchdog on silence. Neither setting knew about the
+    other, so the watchdog became a cap on total runtime and killed 66 of the
+    237 local-seat stages this tool has historically completed.
+    """
+
+    def test_the_default_format_streams(self) -> None:
+        assert ClaudeCliOptions(model='c').output_format is ClaudeOutputFormat.STREAM_JSON
+
+    def test_a_mute_format_beside_a_watchdog_is_refused(self) -> None:
+        with pytest.raises(ValueError, match='silence'):
+            ClaudeCliOptions(
+                model='c',
+                output_format=ClaudeOutputFormat.TEXT,
+                idle_timeout_s=600.0,
+            )
+
+    def test_a_mute_format_with_no_watchdog_is_allowed(self) -> None:
+        opts = ClaudeCliOptions(
+            model='c', output_format=ClaudeOutputFormat.TEXT, idle_timeout_s=None
+        )
+        assert opts.output_format is ClaudeOutputFormat.TEXT
+
+    def test_a_text_run_does_not_ask_for_verbose(self) -> None:
+        adapter = ClaudeCliAdapter(binary='/fake/claude')
+        opts = ClaudeCliOptions(
+            model='c',
+            session_id='s',
+            output_format=ClaudeOutputFormat.TEXT,
+            idle_timeout_s=None,
+        )
+        assert '--verbose' not in adapter._build_cmd('p', opts, 's')
+
+
+class TestWhatTheStageIsGivenToClassify:
+    """The envelope must not reach the rate-limit classifier (MANT-B58).
+
+    `RATE_LIMIT_PATTERNS` matches the substring `rate_limit`, and a healthy
+    stream-json turn emits `{"type": "rate_limit_event"}` to report remaining
+    quota. Passing `raw_output` on would classify every failure as a rate limit
+    and wait 30 minutes for it.
+    """
+
+    @staticmethod
+    def _stream() -> str:
+        import json
+
+        return '\n'.join(
+            [
+                json.dumps({'type': 'rate_limit_event', 'rate_limit_info': {'ok': True}}),
+                json.dumps(
+                    {
+                        'type': 'result',
+                        'subtype': 'success',
+                        'result': 'the file was not written',
+                        'is_error': True,
+                        'total_cost_usd': 0.031,
+                        'session_id': 's-1',
+                    }
+                ),
+            ]
+        )
+
+    async def test_the_prose_excludes_the_envelopes_own_vocabulary(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result = await self._run_with(self._stream(), tmp_path, monkeypatch)
+        assert 'rate_limit' not in result.prose_output
+        assert 'the file was not written' in result.prose_output
+
+    async def test_the_prose_is_not_a_rate_limit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from mantis_research.core.retry import FailureKind, classify_failure
+
+        result = await self._run_with(self._stream(), tmp_path, monkeypatch)
+        assert classify_failure(result.prose_output) is FailureKind.GENERIC
+        # And the raw envelope is what would have gone wrong.
+        assert classify_failure(result.raw_output) is FailureKind.RATE_LIMIT
+
+    async def test_the_turns_cost_is_recovered(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result = await self._run_with(self._stream(), tmp_path, monkeypatch)
+        assert result.cost_usd == 0.031
+
+    @staticmethod
+    async def _run_with(stream: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        from mantis_research.interface.adapters._subprocess import StreamResult
+
+        async def canned(_cmd, transcript, **_kw):
+            for line in stream.splitlines():
+                transcript.append_line(line + '\n')
+            return StreamResult(exit_code=0, output=stream, timed_out=False)
+
+        monkeypatch.setattr('mantis_research.interface.adapters.claude_cli.run_streaming', canned)
+        adapter = ClaudeCliAdapter(binary='/fake/claude')
+        opts = ClaudeCliOptions(model='m', session_id='s-1')
+        return await adapter.run('p', opts, tmp_path / 'tx.log')
