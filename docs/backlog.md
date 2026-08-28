@@ -43,6 +43,15 @@ winner silently.
    own IDs (`KEEL-`, `CONV-`, `FATH-`, `CRAF-`). Its findings are recorded as
    notes on the items they touch; one incoming dependency is an item in its own
    right (MANT-B56).
+5. **Feedback triage delta, 2026-08-28** — four further dogfooding reports
+   covering 0.2.0 and 0.3.0, re-clustered against the 2026-08-11 baseline. Cited
+   as `triage` with the delta document's own cluster IDs (T8 onward). Alongside
+   them, **a periodic post-hoc telemetry pass over Claude Code session
+   transcripts** (window 2026-06-26 → 2026-08-25) counting what an agent
+   invoked. Cited as `telemetry`. It counts agent invocations only, so a run in
+   the operator's own terminal never appears in it, and a failure returned as a
+   normal payload reads there as a success — it can say a call was made and how
+   it ended, never that the tool helped. No item above rests on it alone.
 
 Findings the operator reported directly, with no report behind them, are cited
 as `operator observation`.
@@ -73,20 +82,224 @@ here is in the delivery envelope around that output — the pipeline does not
 complete over its own primary transport, and the artifacts it does produce are
 written for the machine that made them.
 
-**Empty as of the 0.2.0 wave.** Every item that stood here — MANT-B01 through
-B08, plus B11 and B13 — is in **Landed** below. The delivery envelope is the
-work that closed: the pipeline now reports progress over MCP, no wait outlasts
-the caller, a run is named before it dispatches and can be resumed after an
-interruption, a mute child is killed rather than left in flight, and the sidecar
-carries the question and typed source provenance. Promote from **Next** when
-this section is refilled.
+**Refilled 2026-08-28 by the delta triage.** The 0.2.0 wave emptied this
+section — MANT-B01 through B08, plus B11 and B13, are in **Landed** — and the
+envelope still did not close. The items below come from four reports and a
+telemetry pass covering the two releases since, and they are ordered by leverage:
+MANT-B58 is a small change to one default that plausibly accounts for every
+synthesis failure since 0.2.0, and the transport redesign that reads as the
+obvious answer (MANT-B61) sits below three cheaper items that buy most of its
+value.
 
 **0.3.0 arrived from the field rather than from this list.** Two defects found
 in use on 2026-08-11 — a dry run settling a topic, and the serving path
 returning a briefs-only run as a result — were fixed directly and are recorded
 in **Landed**. Neither had a backlog item, and neither was findable from one:
 both are gaps between what a run reported and what it produced, which only real
-use exposes. The new item they did generate is MANT-B57, in **Later**.
+use exposes. The new item they did generate is MANT-B57, promoted from **Later**
+to MANT-B65 below.
+
+### MANT-B58 — Let the watchdog see the child working
+
+- **Claim.** The 600-second child watchdog kills healthy local-seat stages,
+  because the child it watches is configured never to speak until it is finished.
+- **Cause / evidence.** `child_idle_timeout_minutes` (default 10) is a clock on
+  *silence*, read line-by-line off the child's stdout
+  (`interface/adapters/_subprocess.py:77`). But the child is spawned with
+  `--output-format text` (`interface/adapters/claude_cli.py:55`, passed at
+  `:228`), which emits nothing until the turn ends — so the clock measures total
+  runtime. Measured 2026-08-28 on `claude` 2.1.251 with the adapter's own read
+  pattern: under `text`, 23 of 25 lines arrive in the final instant and the
+  maximum gap between lines is **11.8 s of a 16.1 s run**; under
+  `stream-json --verbose` the maximum gap is 3.7 s and that is startup. The
+  silent stretch scales with thinking time. Against that ceiling, **66 of 237**
+  local-seat stages recorded on disk as successful ran longer than 600 s
+  (min 131 s, median 429 s, max 2601 s) — all of them before the watchdog
+  existed. In the field on 2026-08-23 this produced 12 attempts and zero bytes
+  across four runs, every attempt carrying `claude produced no output for 600s`.
+  The watchdog's own docstring promises "a long-but-talking child runs as long
+  as it likes"; the child does not talk.
+- **Change.** Drive local-seat children with `--output-format stream-json
+  --verbose` and parse the streamed result, so the silence clock measures
+  silence. Then re-derive the timeout from the measured distribution rather than
+  from intuition — until the format changes, any value is a runtime cap. Add the
+  missing test: the trip path is covered, the *non*-trip path is not, and that is
+  the direction the defect runs.
+- **Effort.** M
+- **Source.** triage (T8a, T8b, T8d — 4 reports and two measurements)
+- **Note.** Verify by measurement, not by reasoning: re-run a synthesis known to
+  exceed 600 s and confirm it now completes. This item's whole claim is that a
+  number was set without measuring the thing it bounds.
+
+### MANT-B59 — Stop retrying a watchdog kill, and stop destroying the evidence
+
+- **Claim.** After a watchdog kill, the pipeline re-runs an unchanged command
+  into an unchanged environment twice more, and the retries fail on session reuse
+  rather than on the original cause.
+- **Cause / evidence.** Three strikes of 600 s plus two 300 s backoffs is 40
+  minutes per stage, all of it guaranteed to fail whenever the first attempt
+  failed for a reason the retry cannot change — the shape the 2026-08-23 report
+  filed under vacuous gates ("a gate that passes nothing and costs a full
+  window"). Independently, a retry reuses the persisted `session_id` of the
+  attempt it is retrying, so two of three retries in the original 2026-08-11
+  incident died on `Session ID ... is already in use` and the original error
+  never reappeared — the retry mechanism destroyed the diagnostic evidence of
+  the failure it was retrying.
+- **Change.** On a watchdog kill, stop retrying that stage and mark it
+  `failed-precondition`, releasing the seat so later runs skip the stage instead
+  of queueing behind it. Regenerate the session identity on any retry that does
+  survive, and keep the **first** failure's classification as the run's recorded
+  cause.
+- **Effort.** S
+- **Source.** triage (T8c — `2026-08-23 sources-research report`,
+  `2026-08-12-defect-fix-cycle`)
+
+### MANT-B60 — A research-only mode on the serving path
+
+- **Claim.** Every assurance tier ends in a stage that cannot complete inside an
+  MCP client's idle window, so the tool has no mode an agent can actually use.
+- **Cause / evidence.** `assurance` accepts `fast | standard | high`, all of
+  which end in a synthesis. The research stage alone completes in about seven
+  minutes and fits inside the window; on 2026-08-23 the rescue that worked was
+  exactly this — a hand-authored batch config driven through `run openrouter`,
+  which cost about 25 minutes of reading `research_service.py` and the example
+  config to construct. Across every recorded transcript, 18 of 18 non-dry-run
+  MCP calls aborted and none returned.
+- **Change.** Expose research-only on the MCP tool (`assurance: "research"`, or
+  an explicit `stages` list) and on `mantis research`, returning brief paths and
+  cost as the result. Also return `outputs_dir` in the tool result: the manifest
+  carries it and the agent-facing assembly drops it, so a caller that ignores
+  notifications learns the run directory only from the failure text.
+- **Effort.** S
+- **Source.** triage (T9a, T9c)
+- **Sequencing note.** This is the cheapest change that makes the serving path
+  usable, and it is independent of MANT-B61. Do it first.
+
+### MANT-B61 — A detached shape for the serving path
+
+- **Claim.** A research run legitimately takes longer than a single MCP tool call
+  can survive, and the tool has no way to hand back a handle.
+- **Cause / evidence.** `build_server()` registers exactly one tool and the
+  handler body is a single `await asyncio.to_thread(...)`
+  (`interface/mcp/server.py:283`, `:267`) — no timeout, no detach, no status, no
+  run id. `resume` is a re-entry parameter, which is a reconnect after the fact,
+  not a handle during. Aborts cluster hard at 1802–1828 s with an outlier at
+  3597 s, which reads as a ceiling on total call duration rather than on silence.
+  Progress notifications help but cannot solve it: measured on 2026-08-23 they
+  extended each caller's deadline by 216–460 s, deltas matching each run's own
+  research-stage duration, and the call still died.
+- **Change.** An additive `detach: bool = False` returning
+  `{batch_name, outputs_dir}` immediately, plus a `research_status` tool reading
+  the `run.json` and per-stage state that already exist. The blocking default
+  stays, so no existing caller breaks. The sibling series engine already runs
+  this shape — run / status / init, with a documented dry-run → detach → poll
+  workflow — so this is adopting a proven pattern, not inventing one.
+- **Effort.** M
+- **Source.** triage (T9b)
+- **Sequencing note.** Ranked below MANT-B58, B59 and B60 deliberately. Those
+  three shorten a failing run from 40 minutes to about 10 and give the caller a
+  mode that fits the window; after them, a `fast` run may well complete inside
+  the ceiling and this becomes an improvement rather than a rescue. Starting
+  here first would be the expensive answer to a problem three cheap items mostly
+  remove.
+
+### MANT-B62 — Make a run name unique by construction
+
+- **Claim.** Two concurrent runs on different questions can silently share one
+  state tree.
+- **Cause / evidence.** `research_service._slugify` truncates to 48 characters,
+  the run name is `research-{slug}-{timestamp}` at **second** granularity, and
+  the run root is created with `mkdir(parents=True, exist_ok=True)`. Four of the
+  five questions dispatched on 2026-08-23 carried a shared CONTEXT preamble and
+  slugify to the identical string; five dispatches within ten seconds produced
+  three directories. The report filed this as a dropped request; the mechanism is
+  a name collision, which is worse — a dropped request loses a run, a collision
+  can attribute one run's briefs to another's question. That is the same
+  correctness class MANT-B06 was built to close.
+- **Change.** Sub-second precision plus a short random suffix, and create the run
+  root without `exist_ok` so a collision raises instead of merging. Accept an
+  optional `name` on the MCP tool (the CLI already has `--batch-name`), and
+  absent one prefer a `RESEARCH QUESTION (<key>)` marker in the text over the
+  leading characters. Write a per-request acceptance record — question slug,
+  received_at, decision — before any run directory exists, so a request that dies
+  early is diagnosable at all.
+- **Effort.** S
+- **Source.** triage (T10a–c). Promoted from a single report because grounding
+  upgraded the finding from a lost run to a correctness hazard.
+
+### MANT-B63 — Make the seat wait audible, and bounded
+
+- **Claim.** A run can queue for the local seat for forty minutes without saying
+  so, and can hold that seat after its child has been killed.
+- **Cause / evidence.** `interface/seat.py:146` emits a `waiting` event on every
+  poll, with a comment stating it reaches an MCP client. The only call site that
+  acquires the seat is `interface/adapters/claude_cli.py:170`, which calls
+  `async_seat_lock(...)` **without `on_event`** — and `ClaudeCliOptions` carries
+  no field for one, so the emit cannot fire with a non-None callback. It is dead
+  code on the only path that reaches it. Separately, `run_streaming` calls
+  `_terminate` and then `await process.wait()` unbounded
+  (`interface/adapters/_subprocess.py:93`), while the seat lock sits on the
+  enclosing exit stack — so a child that resists termination holds the seat. On
+  2026-08-23 four runs serialised across two and a half hours (synthesis
+  `started_at` 17:39Z / 18:09Z / 18:19Z / 19:24Z against a 16:50Z dispatch), one
+  attempt recorded `turn_1_duration_s: 4502` against a 600 s watchdog, and every
+  caller had left by 17:20Z.
+- **Change.** Carry `on_event` on `ClaudeCliOptions` and pass it through. Bound
+  the post-kill wait and release the seat independently of reaping the child.
+- **Effort.** S
+- **Source.** triage (T11a, T11b). The unbounded-wait reading is grounded in the
+  code path, not directly observed — confirm it against the 4502 s record before
+  building.
+
+### MANT-B64 — Delete the liveness claim the docs cannot keep
+
+- **Claim.** `skills/research/SKILL.md` tells an agent that silence means
+  something is wrong. Silence is the normal case.
+- **Cause / evidence.** The § Cost & latency section, rewritten in 0.2.0, states
+  "Progress notifications go out … every 10 s during any internal backoff. A
+  silent minute means something is wrong; silence is no longer the normal case."
+  Both halves are false: a local-seat stage is silent for up to 600 s by
+  construction (MANT-B58) and the seat wait is silent entirely (MANT-B63). The
+  same section still quotes "$1–6" against a measured $0.15–0.50 per question
+  and a five-run total of $2.20 on 2026-08-23. It also instructs `dry_run: true`
+  first — which is what all five recorded fast MCP returns were, and which
+  reports `ok: true` and `status: complete` beside output paths that do not
+  exist.
+- **Change.** Remove the liveness paragraph rather than softening it, and state
+  the measured behaviour: a local-seat stage is silent while the model thinks.
+  Recalibrate the cost band. Add the test that keeps it caught — assert a maximum
+  inter-event gap over a representative run against a stated budget. Make a dry
+  run report `validated` rather than `complete`, and name its paths as
+  destinations. The section must come out shorter than it went in; this is the
+  second rewrite of the same paragraph in two releases, which is why the claim
+  now gets a test instead of a third rewrite.
+- **Effort.** S for the prose, M with the test.
+- **Source.** triage (T12a–d). Supersedes the cost half of MANT-B12.
+
+### MANT-B65 — A release that claims a timing property proves it offline
+
+- **Claim.** 0.2.0 declared the idle-timeout lineage closed and deferred the
+  proof to a paid external run that has still not happened.
+- **Cause / evidence.** The 0.2.0 report's own Outcome line reads "the
+  idle-timeout lineage closes on paper; field proof deferred to the queued run",
+  and its Misses record "a $70+, >1-day paid run doing duty as a unit test". That
+  run never executed: the bank is authored, armed and merged in the sibling
+  harness, its ledger has never existed on any branch, and the harness's own
+  arming report states "still unmeasured. No trials ran" — unchanged 17 days
+  later. It also pins a vendored copy of 0.2.0, so even had it run it would not
+  have measured the 0.3.0 that was in the field. The verification that did happen
+  was involuntary, in production on 2026-08-23, and found the lineage open.
+  Compounding it: a unit test invoked the real dispatch path unpatched, bought
+  three OpenRouter substrates and a real synthesis turn — eight minutes of seat
+  time and $0.070 — and the suite stayed green (MANT-B57).
+- **Change.** A release that claims a liveness or timing property ships an
+  offline adversarial repro for it; no lineage closes on a deferred external paid
+  run. This replaces MANT-B18's discoverability-only release probe rather than
+  sitting beside it. Separately, make it impossible for a test to reach a live
+  provider: blank the key by default with adapter tests opting back in, plus an
+  autouse guard failing any test that reaches the dispatch path unpatched.
+- **Effort.** M
+- **Source.** triage (T13a, T13b). Absorbs MANT-B57 and supersedes MANT-B18.
 
 ---
 
@@ -230,6 +443,10 @@ use exposes. The new item they did generate is MANT-B57, in **Later**.
   assurance. This displaces the one-line Docs gate that MANT-B10 mechanises.
 - **Effort.** S
 - **Source.** triage (T6b)
+- **Superseded by MANT-B65 (2026-08-28).** The completion axis is now the
+  narrower and better-evidenced requirement that a release claiming a liveness
+  or timing property ships an offline adversarial repro for it. 0.2.0 claimed one
+  and deferred the proof to a paid external run that never happened.
 
 ### MANT-B19 — Structured fields on verification-queue items
 
@@ -311,6 +528,11 @@ on preflight instead of billing. Held out of the 0.3.0 wave deliberately: it
 touches the openrouter adapter tests, and a defect-fix release is the wrong
 place to churn them. **S** · *operator observation*
 
+**Absorbed into MANT-B65 (2026-08-28).** The delta triage reinforced this with a
+second report and folded it into the release-verification item, where the same
+cause — a gate whose pass signal carries no information — is the subject. Build
+it there; this entry stays as the original evidence.
+
 ### MANT-B21 — Stamp the assurance tier in the synthesis header
 
 A `fast` synthesis is structurally indistinguishable from a falsified one
@@ -344,6 +566,11 @@ brief with its retrieval scope. **M** · *triage (T5c)*
 Detached and background callers currently parse state files to see progress
 (`2026-07-30-finmodel-triple-research`). One line per stage transition on stderr
 covers them without the MCP channel. **S** · *triage (T1c)*
+
+**Superseded in part by MANT-B63 (2026-08-28).** The seat wait already emits a
+`waiting` event that no caller can receive, because the only call site that
+acquires the seat passes no callback. Fix the channel that exists before adding
+a second one; what remains here is the detached-CLI case.
 
 ### MANT-B26 — Pin by test what error messages and version declarations claim
 
@@ -447,7 +674,14 @@ the list, and running it before those close buys the same two defects a third
 time — at this tool's expense, and with a number that reads as a measurement of
 this tool rather than of the harness.
 
-**Status: UNMEASURED.** The moat-precondition bank is authored and validated,
+**Status: UNMEASURED, and the bank is now stale (checked 2026-08-28).** The
+harness's ledger for this bank has never existed on any branch, and the harness's
+own arming report still reads "still unmeasured. No trials ran" — seventeen days
+after it was armed. The bank also pins a vendored copy of **0.2.0**, so running
+it as it stands would measure a version two releases behind the one that failed
+in the field on 2026-08-23. Re-point the mount before any of it is bought.
+
+The moat-precondition bank is authored and validated,
 and it has **never run** — there is no number here, in either direction. What
 exists is a staged $2 pilot in the harness's own repo, sized to check whether
 the serving defect fixed in 0.3.0 reproduces inside a spawned trial before the
