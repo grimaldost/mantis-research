@@ -124,31 +124,31 @@ attribution.
 
 ## Cost & latency
 
-Rough expectations for one question (defaults: Path B, journal off). Dollar cost
-is almost entirely OpenRouter research spend — the synthesis / falsification /
-evaluation stages run on your **local Claude seat**, adding time, not metered
-dollars — so all three tiers cost about the same for a given substrate set:
+For one question (defaults: Path B, journal off). Cost is almost entirely
+OpenRouter research spend — the local-seat stages add time, not metered dollars.
 
-- **Cost:** roughly **$1–6** on the default substrate set, down to cents on a lean
-  or narrow run. Scales with substrate count and question breadth.
-- **Latency (estimates):** `fast` ~5–15 min, `standard` ~35–75 min, `high`
-  ~50–100+ min — the falsification and evaluation passes are each full Claude
-  runs. Substrates run concurrently, so the research stage tracks the slowest one.
+- **Cost:** **$0.15–0.50** on the default three substrates for a focused
+  technical question; $1–6 for broad or real-time ones. Measured over 20 runs.
+- **Latency:** research is 5–10 min (substrates run concurrently, so it tracks
+  the slowest). Each local-seat stage after it is a full Claude turn — 131 s to
+  2601 s observed, median about 7 min. `research` stops after the briefs, `fast`
+  adds one such turn, `standard` two, `high` four.
 
-Pick the tier by how much checking the answer needs, not by how long you are
-willing to wait. Waiting is handled separately, on two axes:
+**A local-seat stage is silent while the model thinks, and that is normal.** It
+reports every **20 s of silence** while its child works; a run also reports when
+it is named, at each stage boundary, per substrate, every 5 s while queued for
+the seat, and through any backoff. The one genuinely quiet stretch is a single
+research substrate, which says nothing between starting and finishing.
 
-- **The run narrates itself.** Progress notifications go out over the MCP
-  channel as the run is named, at each stage boundary, per research substrate as
-  it starts and finishes, and every 10 s during any internal backoff. A silent
-  minute means something is wrong; silence is no longer the normal case.
-- **No single internal wait exceeds half the caller's idle budget**
-  (`runner.caller_idle_budget_seconds`, default 1500 s), so a rate-limited
-  substrate cannot sit past a client's idle window — a failure that used to look
-  like the tier's fault and was never fixed by dropping to `fast`.
+**A single tool call may not outlive your client's ceiling, and a full run
+usually does.** Pass `detach: true`, poll `research_status` with the returned
+`outputs_dir`, then call `research` again with `resume=<outputs_dir>` to collect
+it — finished stages are not re-run or re-bought. Separately, no internal wait
+exceeds half `runner.caller_idle_budget_seconds` (default 1500 s), so a
+rate-limited substrate cannot sit past your window.
 
-Use `dry_run: true` first — it validates the whole pipeline for free, then drop it
-for the real run.
+Use `dry_run: true` first — it validates the pipeline offline and for free, and
+records itself as `validated` rather than as a completed run.
 
 ## When not to use it
 

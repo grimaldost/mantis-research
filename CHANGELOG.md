@@ -7,6 +7,126 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-28
+
+Everything the 0.2.0 delivery-envelope wave promised shipped, and the envelope
+still did not close: across every recorded transcript, 18 of 18 non-dry-run MCP
+calls hit the client's ceiling and none returned. This release is what a triage
+delta over the two releases since found — including that one of 0.2.0's own
+fixes had become the largest single cause of failure.
+
+### Fixed
+
+- **The child watchdog measured total runtime, and killed healthy work.** It
+  reads the spawned child's stdout line by line and kills it after 600 s
+  without one, but the child was spawned with `--output-format text`, which
+  emits nothing until the turn ends. So the "silence" clock was a cap on
+  runtime, and its ceiling sat below the real duration of **66 of the 237**
+  local-seat stages this tool has completed (min 131 s, median 429 s, max
+  2601 s). In the field on 2026-08-23 it produced 12 attempts and zero bytes
+  across four runs. Measured on `claude` 2.1.251 with the adapter's own read
+  pattern: under `text` the longest gap between lines was 11.8 s of a 16.1 s
+  run; under `stream-json` it was 3.7 s, and that gap was startup.
+
+  The fix is not the default string. The format and the timeout were chosen for
+  different reasons, lived on one dataclass, and nothing related them. Output
+  cadence now travels with the format, `run_streaming` requires the caller to
+  declare it, and pairing a silence watchdog with a child that is mute by
+  design raises instead of being configured. (MANT-B58)
+- **A retry could only spend time.** Retry count is now a function of the
+  failure's class: a rate limit is transient, so waiting is the fix; a watchdog
+  kill is not, and retrying an abandoned child spawns a live tree beside the one
+  still running. Both are `PRECONDITION` and get one attempt rather than three.
+  The classifier could not have known — it scanned the child's *output*, so the
+  one failure that produces none read as generic and drew the transient budget.
+  The producer now declares the kind, with the text scan as the fallback. A
+  retry also mints its own session: reusing the dead one made two of three
+  retries in the original incident die on `Session ID ... is already in use`
+  rather than on the cause, destroying the evidence of the failure being
+  retried. (MANT-B59)
+- **The seat wait reached nobody, and outlived its child.** `seat.py` emits a
+  `waiting` event on every poll, with a comment saying it reaches an MCP client;
+  the one call site that acquires the seat passed no callback, so the emit was
+  unreachable. Four runs queued behind each other across 2.5 hours in silence.
+  The reap after a kill was also unbounded while the seat lock sat on the
+  enclosing exit stack, so a child that resisted termination held the machine's
+  single seat — one attempt recorded `turn_1_duration_s: 4502` against a 600 s
+  watchdog. The wait is bounded and an unreaped child is reported by pid; its
+  exit code is no longer invented either, since `returncode or 0` read a child
+  that is still running as a clean exit. (MANT-B63)
+- **Two concurrent runs could share one state tree.** A run was named after the
+  question's first 48 characters plus a timestamp to the second, and its
+  directory was created with `exist_ok=True`. On 2026-08-23 four of five
+  questions carried a shared preamble and were dispatched within ten seconds:
+  five requests, three directories. That is not a lost run but a misattributed
+  one — the correctness class the sidecar's `question` field was added to close.
+  Names now carry a random suffix, the run root is claimed with
+  `exist_ok=False`, and an explicit `--batch-name` landing on an existing run is
+  accepted only for the same question. (MANT-B62)
+- **A dry run reached the network and overstated what it did.** The model
+  resolver asked the live OpenRouter catalog for every subsession with no
+  dry-run guard, so the free validation pass was a DNS lookup away from that
+  claim being false; it is now fetched only on a real run, and hoisted out of
+  the loop. A dry run also settled its record as `status: "complete"` beside
+  paths nothing had written, and now records `validated`. (MANT-B64/B65)
+
+### Added
+
+- **`assurance: "research"`** — the cross-model briefs and their cost, with no
+  local-seat stage and no seat probe. `assurance` was naming two different
+  things, how much checking the answer gets and which stages run, so "just the
+  research" could not be asked for and every tier ended in a synthesis that
+  cannot finish inside an MCP client's window. This is the tier that ran where
+  the others could not on 2026-08-23. The serving path's sidecar refusal learns
+  the difference: a manifest records whether a sidecar was owed, and absence
+  reads as owed, which is what every earlier tier meant. (MANT-B60)
+- **`detach` on the `research` tool, and a `research_status` tool.** A single
+  tool call cannot outlive the client's ceiling and a full run usually does.
+  `detach: true` returns the run's identity immediately; `research_status`
+  reports state, per-stage exit codes, cost and output paths by reading the
+  artifacts that already exist, and reports a failed run rather than raising at
+  a caller who only asked how it went. The blocking default is unchanged, so no
+  existing caller is affected. A detached run is bound to the server's lifetime;
+  a run lost with its session is re-entered through `resume`. (MANT-B61)
+- **A `name` argument on the `research` tool**, and an inline
+  `RESEARCH QUESTION (<key>)` marker the slug prefers, so questions sharing a
+  long preamble are distinguishable. (MANT-B62)
+- **A per-request acceptance journal** at `logs/requests.jsonl`, written before
+  any run directory exists. One 2026-08-23 caller waited its full window for a
+  run with no trace anywhere on disk. (MANT-B62)
+- **The local seat's cost is recorded.** The seat is a subscription, so nothing
+  metered it per run; the `stream-json` result line carries `total_cost_usd`.
+  (MANT-B58)
+- **A `thinking` run event.** Progress bridging shipped in 0.2.0 and did reach
+  the MCP path, but nothing was emitted between a stage starting and finishing,
+  so the longest phase of a run was still silence. A local-seat stage now
+  reports roughly every 20 s while its child works. (MANT-B58)
+- **The test suite cannot reach a live provider.** The guard refuses at the HTTP
+  send and the child spawn rather than at their callers, and derives from
+  `BaseException` because the orchestrator catches `Exception` twice on the
+  attempt path — a catchable guard would turn a hermeticity breach into three
+  retries. Turning it on is what found the dry-run network call above. A green
+  suite had previously concealed a real, paid, eight-minute production run.
+  (MANT-B65)
+- **A Definition-of-Done clause**: a claimed liveness or timing property ships
+  an offline adversarial repro, and prose and test cite the same constant. 0.2.0
+  declared the idle-timeout lineage closed on a deferred paid run that was never
+  bought, and production found the lineage open twelve days later. (MANT-B65)
+
+### Changed
+
+- **`skills/research/SKILL.md` § Cost & latency**, rewritten shorter than it
+  was. It told an agent that "a silent minute means something is wrong; silence
+  is no longer the normal case" — false in two places at once. It now says a
+  local-seat stage is silent while the model thinks, quotes the cadence the code
+  actually emits (pinned by a test), teaches the detached shape, and carries the
+  measured cost band of $0.15–0.50 for a focused technical question rather than
+  $1–6. The README's band is recalibrated with it. (MANT-B64)
+- **`session_id` moves onto `TopicState`.** Six state classes declared it
+  identically and the retry contract has to be able to clear it. Additive and
+  Optional under invariant I4; historical state files load unchanged.
+
+
 ## [0.3.0] - 2026-08-12
 
 Two defects found in real field use on 2026-08-11, both in the gap between what
