@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -116,14 +117,30 @@ _NATIVE_SEARCH = frozenset({'openai', 'perplexity', 'anthropic', 'x-ai'})
 
 # assurance tier → the stage sequence to run, in dependency order.
 _TIER_STAGES: dict[str, list[str]] = {
+    # Research only: the briefs and their cost, no local-seat stage at all.
+    # `assurance` was naming two different things — how much checking the answer
+    # gets, and which stages run — so "just the research" could not be asked
+    # for, and every tier ended in a synthesis that cannot complete inside an
+    # MCP client's idle window. This is the tier that runs where the others
+    # cannot (MANT-B60).
+    'research': ['openrouter'],
     'fast': ['openrouter', 'synthesis'],
     'standard': ['openrouter', 'synthesis', 'falsification'],
     'high': ['openrouter', 'synthesis', 'falsification', 'claude-prior', 'evaluation'],
 }
 
 
+#: A caller that prefixes its question with shared context can name the topic
+#: explicitly. Four questions carrying the same CONTEXT paragraph slugged
+#: identically off their first 48 characters, which is how they collided.
+_QUESTION_KEY = re.compile(r'RESEARCH QUESTION \(([^)]{1,60})\)', re.IGNORECASE)
+
+
 def _slugify(text: str) -> str:
-    s = re.sub(r'[^a-z0-9]+', '-', text.lower()).strip('-')
+    """Name a topic from its question, preferring an explicit key."""
+    marked = _QUESTION_KEY.search(text)
+    source = marked.group(1) if marked else text
+    s = re.sub(r'[^a-z0-9]+', '-', source.lower()).strip('-')
     return (s[:48] or 'question').rstrip('-')
 
 
@@ -207,6 +224,9 @@ def _manifest(
         # manifest and in the run record is what stops a dry run's result being
         # read, by an agent or by a person, as a finished one.
         'dry_run': dry_run,
+        # Whether this run owed an epistemic sidecar at all. A research-only
+        # tier does not, and the serving path's refusal needs to know.
+        'produces_sidecar': produces_sidecar(list(results)),
         'stages': {stage: {'exit_code': rc} for stage, rc in results.items()},
         'outputs': outputs,
         'cost': _read_cost(dirs, stem),
@@ -226,6 +246,102 @@ def read_run_record(run_dir: Path) -> dict[str, Any]:
         msg = f'run record at {path} is unreadable: {exc}'
         raise ValueError(msg) from exc
     return record
+
+
+def produces_sidecar(stages: Sequence[str]) -> bool:
+    """True when this stage sequence is expected to leave an epistemic sidecar.
+
+    The sidecar is the product (ADR-0003), so a run that owes one and has none
+    is a failure. A research-only run owes none — it is briefs and their cost by
+    definition — and the refusal has to be able to tell the two apart, or it
+    refuses the one tier that works from inside a Claude Code session.
+    """
+    return 'synthesis' in stages
+
+
+def _mint_run_name(question: str) -> str:
+    """A run name that is unique by construction, not by luck (MANT-B62).
+
+    The old name was the question's first 48 characters plus a timestamp to the
+    second — two facts that are not unique, at a granularity that is not
+    unique. Four concurrent questions sharing a preamble collided on it. The
+    random suffix is what makes a collision impossible rather than unlikely;
+    the timestamp stays because a human reads these names in a directory
+    listing and wants them ordered.
+    """
+    ts = datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')
+    return f'research-{_slugify(question)}-{ts}-{secrets.token_hex(2)}'
+
+
+def _journal_request(
+    question: str,
+    assurance: str,
+    *,
+    outcome: str,
+    detail: str = '',
+) -> None:
+    """Append one line about a request, before any run directory exists.
+
+    A request that died before its directory was created left nothing at all —
+    on 2026-08-23 a caller waited its full window for a run that has no trace
+    anywhere on disk, and whether it was dropped, queued or never arrived is
+    still undiagnosable. Best-effort by construction: a journal that can fail a
+    run is worse than no journal.
+    """
+    try:
+        root = paths.logs_root()
+        root.mkdir(parents=True, exist_ok=True)
+        entry = {
+            'received_at': _now_iso(),
+            'question_slug': _slugify(question),
+            'assurance': assurance,
+            'outcome': outcome,
+            'detail': detail,
+            'pid': os.getpid(),
+        }
+        with (root / 'requests.jsonl').open('a', encoding='utf-8') as fh:
+            fh.write(json.dumps(entry) + '\n')
+    except OSError:
+        return
+
+
+class RunNameCollisionError(RuntimeError):
+    """An explicit batch name already belongs to a different question.
+
+    Two runs sharing one state tree is not a lost run, it is a misattributed
+    one: whichever finishes last leaves briefs that read as the answer to the
+    other's question. Refusing is the only outcome that cannot be misread.
+    """
+
+
+def _claim_run_root(dirs: RunDirs, question: str) -> None:
+    """Take the run directory, or refuse it (MANT-B62).
+
+    ``exist_ok=False`` makes the filesystem the arbiter for a *new* run, which
+    is what the minted name — carrying a random suffix — expects to always
+    succeed. An explicit ``--batch-name`` is the one case where a caller can
+    legitimately land on an existing directory, and there the question decides:
+    the same question is a re-run (invariant I5 calls that resume), a different
+    one is a collision.
+    """
+    root = dirs.root()
+    try:
+        root.mkdir(parents=True, exist_ok=False)
+    except FileExistsError:
+        prior = root / RUN_RECORD_NAME
+        if prior.exists():
+            try:
+                asked = json.loads(prior.read_text(encoding='utf-8')).get('question')
+            except (OSError, ValueError):
+                asked = None
+            if asked is not None and asked != question:
+                msg = (
+                    f'the run name {dirs.batch_name!r} already belongs to a different '
+                    f'question. Two runs sharing one state tree produce briefs that '
+                    f'read as the answer to the wrong question — choose another name, '
+                    f'or pass resume={str(root)!r} to continue the existing run.'
+                )
+                raise RunNameCollisionError(msg) from None
 
 
 def _write_run_record(dirs: RunDirs, record: dict[str, Any]) -> Path:
@@ -383,7 +499,8 @@ def run_research(
     from mantis_research.interface.cli.dispatch import dispatch_stage_config
 
     if assurance not in _TIER_STAGES:
-        msg = f'invalid assurance {assurance!r}; choose fast|standard|high'
+        _journal_request(question, assurance, outcome='rejected', detail='invalid assurance')
+        msg = f'invalid assurance {assurance!r}; choose {"|".join(_TIER_STAGES)}'
         raise ValueError(msg)
     source = substrates if substrates is not None else list(_DEFAULT_SUBSTRATES)
     subs = [s.strip() for s in source if s.strip()]
@@ -398,8 +515,7 @@ def run_research(
     # ``--dry-run`` already skips every stage preflight.
     if not dry_run:
         require_local_claude_seat(stages=stages)
-    ts = datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')
-    name = batch_name or f'research-{_slugify(question)}-{ts}'
+    name = batch_name or _mint_run_name(question)
 
     cfg_dict = build_config(
         question,
@@ -415,6 +531,8 @@ def run_research(
 
     # ── name the run, before anything is dispatched ────────────────
     dirs = RunDirs('batch', name)
+    _claim_run_root(dirs, question)
+    _journal_request(question, assurance, outcome='accepted', detail=name)
     identity = {
         'question': question,
         'question_slug': slug,

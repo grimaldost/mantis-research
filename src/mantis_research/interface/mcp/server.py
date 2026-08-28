@@ -109,7 +109,13 @@ def _agent_result(manifest: dict[str, Any]) -> dict[str, Any]:
         result['sidecar_available'] = True
         result.update(project_for_agent(sc))
         return result
-    if not result['dry_run']:
+    # A live run that owed a sidecar and has none produced no answer. A run
+    # that never owed one — a research-only tier, or a dry run — legitimately
+    # has none, and refusing those would refuse the tier that exists precisely
+    # because the synthesis stage could not run (MANT-B60). Absent, the flag
+    # reads as owed: every tier before this one was.
+    owed = manifest.get('produces_sidecar', True)
+    if owed and not result['dry_run']:
         raise _incomplete(manifest, sidecar_path)
     result['sidecar_available'] = False
     return result
@@ -123,6 +129,7 @@ def _run_and_assemble(
     primary: str,
     journal: bool,
     dry_run: bool,
+    name: str = '',
     resume: str = '',
     on_event: ProgressCallback | None = None,
 ) -> dict[str, Any]:
@@ -137,6 +144,7 @@ def _run_and_assemble(
             primary=primary,
             journal=journal,
             dry_run=dry_run,
+            batch_name=name,
             on_event=on_event,
         )
     return _agent_result(manifest)
@@ -178,7 +186,11 @@ async def research(
                 'synthesis. Escalate explicitly when the extra checking is worth '
                 'the extra Claude-seat time: "standard" adds an adversarial '
                 'falsification pass over the finished synthesis, "high" adds a '
-                'Claude-prior baseline and a rubric evaluation on top.'
+                'Claude-prior baseline and a rubric evaluation on top. '
+                '"research" stops after the cross-model briefs and returns their '
+                'paths and cost with no synthesis and no sidecar — the tier to '
+                'use when no local Claude seat is available, or when you want to '
+                'read the substrates yourself.'
             )
         ),
     ] = 'fast',
@@ -216,6 +228,17 @@ async def research(
         bool,
         Field(description='Validate orchestration without spending any model calls.'),
     ] = False,
+    name: Annotated[
+        str,
+        Field(
+            description=(
+                'An optional name for the run, used for its output directory. '
+                'Without one the name is derived from the question, so several '
+                'questions sharing a long common preamble read alike; you can '
+                'also mark the key inline as "RESEARCH QUESTION (<key>)".'
+            )
+        ),
+    ] = '',
     resume: Annotated[
         str,
         Field(
@@ -254,6 +277,8 @@ async def research(
         default anchors on the first substrate.
       - ``journal`` also emits a mantis-ingestion journal via a second synthesis
         turn (slower); off by default.
+      - ``name`` optionally names the run's output directory; without one the
+        name is derived from the question.
       - ``dry_run`` validates orchestration without spending model calls.
       - ``resume`` re-enters an interrupted run by its output directory instead
         of starting a new one; completed stages are skipped and the question and
@@ -272,6 +297,7 @@ async def research(
         primary=primary,
         journal=journal,
         dry_run=dry_run,
+        name=name,
         resume=resume,
         on_event=bridge,
     )
