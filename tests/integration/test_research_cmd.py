@@ -233,7 +233,9 @@ class TestRunIdentityBeforeDispatch:
             log_level='CRITICAL',
         )
         record = json.loads((rooted / 'outputs_root' / 'b' / 'run.json').read_text())
-        assert record['status'] == 'complete'
+        # A dry run settles as `validated`, not `complete` — see
+        # tests/integration/test_dry_run_offline.py for why the two differ.
+        assert record['status'] == 'validated'
         assert record['ok'] == manifest['ok']
         assert record['outputs'] == manifest['outputs']
 

@@ -26,6 +26,14 @@ externalized into a blocking checklist. Fail closed — nothing green-lights its
 ## Docs gate
 
 - [ ] Public API / config / contract changes are reflected in docs.
+- [ ] A claimed liveness or timing property ships an **offline adversarial
+      repro** — a test watched failing before the fix and passing after, using
+      no provider, no seat and no network. (A discoverability probe is not
+      evidence on this axis, and a deferred external paid run is a promise, not
+      a gate: 0.2.0 declared the idle-timeout lineage closed on one, the run was
+      never bought, and production found the lineage open twelve days later.)
+- [ ] Prose and test cite the same constant, so a number in the docs cannot
+      drift from the number the code enforces.
 
 ## Per-section gate
 

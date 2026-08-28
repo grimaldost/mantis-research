@@ -488,7 +488,11 @@ def run_research(
         results=results,
         dry_run=dry_run,
     )
-    _write_run_record(dirs, {**manifest, 'status': 'complete', 'finished_at': _now_iso()})
+    # `complete` means the artifacts under `outputs` are on disk. A dry run
+    # wrote none of them, so it says what it actually did: every path in the
+    # record is a destination, and only a real run turns them into evidence.
+    status = 'validated' if dry_run else 'complete'
+    _write_run_record(dirs, {**manifest, 'status': status, 'finished_at': _now_iso()})
     emit(
         on_event,
         RunEvent(
