@@ -51,10 +51,20 @@ def detect_rate_limit(output: str) -> bool:
 
 
 class FailureKind(StrEnum):
-    """Classification of an attempt failure for backoff selection."""
+    """Classification of an attempt failure, for backoff and budget selection.
+
+    The distinction that matters is whether waiting can help. A rate limit is
+    transient — the environment changes on its own, so the retry is the fix. A
+    precondition failure is not: the same command goes back into the same
+    environment and fails the same way, so retrying only spends the seat.
+    """
 
     RATE_LIMIT = 'rate_limit'
     GENERIC = 'generic'
+    #: Something about the environment made the attempt impossible, and nothing
+    #: about waiting changes it — a child that produced no output at all, or one
+    #: that could not be reaped. Retrying is a loop that can only cost time.
+    PRECONDITION = 'precondition'
 
 
 # The tool has to fit inside an idle window it does not control: the MCP
@@ -83,8 +93,23 @@ class RetryPolicy:
     generic_failure_backoff_minutes: int = 5
     caller_idle_budget_seconds: float | None = DEFAULT_CALLER_IDLE_BUDGET_SECONDS
 
+    def attempts_for(self, kind: FailureKind) -> int:
+        """How many attempts this failure class is worth in total.
+
+        One, for a precondition failure. Three strikes of an identical command
+        into an unchanged environment is a loop that can only spend seat time —
+        and it did: twelve attempts, zero bytes, serialised across 2.5 hours.
+        """
+        if kind is FailureKind.PRECONDITION:
+            return 1
+        return self.max_retries_per_stage + 1
+
     def backoff_seconds(self, kind: FailureKind) -> float:
         """Return the seconds to wait before the next retry, capped to the budget."""
+        if kind is FailureKind.PRECONDITION:
+            # Nothing to wait for. A backoff here would hold the seat while the
+            # answer stayed the same.
+            return 0.0
         minutes = (
             self.rate_limit_backoff_minutes
             if kind is FailureKind.RATE_LIMIT
@@ -95,11 +120,25 @@ class RetryPolicy:
             return wait
         return min(wait, self.caller_idle_budget_seconds / 2)
 
-    def is_final_attempt(self, attempt_number: int) -> bool:
-        """attempt_number is 1-indexed — total attempts = max_retries+1."""
-        return attempt_number > self.max_retries_per_stage
+    def is_final_attempt(self, attempt_number: int, kind: FailureKind) -> bool:
+        """True when ``attempt_number`` (1-indexed) exhausts this kind's budget."""
+        return attempt_number >= self.attempts_for(kind)
 
 
 def classify_failure(error_text: str) -> FailureKind:
     """Bucket an error text/output into RATE_LIMIT vs GENERIC."""
     return FailureKind.RATE_LIMIT if detect_rate_limit(error_text) else FailureKind.GENERIC
+
+
+def resolve_failure_kind(*, declared: FailureKind | None, error_output: str) -> FailureKind:
+    """Prefer the kind the producer declared over one guessed from its text.
+
+    Scanning the output was the only classifier, which meant the one failure
+    that produces *no* output — a watchdog kill — could never be recognised: it
+    read as GENERIC and drew the transient budget. The adapter knew, and the
+    knowledge died at the ``AttemptResult`` boundary. Text remains the fallback
+    for producers that only have text.
+    """
+    if declared is not None:
+        return declared
+    return classify_failure(error_output)

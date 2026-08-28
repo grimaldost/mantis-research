@@ -23,6 +23,7 @@ import structlog
 
 from mantis_research.core.cli_stream import ClaudeOutputFormat, parse_stream
 from mantis_research.core.paths import seat_lock_path
+from mantis_research.core.retry import FailureKind
 from mantis_research.interface.adapters._subprocess import (
     DEFAULT_CHILD_IDLE_TIMEOUT_S,
     run_streaming,
@@ -105,6 +106,22 @@ class ClaudeCliResult:
     # The turn's dollar cost, off the stream's result line. The local seat is a
     # subscription, so nothing metered this before.
     cost_usd: float | None = None
+    #: Set when the child could not be reaped and was left running.
+    abandoned_pid: int | None = None
+
+    @property
+    def failure_kind(self) -> FailureKind | None:
+        """The failure's class, when this result knows it.
+
+        A child killed for silence, or one that could not be reaped, is a
+        precondition failure: the same command into the same environment will
+        do the same thing, and a second attempt on an abandoned child spawns a
+        live tree beside the one still running. Anything else declares nothing
+        and lets the text classifier decide (MANT-B59).
+        """
+        if self.timed_out or self.abandoned_pid is not None:
+            return FailureKind.PRECONDITION
+        return None
 
 
 class ClaudeCliAdapter:
@@ -233,6 +250,7 @@ class ClaudeCliAdapter:
                 timed_out=True,
                 prose_output=summary.prose,
                 cost_usd=summary.cost_usd,
+                abandoned_pid=stream.abandoned_pid,
             )
         if stream.exit_code != 0:
             return ClaudeCliResult(
@@ -244,6 +262,7 @@ class ClaudeCliAdapter:
                 session_id=session_id,
                 prose_output=summary.prose,
                 cost_usd=summary.cost_usd,
+                abandoned_pid=stream.abandoned_pid,
             )
         return ClaudeCliResult(
             success=True,

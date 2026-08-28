@@ -42,6 +42,14 @@ DEFAULT_CHILD_IDLE_TIMEOUT_S = 600.0
 #: channel to say one thing — that the stage is still alive.
 ANNOUNCE_EVERY_S = 20.0
 
+#: How long to wait for a killed child to be reaped before giving up on it.
+#: The wait after the kill used to be unbounded, and the seat lock is released
+#: only when this function returns — so a child that resisted termination held
+#: the machine's single Claude seat, and the next run queued behind a process
+#: nobody was waiting for. Returning without the corpse is worse bookkeeping and
+#: better behaviour: the pid is reported so the caller can say what was left.
+REAP_TIMEOUT_S = 10.0
+
 
 @dataclass(frozen=True, slots=True)
 class StreamResult:
@@ -50,6 +58,9 @@ class StreamResult:
     exit_code: int
     output: str  # merged stdout+stderr, for rate-limit classification
     timed_out: bool = False  # the watchdog killed a child that produced nothing
+    #: Set when the child could not be reaped within :data:`REAP_TIMEOUT_S`.
+    #: A process was left running; the seat was released anyway.
+    abandoned_pid: int | None = None
 
 
 async def run_streaming(
@@ -132,10 +143,27 @@ async def run_streaming(
                 ),
             )
 
-    await process.wait()
-    exit_code = process.returncode or 0
+    abandoned_pid: int | None = None
+    try:
+        await asyncio.wait_for(process.wait(), timeout=REAP_TIMEOUT_S)
+    except TimeoutError:
+        abandoned_pid = process.pid
+        log.error(
+            'child could not be reaped — releasing the seat and leaving it running',
+            pid=process.pid,
+            reap_timeout_s=REAP_TIMEOUT_S,
+        )
+
+    # `returncode or 0` would read None — a child that is still running — as a
+    # clean exit. That is the one value this must never invent.
+    exit_code = -1 if process.returncode is None else process.returncode
     transcript.finalize(exit_code=exit_code)
-    return StreamResult(exit_code=exit_code, output=''.join(captured), timed_out=timed_out)
+    return StreamResult(
+        exit_code=exit_code,
+        output=''.join(captured),
+        timed_out=timed_out,
+        abandoned_pid=abandoned_pid,
+    )
 
 
 async def _terminate(process: asyncio.subprocess.Process) -> None:

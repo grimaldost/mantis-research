@@ -299,11 +299,13 @@ class SynthesisStage:
                 return AttemptResult.fail(
                     error=t1.error or 'synthesis turn 1 failed',
                     error_output=t1.prose_output,
+                    failure_kind=t1.failure_kind,
                 )
             if not ctx.dry_run and not synthesis_path.exists():
                 return AttemptResult.fail(
                     error=f'synthesis file not produced at {synthesis_path.name}',
                     error_output=t1.prose_output,
+                    failure_kind=t1.failure_kind,
                 )
             state.synthesis_bytes = synthesis_path.stat().st_size if synthesis_path.exists() else 0
 
@@ -379,11 +381,13 @@ class SynthesisStage:
             return AttemptResult.fail(
                 error=t2.error or 'journal turn 2 failed',
                 error_output=t2.prose_output,
+                failure_kind=t2.failure_kind,
             )
         if not ctx.dry_run and not journal_path.exists():
             return AttemptResult.fail(
                 error=f'journal file not produced at {journal_path.name}',
                 error_output=t2.prose_output,
+                failure_kind=t2.failure_kind,
             )
         state.journal_bytes = journal_path.stat().st_size if journal_path.exists() else 0
 

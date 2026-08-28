@@ -115,6 +115,7 @@ class ClaudeResearchStage:
             return AttemptResult.fail(
                 error=result.error or 'unknown subprocess error',
                 error_output=result.prose_output,
+                failure_kind=result.failure_kind,
             )
 
         if not ctx.dry_run and not output_path.exists():
@@ -126,6 +127,7 @@ class ClaudeResearchStage:
             return AttemptResult.fail(
                 error=f'output file not produced at {output_path.name}',
                 error_output=result.prose_output,
+                failure_kind=result.failure_kind,
             )
 
         size = output_path.stat().st_size if output_path.exists() else 0

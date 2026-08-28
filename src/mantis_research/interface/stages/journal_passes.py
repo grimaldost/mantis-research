@@ -143,11 +143,13 @@ class JournalPassesStage:
             return AttemptResult.fail(
                 error=result.error or 'augmentation turn failed',
                 error_output=result.prose_output,
+                failure_kind=result.failure_kind,
             )
         if not ctx.dry_run and not augmented.exists():
             return AttemptResult.fail(
                 error=f'augmentation file not produced at {augmented.name}',
                 error_output=result.prose_output,
+                failure_kind=result.failure_kind,
             )
         state.augmentation_bytes = augmented.stat().st_size if augmented.exists() else 0
         return AttemptResult.ok(output_bytes=state.augmentation_bytes)

@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
     from mantis_research.core.config import BatchConfig, TopicConfig
     from mantis_research.core.progress import ProgressCallback
+    from mantis_research.core.retry import FailureKind
     from mantis_research.core.state import TopicState
 
 
@@ -41,17 +42,32 @@ class AttemptResult:
 
     success: bool
     error: str | None = None
-    error_output: str = ''  # raw subprocess output for rate-limit detection
+    error_output: str = ''  # human-readable failure text, for rate-limit detection
     output_bytes: int | None = None
     extras: dict[str, Any] = field(default_factory=dict)
+    #: What kind of failure this was, when the stage knows. Scanning
+    #: ``error_output`` is a guess, and it cannot recognise the one failure that
+    #: produces no output at all — a child killed for silence. The producer has
+    #: the fact; before this it died here.
+    failure_kind: FailureKind | None = None
 
     @classmethod
     def ok(cls, output_bytes: int | None = None, **extras: Any) -> AttemptResult:
         return cls(success=True, output_bytes=output_bytes, extras=extras)
 
     @classmethod
-    def fail(cls, error: str, error_output: str = '') -> AttemptResult:
-        return cls(success=False, error=error, error_output=error_output)
+    def fail(
+        cls,
+        error: str,
+        error_output: str = '',
+        failure_kind: FailureKind | None = None,
+    ) -> AttemptResult:
+        return cls(
+            success=False,
+            error=error,
+            error_output=error_output,
+            failure_kind=failure_kind,
+        )
 
 
 # ── run context ──────────────────────────────────────────────────────

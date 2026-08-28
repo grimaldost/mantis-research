@@ -98,11 +98,13 @@ class ClaudePriorStage:
             return AttemptResult.fail(
                 error=result.error or 'claude-prior turn failed',
                 error_output=result.prose_output,
+                failure_kind=result.failure_kind,
             )
         if not ctx.dry_run and not output_path.exists():
             return AttemptResult.fail(
                 error=f'baseline not produced at {output_path.name}',
                 error_output=result.prose_output,
+                failure_kind=result.failure_kind,
             )
         state.baseline_bytes = output_path.stat().st_size if output_path.exists() else 0
         return AttemptResult.ok(output_bytes=state.baseline_bytes)

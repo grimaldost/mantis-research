@@ -176,11 +176,13 @@ class EvaluationStage:
             return AttemptResult.fail(
                 error=result.error or 'evaluation turn failed',
                 error_output=result.prose_output,
+                failure_kind=result.failure_kind,
             )
         if not ctx.dry_run and not eval_path.exists():
             return AttemptResult.fail(
                 error=f'evaluation JSON not produced at {eval_path.name}',
                 error_output=result.prose_output,
+                failure_kind=result.failure_kind,
             )
         if eval_path.exists():
             state.eval_bytes = eval_path.stat().st_size
