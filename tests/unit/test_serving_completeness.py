@@ -22,7 +22,11 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from mantis_research.interface.mcp.server import IncompleteRunError, research
+from mantis_research.interface.mcp.server import (
+    IncompleteRunError,
+    _agent_result,
+    research,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -191,3 +195,63 @@ class TestWhatIsStillReturned:
         result = await research('q', dry_run=True)
         assert result['dry_run'] is True
         assert result['sidecar_available'] is False
+
+
+class TestAResearchOnlyRunIsNotIncomplete:
+    """MANT-B60 — the refusal must learn which runs owe a sidecar.
+
+    0.3.0 made a live run with no sidecar raise, because the sidecar is the
+    product and a briefs-only result read as an answer. A research-only run
+    produces no sidecar *by design*, so the same guard would refuse the one
+    tier that works from inside a Claude Code session.
+    """
+
+    def test_a_research_tier_manifest_says_it_owes_no_sidecar(self) -> None:
+        from mantis_research.interface.research_service import _TIER_STAGES, produces_sidecar
+
+        assert produces_sidecar(_TIER_STAGES['research']) is False
+        assert produces_sidecar(_TIER_STAGES['fast']) is True
+
+    def test_a_research_only_result_is_returned_not_refused(self, tmp_path: Path) -> None:
+        manifest = {
+            'ok': True,
+            'dry_run': False,
+            'question': 'q',
+            'assurance': 'research',
+            'produces_sidecar': False,
+            'cost': {'available': True, 'cost_usd': 0.42},
+            'stages': {'openrouter': {'exit_code': 0}},
+            'outputs': {'sidecar': str(tmp_path / 'nothing.json'), 'briefs': ['a.md']},
+        }
+        result = _agent_result(manifest)
+        assert result['sidecar_available'] is False
+        assert result['cost']['cost_usd'] == 0.42
+
+    def test_a_synthesis_tier_with_no_sidecar_still_raises(self, tmp_path: Path) -> None:
+        manifest = {
+            'ok': True,
+            'dry_run': False,
+            'question': 'q',
+            'assurance': 'fast',
+            'produces_sidecar': True,
+            'cost': {},
+            'stages': {'synthesis': {'exit_code': 1}},
+            'outputs': {'sidecar': str(tmp_path / 'nothing.json')},
+        }
+        with pytest.raises(IncompleteRunError):
+            _agent_result(manifest)
+
+    def test_a_manifest_without_the_flag_still_demands_a_sidecar(self, tmp_path: Path) -> None:
+        # Older run records predate the field; absence must read as "owed",
+        # which is what every tier before this one meant.
+        manifest = {
+            'ok': True,
+            'dry_run': False,
+            'question': 'q',
+            'assurance': 'fast',
+            'cost': {},
+            'stages': {'synthesis': {'exit_code': 1}},
+            'outputs': {'sidecar': str(tmp_path / 'nothing.json')},
+        }
+        with pytest.raises(IncompleteRunError):
+            _agent_result(manifest)

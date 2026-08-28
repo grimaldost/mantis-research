@@ -40,7 +40,7 @@ __all__ = (
 def research_cmd(
     question: Annotated[str, typer.Argument(help='The research question')] = '',
     assurance: Annotated[
-        str, typer.Option('--assurance', help='fast | standard | high')
+        str, typer.Option('--assurance', help='research | fast | standard | high')
     ] = 'standard',
     substrates: Annotated[
         str,

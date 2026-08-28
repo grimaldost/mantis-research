@@ -29,7 +29,16 @@ async def test_research_tool_schema_documents_every_parameter() -> None:
     tools = await server.list_tools()
     tool = next(t for t in tools if t.name == 'research')
     props = tool.inputSchema['properties']
-    expected = {'question', 'assurance', 'substrates', 'primary', 'journal', 'dry_run', 'resume'}
+    expected = {
+        'question',
+        'assurance',
+        'substrates',
+        'primary',
+        'journal',
+        'dry_run',
+        'resume',
+        'name',
+    }
     assert set(props) == expected
     for name in expected:
         assert props[name].get('description', '').strip(), f'{name} has no description'
@@ -134,3 +143,17 @@ async def test_research_tool_runs_in_live_loop_without_asyncio_error(
     # Protocol safety: the tool must write NOTHING to stdout — the stdio MCP
     # server owns stdout for JSON-RPC, and pipeline logs go to stderr.
     assert capsys.readouterr().out == ''
+
+
+async def test_research_tool_offers_a_research_only_tier() -> None:
+    """MANT-B60 — the tier that works from inside a Claude Code session."""
+    tool = next(t for t in await build_server().list_tools() if t.name == 'research')
+    description = tool.inputSchema['properties']['assurance']['description']
+    assert 'research' in description
+
+
+async def test_research_tool_accepts_a_name() -> None:
+    """MANT-B62 — a caller that prefixes shared context can name its run."""
+    tool = next(t for t in await build_server().list_tools() if t.name == 'research')
+    assert 'name' in tool.inputSchema['properties']
+    assert tool.inputSchema['properties']['name']['description']
