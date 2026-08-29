@@ -28,8 +28,12 @@ it with one `git config` rather than a remembered convention.
 
 ## Gates
 
-There is no hosted CI — pre-commit plus these commands **are** the gate; keep
-them green locally before pushing:
+Hosted CI (`.github/workflows/ci.yml`) runs the gate battery on every push to
+main and every pull request, on Ubuntu and Windows. The pre-commit hooks are
+the local first line — formatting, lint, the core-purity gate and the test
+suite run on every commit, and the commit-msg hook holds the message to
+Conventional Commits and rejects AI-attribution trailers. Keep these commands
+green locally before pushing:
 
 ```bash
 uv run ruff format --check src tests        # formatting
@@ -101,7 +105,10 @@ artifact trees stay readable. Details and enforcement:
   ([docs/specs/README.md](docs/specs/README.md)), gated by the
   Definition-of-Ready checklist in [docs/method/](docs/method/README.md).
 - Every user-visible change appends to `CHANGELOG.md` under **Unreleased**
-  (Keep a Changelog format), in the same change that lands it.
+  (Keep a Changelog format), in the same change that lands it. CI enforces
+  this on pull requests (`scripts/changelog_currency.py`): a diff touching
+  `src/` or `scripts/` with no `CHANGELOG.md` edit fails, unless a commit in
+  the range declares `Changelog: none (<reason>)`.
 
 ## Releases
 

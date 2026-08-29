@@ -1,0 +1,42 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      # The committed uv.lock (which also records the root package's version)
+      # must be current; a stale lock reds CI. This must run before any
+      # `uv sync`/`uv run`, which would quietly re-lock first.
+      - run: uv lock --check
+      - run: uv sync
+      - run: uv run ruff format --check src tests
+      - run: uv run ruff check src tests
+      - run: uv run ty check src
+      - run: uv run python -m pytest -q
+      - run: uv run python scripts/check_core_purity.py
+
+  changelog-currency:
+    # CONTRIBUTING's changelog rule, machine-enforced: a diff that ships source
+    # while CHANGELOG.md stays untouched — and no commit declares
+    # `Changelog: none (<reason>)` — is an unrecorded change. PR-only: the base
+    # ref is what makes the diff meaningful.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the merge-base with the target branch has to exist locally
+      - uses: astral-sh/setup-uv@v5
+      - run: |
+          git log --format=%B "origin/${{ github.base_ref }}..HEAD" > "${RUNNER_TEMP}/commit-messages.txt"
+          git diff --name-only "origin/${{ github.base_ref }}...HEAD" \
+            | uv run --no-project python scripts/changelog_currency.py --messages "${RUNNER_TEMP}/commit-messages.txt"

@@ -7,6 +7,18 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+### Added
+
+- **Hosted CI.** Every push to main and every pull request now runs the gate
+  battery — lock check, formatting, lint, `ty`, the suite, core purity — on
+  Ubuntu and Windows (`.github/workflows/ci.yml`). Until now the pre-commit
+  hook was the only mechanical gate, its own comment said so, and
+  `--no-verify` had nothing behind it. A PR-only changelog-currency job
+  (`scripts/changelog_currency.py`, ported from keel's working gate) fails a
+  diff that touches `src/` or `scripts/` without a `CHANGELOG.md` entry or a
+  `Changelog: none (<reason>)` declaration — the rule this file's own
+  convention stated but nothing enforced.
+
 ## [0.4.0] - 2026-08-28
 
 Everything the 0.2.0 delivery-envelope wave promised shipped, and the envelope

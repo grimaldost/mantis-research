@@ -34,11 +34,15 @@ uv run pytest                # run tests
 uv run ruff check src tests  # lint
 uv run ruff format src tests # format (single-quotes for code, double for docstrings)
 uv run ty check src          # type check (Astral's ty, primary)
-uvx mypy src                 # mypy cross-check (not in the dev group; no hosted CI)
+uvx mypy src                 # mypy cross-check (not in the dev group; not in CI)
 uv run python scripts/check_core_purity.py  # invariant I1: no I/O imports in core/
 uv run pip-audit             # CVE scan
-uv run python -m pre_commit run --all-files  # all hooks (ruff-format, ruff, core-purity)
+uv run python -m pre_commit run --all-files  # all hooks (ruff-format, ruff, core-purity, pytest)
 ```
+
+Hosted CI (`.github/workflows/ci.yml`) runs the same battery on Ubuntu and
+Windows for every push to main and every pull request, plus a PR-only
+changelog-currency check (`scripts/changelog_currency.py`).
 
 ## Code style
 
