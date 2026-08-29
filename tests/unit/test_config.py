@@ -168,6 +168,20 @@ class TestLoaderHelper:
         cfg = load_batch_config(raw)
         assert cfg.schema_version == 2
 
+    def test_load_raw_json_string_longer_than_a_filename(self) -> None:
+        # Deliberately sized past NAME_MAX (255 bytes on mainstream unix
+        # filesystems) so the loader's path-versus-JSON probe would raise
+        # ENAMETOOLONG on Linux if it let the stat escape — Windows answers
+        # False for the same probe, which is why only the ubuntu CI leg ever
+        # saw this. The minimal fixture sits near the limit by coincidence;
+        # this test clears it on purpose.
+        cfg_dict = _minimal_config_dict()
+        cfg_dict['description'] = 'x' * 300
+        raw = json.dumps(cfg_dict)
+        assert len(raw) > 255
+        cfg = load_batch_config(raw)
+        assert cfg.description == 'x' * 300
+
 
 class TestRealConfigsRoundTrip:
     """Validate the real batch-10 and batch-11 configs round-trip cleanly."""
