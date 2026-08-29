@@ -32,6 +32,14 @@ releases (starting with 0.1.0).
   entry, and the newest CHANGELOG release heading name the same version, so a
   drifted copy fails the suite instead of shipping.
 
+### Changed
+
+- **Release ritual tightened.** CONTRIBUTING now states what practice mostly
+  already did: the release commit is metadata-only (CHANGELOG roll, the two
+  version copies, `uv.lock`) — the 0.4.0 release commit carried the whole
+  detach feature, which is the slip this rule closes — and the tag is
+  annotated on the release PR's merge commit, with the exact command given.
+
 ## [0.4.0] - 2026-08-28
 
 Everything the 0.2.0 delivery-envelope wave promised shipped, and the envelope

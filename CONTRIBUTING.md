@@ -112,6 +112,12 @@ artifact trees stay readable. Details and enforcement:
 
 ## Releases
 
+The release commit contains only `CHANGELOG.md`, the two version copies, and
+`uv.lock` — feature code lands in its own prior commit or PR, even when the
+feature is what motivates the release. This keeps `git bisect` and per-commit
+review meaningful across release boundaries (the 0.4.0 release commit carried
+a whole feature; this rule is what that taught).
+
 1. Move the Unreleased entries under a new version heading with today's date.
 2. Bump `version` in `pyproject.toml` and mirror it in
    `.claude-plugin/plugin.json` (`test_plugin_manifest.py` asserts the two
@@ -124,5 +130,9 @@ artifact trees stay readable. Details and enforcement:
    the root package's version too, matches the bump. Re-syncing is also what
    refreshes the editable install's metadata — until then `mantis version`
    keeps printing the old number.
-4. Tag `vX.Y.Z` and push. The documented install paths (`uv tool install
+4. Merge the release PR, then tag its merge commit with an annotated tag —
+   `git tag -a vX.Y.Z <release-merge-commit> -m 'mantis-research X.Y.Z'` —
+   and push the tag. Annotated, so the tag carries its own tagger date; the
+   merge commit, never main's later tip, so the tag names exactly what the
+   release PR reviewed. The documented install paths (`uv tool install
    git+…`, the plugin marketplace) pick releases up from GitHub.
