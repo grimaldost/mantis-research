@@ -22,6 +22,7 @@ import json
 import os
 import signal
 import sys
+import threading
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
@@ -390,7 +391,18 @@ class Orchestrator:
 
     @staticmethod
     def _install_signal_handlers(stop: asyncio.Event) -> None:
-        """Wire SIGINT to set ``stop`` (graceful shutdown)."""
+        """Wire SIGINT to set ``stop`` (graceful shutdown).
+
+        Only the process's main thread receives signals, and both wiring
+        mechanisms below refuse outside it — ``signal.signal`` with ValueError,
+        ``loop.add_signal_handler`` via ``set_wakeup_fd``. The MCP server runs
+        the orchestrator on worker threads (``asyncio.to_thread``, the detach
+        thread), so off the main thread there is nothing to wire: skip, rather
+        than die on the refusal. Ctrl-C then reaches the server's own loop,
+        which owns shutdown for every run it hosts.
+        """
+        if threading.current_thread() is not threading.main_thread():
+            return
         loop = asyncio.get_running_loop()
 
         def _handler() -> None:
