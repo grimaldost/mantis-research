@@ -66,6 +66,11 @@ def process_is_alive(pid: int) -> bool:
 
 
 def _win32_process_is_alive(pid: int) -> bool:
+    if sys.platform != 'win32':
+        # The one call site guards on platform already; this narrows the type
+        # checker's view too, so `ctypes.windll` (Windows-only in typeshed)
+        # resolves on every checking platform, not just Windows.
+        raise RuntimeError('Windows-only helper called off-Windows')
     import ctypes
 
     kernel32 = ctypes.windll.kernel32
