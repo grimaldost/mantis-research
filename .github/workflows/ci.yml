@@ -40,3 +40,9 @@ jobs:
           git log --format=%B "origin/${{ github.base_ref }}..HEAD" > "${RUNNER_TEMP}/commit-messages.txt"
           git diff --name-only "origin/${{ github.base_ref }}...HEAD" \
             | uv run --no-project python scripts/changelog_currency.py --messages "${RUNNER_TEMP}/commit-messages.txt"
+      # Version arm: a PR that cuts a new release heading must move the newest version strictly
+      # forward; the version-site equality tests in the `check` job hold every site to that
+      # same heading.
+      - run: |
+          git show "origin/${{ github.base_ref }}:CHANGELOG.md" > "${RUNNER_TEMP}/base-changelog.md"
+          uv run --no-project python scripts/changelog_currency.py --headings "${RUNNER_TEMP}/base-changelog.md" CHANGELOG.md

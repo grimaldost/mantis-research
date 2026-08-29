@@ -61,3 +61,31 @@ class TestChangelogCurrency:
     def test_docs_only_change_passes(self) -> None:
         gate = _load_gate()
         assert gate.unrecorded_source_paths(['docs/architecture.md', 'README.md']) == []
+
+
+class TestHeadingRegression:
+    def test_backwards_cut_is_named(self) -> None:
+        # The red proof for the version arm: a cut at or below the previous
+        # newest heading fails.
+        gate = _load_gate()
+        base = '## [Unreleased]\n\n## [0.4.0] - 2026-08-28\n'
+        head = '## [Unreleased]\n\n## [0.3.9] - 2026-08-29\n\n## [0.4.0] - 2026-08-28\n'
+        problem = gate.heading_regression(base, head)
+        assert problem is not None
+        assert '0.3.9' in problem
+
+    def test_forward_cut_passes(self) -> None:
+        gate = _load_gate()
+        base = '## [Unreleased]\n\n## [0.4.0] - 2026-08-28\n'
+        head = '## [Unreleased]\n\n## [0.5.0] - 2026-08-29\n\n## [0.4.0] - 2026-08-28\n'
+        assert gate.heading_regression(base, head) is None
+
+    def test_no_cut_passes(self) -> None:
+        gate = _load_gate()
+        text = '## [Unreleased]\n\n## [0.4.0] - 2026-08-28\n'
+        assert gate.heading_regression(text, text) is None
+
+    def test_losing_every_heading_is_parse_rot(self) -> None:
+        gate = _load_gate()
+        base = '## [Unreleased]\n\n## [0.4.0] - 2026-08-28\n'
+        assert gate.heading_regression(base, '## [Unreleased]\n') is not None

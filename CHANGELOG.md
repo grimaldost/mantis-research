@@ -17,7 +17,9 @@ releases (starting with 0.1.0).
   (`scripts/changelog_currency.py`, ported from keel's working gate) fails a
   diff that touches `src/` or `scripts/` without a `CHANGELOG.md` entry or a
   `Changelog: none (<reason>)` declaration — the rule this file's own
-  convention stated but nothing enforced.
+  convention stated but nothing enforced. A version arm on the same job fails
+  a PR whose release cut moves the newest heading backwards; the version-site
+  equality tests then hold every copy to that heading in the same run.
 - **The suite joined the commit lane, and the message got a gate.** The hooks
   ran ruff and the purity check but not the tests, so a commit that broke the
   suite passed them — "pre-commit plus these commands are the gate" was half
