@@ -11,6 +11,7 @@
 #     git config core.hooksPath scripts/git-hooks
 #
 # Bypass for a single commit with `git commit --no-verify` — and then fix what
-# it would have caught, because there is no hosted CI behind this.
+# it would have caught before pushing; hosted CI runs the same battery behind
+# this and will red the push otherwise.
 set -e
 exec uv run python -m pre_commit run --config .pre-commit-config.yaml --hook-stage pre-commit

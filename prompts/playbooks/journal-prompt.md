@@ -123,11 +123,11 @@ under-utilize it. Override to:
 ### Specific domain tags need pinning
 
 If the topic's downstream mantis ingestion needs domain tags not
-inferrable from the synthesis content (e.g., a treasuryutils-specific
-cluster), pin them:
+inferrable from the synthesis content (e.g., a cluster specific to an
+in-house library), pin them:
 
 > *"All entries should include `domains` field containing
-> `treasury, fixed_income, br_regulatory` regardless of which
+> `inventory, logistics, eu_regulatory` regardless of which
 > sub-area of the synthesis they reference."*
 
 ### Cross-project lens explicitly named

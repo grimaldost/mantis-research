@@ -7,6 +7,61 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+### Added
+
+- **Hosted CI.** Every push to main and every pull request now runs the gate
+  battery — lock check, formatting, lint, `ty`, the suite, core purity — on
+  Ubuntu and Windows (`.github/workflows/ci.yml`). Until now the pre-commit
+  hook was the only mechanical gate, its own comment said so, and
+  `--no-verify` had nothing behind it. A PR-only changelog-currency job
+  (`scripts/changelog_currency.py`, ported from keel's working gate) fails a
+  diff that touches `src/`, `scripts/` or `skills/` without a `CHANGELOG.md` entry or a
+  `Changelog: none (<reason>)` declaration — the rule this file's own
+  convention stated but nothing enforced. A version arm on the same job fails
+  a PR whose release cut moves the newest heading backwards; the version-site
+  equality tests then hold every copy to that heading in the same run.
+- **The suite joined the commit lane, and the message got a gate.** The hooks
+  ran ruff and the purity check but not the tests, so a commit that broke the
+  suite passed them — "pre-commit plus these commands are the gate" was half
+  manual. The hermetic suite (~17 s) now runs on every commit, and a new
+  checked-in `scripts/git-hooks/commit-msg` hook holds messages to
+  Conventional Commits and rejects AI-attribution lines — Co-Authored-By
+  trailers and standalone generated-with lines alike
+  (`scripts/check_commit_message.py`, test-covered like the other gates) —
+  wired through the same `core.hooksPath` install as the existing hook.
+- **Version sites agree by test, not convention.** `test_plugin_manifest.py`
+  asserted only that the plugin manifest *has* a version; the release
+  checklist called the copies "kept in sync by convention". It now asserts
+  `pyproject.toml`, `.claude-plugin/plugin.json`, the `uv.lock` root-package
+  entry, and the newest CHANGELOG release heading name the same version, so a
+  drifted copy fails the suite instead of shipping.
+
+### Fixed
+
+- **The MCP research tool died at dispatch on unix hosts.** First run of the
+  new ubuntu CI leg: the orchestrator wires SIGINT with
+  `loop.add_signal_handler`, which unix accepts only on the process's main
+  thread — and the MCP server runs every research call on a worker thread
+  (`asyncio.to_thread`, the detach thread). The Windows arm of the same
+  function already suppressed its main-thread refusal; the unix arm never got
+  the equivalent, so the suite this repo only ever ran on Windows could not
+  see it. Signal wiring is now skipped off the main thread on both platforms
+  — there is nothing to wire there; Ctrl-C reaches the server's own loop,
+  which owns shutdown for the runs it hosts.
+- **A raw JSON config string crashed the loader on unix.** `load_batch_config`
+  probes its string argument with `Path.exists()` to decide path-versus-JSON,
+  and a JSON document longer than the filesystem's name limit makes that probe
+  raise `ENAMETOOLONG` on Linux where Windows answers False. The probe now
+  treats an unstatable string as what it is — not a path.
+
+### Changed
+
+- **Release ritual tightened.** CONTRIBUTING now states what practice mostly
+  already did: the release commit is metadata-only (CHANGELOG roll, the two
+  version copies, `uv.lock`) — the 0.4.0 release commit carried the whole
+  detach feature, which is the slip this rule closes — and the tag is
+  annotated on the release PR's merge commit, with the exact command given.
+
 ## [0.4.0] - 2026-08-28
 
 Everything the 0.2.0 delivery-envelope wave promised shipped, and the envelope

@@ -275,7 +275,14 @@ def load_batch_config(path_or_json: Any) -> BatchConfig:
     if isinstance(path_or_json, str):
         # Heuristic: if it looks like a path, read it; else parse as JSON.
         p = Path(path_or_json)
-        if p.exists():
+        try:
+            is_file = p.exists()
+        except (OSError, ValueError):
+            # A raw JSON document overflows the filesystem's name limit
+            # (ENAMETOOLONG) or carries characters a path cannot. Windows
+            # answers False for these; Linux raises. Same meaning: not a path.
+            is_file = False
+        if is_file:
             return BatchConfig.model_validate_json(p.read_text(encoding='utf-8'))
         return BatchConfig.model_validate_json(path_or_json)
     return BatchConfig.model_validate(path_or_json)

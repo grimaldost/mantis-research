@@ -28,8 +28,12 @@ it with one `git config` rather than a remembered convention.
 
 ## Gates
 
-There is no hosted CI — pre-commit plus these commands **are** the gate; keep
-them green locally before pushing:
+Hosted CI (`.github/workflows/ci.yml`) runs the gate battery on every push to
+main and every pull request, on Ubuntu and Windows. The pre-commit hooks are
+the local first line — formatting, lint, the core-purity gate and the test
+suite run on every commit, and the commit-msg hook holds the message to
+Conventional Commits and rejects AI-attribution lines. Keep these commands
+green locally before pushing:
 
 ```bash
 uv run ruff format --check src tests        # formatting
@@ -101,20 +105,34 @@ artifact trees stay readable. Details and enforcement:
   ([docs/specs/README.md](docs/specs/README.md)), gated by the
   Definition-of-Ready checklist in [docs/method/](docs/method/README.md).
 - Every user-visible change appends to `CHANGELOG.md` under **Unreleased**
-  (Keep a Changelog format), in the same change that lands it.
+  (Keep a Changelog format), in the same change that lands it. CI enforces
+  this on pull requests (`scripts/changelog_currency.py`): a diff touching
+  `src/`, `scripts/` or `skills/` with no `CHANGELOG.md` edit fails, unless a commit in
+  the range declares `Changelog: none (<reason>)`.
 
 ## Releases
 
+The release commit contains only `CHANGELOG.md`, the two version copies, and
+`uv.lock` — feature code lands in its own prior commit or PR, even when the
+feature is what motivates the release. This keeps `git bisect` and per-commit
+review meaningful across release boundaries (the 0.4.0 release commit carried
+a whole feature; this rule is what that taught).
+
 1. Move the Unreleased entries under a new version heading with today's date.
 2. Bump `version` in `pyproject.toml` and mirror it in
-   `.claude-plugin/plugin.json` (kept in sync by convention — the manifest
-   test only checks presence). Those are the only two hand-maintained
-   copies: what `mantis version` prints is `mantis_research.__version__`,
-   which reads the installed distribution's metadata rather than carrying a
-   third copy.
+   `.claude-plugin/plugin.json` (`test_plugin_manifest.py` asserts the two
+   copies, the `uv.lock` root-package entry, and the newest CHANGELOG release
+   heading all agree — drift fails the suite). Those are the only two
+   hand-maintained copies: what `mantis version` prints is
+   `mantis_research.__version__`, which reads the installed distribution's
+   metadata rather than carrying a third copy.
 3. Run `uv lock` (or any `uv sync`) so the committed `uv.lock`, which records
    the root package's version too, matches the bump. Re-syncing is also what
    refreshes the editable install's metadata — until then `mantis version`
    keeps printing the old number.
-4. Tag `vX.Y.Z` and push. The documented install paths (`uv tool install
+4. Merge the release PR, then tag its merge commit with an annotated tag —
+   `git tag -a vX.Y.Z <release-merge-commit> -m 'mantis-research X.Y.Z'` —
+   and push the tag. Annotated, so the tag carries its own tagger date; the
+   merge commit, never main's later tip, so the tag names exactly what the
+   release PR reviewed. The documented install paths (`uv tool install
    git+…`, the plugin marketplace) pick releases up from GitHub.

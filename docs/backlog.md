@@ -145,6 +145,11 @@ to MANT-B65 below.
 - **Sequencing note.** This lands work *inside* `docs/method/`, which
   MANT-B48 proposes retiring. Move the concrete gate bindings to
   `CONTRIBUTING.md` first, or do both in one change.
+- **Deferral (2026-08-29).** Picked up by the estate guardrails review and
+  deliberately deferred on the sequencing note above: the docs-method move
+  (MANT-B48 ordering) is the trigger — land it first, or land both in one
+  change. Not built in the guardrails wave so the gate does not get written
+  into a directory scheduled for retirement.
 
 ### MANT-B12 — Recalibrate the quoted cost, latency and concurrency numbers to measured bands
 
