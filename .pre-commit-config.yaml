@@ -53,8 +53,8 @@ repos:
         stages: [pre-commit]
 
       - id: no-ai-attribution
-        name: reject AI-attribution trailers in commit messages
-        entry: bash -c 'if grep -Ei "^(Co-Authored-By|Co-authored-by):.*(Claude|GPT|Anthropic|noreply@anthropic)" "$1"; then echo "Commit message carries an AI-attribution trailer; the contribution guidelines forbid these. Remove the line and re-commit."; exit 1; fi' --
+        name: reject AI-attribution lines in commit messages
+        entry: uv run python scripts/check_commit_message.py
         language: system
         stages: [commit-msg]
 

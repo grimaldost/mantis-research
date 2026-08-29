@@ -25,8 +25,10 @@ releases (starting with 0.1.0).
   suite passed them — "pre-commit plus these commands are the gate" was half
   manual. The hermetic suite (~17 s) now runs on every commit, and a new
   checked-in `scripts/git-hooks/commit-msg` hook holds messages to
-  Conventional Commits and rejects AI-attribution trailers, wired through the
-  same `core.hooksPath` install as the existing hook.
+  Conventional Commits and rejects AI-attribution lines — Co-Authored-By
+  trailers and standalone generated-with lines alike
+  (`scripts/check_commit_message.py`, test-covered like the other gates) —
+  wired through the same `core.hooksPath` install as the existing hook.
 - **Version sites agree by test, not convention.** `test_plugin_manifest.py`
   asserted only that the plugin manifest *has* a version; the release
   checklist called the copies "kept in sync by convention". It now asserts

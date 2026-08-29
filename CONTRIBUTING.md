@@ -32,7 +32,7 @@ Hosted CI (`.github/workflows/ci.yml`) runs the gate battery on every push to
 main and every pull request, on Ubuntu and Windows. The pre-commit hooks are
 the local first line — formatting, lint, the core-purity gate and the test
 suite run on every commit, and the commit-msg hook holds the message to
-Conventional Commits and rejects AI-attribution trailers. Keep these commands
+Conventional Commits and rejects AI-attribution lines. Keep these commands
 green locally before pushing:
 
 ```bash
