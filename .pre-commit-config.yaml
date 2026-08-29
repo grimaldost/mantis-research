@@ -5,10 +5,15 @@
 #
 # (On this machine, bare `.exe` shims are blocked by Application Control — invoke
 # pre-commit via `uv run python -m pre_commit`, not the `pre-commit` shim. That is
-# also why the git hook is NOT installed with `pre-commit install`: the checked-in
-# `scripts/git-hooks/pre-commit` is wired with
+# also why the git hooks are NOT installed with `pre-commit install`: the checked-in
+# `scripts/git-hooks/pre-commit` and `scripts/git-hooks/commit-msg` are wired with
 #     git config core.hooksPath scripts/git-hooks
-# and calls this config through `uv run python -m pre_commit`.)
+# and call this config through `uv run python -m pre_commit`.)
+#
+# Two lanes: the pre-commit stage gates the tree (format, lint, purity, the
+# hermetic suite), the commit-msg stage gates the message (Conventional
+# Commits, no AI-attribution trailers). Stages are explicit on every hook so
+# neither lane runs the other's work.
 repos:
   - repo: local
     hooks:
@@ -20,12 +25,14 @@ repos:
         entry: uv run ruff format --check src tests
         language: system
         pass_filenames: false
+        stages: [pre-commit]
 
       - id: ruff-check
         name: ruff check
         entry: uv run ruff check src tests
         language: system
         pass_filenames: false
+        stages: [pre-commit]
 
       - id: core-purity
         name: core purity (invariant I1 — no I/O in core/)
@@ -33,3 +40,40 @@ repos:
         language: system
         pass_filenames: false
         files: ^src/mantis_research/core/.*\.py$
+        stages: [pre-commit]
+
+      # The suite is hermetic by construction (autouse fixtures refuse the two
+      # spend seams) and runs in ~17 s, so it is cheap enough for the commit
+      # lane — a commit that breaks tests should not exist, not merely not push.
+      - id: pytest
+        name: pytest (hermetic suite)
+        entry: uv run python -m pytest -q
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: no-ai-attribution
+        name: reject AI-attribution trailers in commit messages
+        entry: bash -c 'if grep -Ei "^(Co-Authored-By|Co-authored-by):.*(Claude|GPT|Anthropic|noreply@anthropic)" "$1"; then echo "Commit message carries an AI-attribution trailer; the contribution guidelines forbid these. Remove the line and re-commit."; exit 1; fi' --
+        language: system
+        stages: [commit-msg]
+
+  # Not a project tool, so a remote hook (cloned by pre-commit itself, no .exe
+  # shim involved) does not duplicate anything uv pins.
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v3.6.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args:
+          - feat
+          - fix
+          - docs
+          - style
+          - refactor
+          - perf
+          - test
+          - chore
+          - build
+          - ci
+          - release

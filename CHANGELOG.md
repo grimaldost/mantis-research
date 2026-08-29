@@ -18,6 +18,13 @@ releases (starting with 0.1.0).
   diff that touches `src/` or `scripts/` without a `CHANGELOG.md` entry or a
   `Changelog: none (<reason>)` declaration — the rule this file's own
   convention stated but nothing enforced.
+- **The suite joined the commit lane, and the message got a gate.** The hooks
+  ran ruff and the purity check but not the tests, so a commit that broke the
+  suite passed them — "pre-commit plus these commands are the gate" was half
+  manual. The hermetic suite (~17 s) now runs on every commit, and a new
+  checked-in `scripts/git-hooks/commit-msg` hook holds messages to
+  Conventional Commits and rejects AI-attribution trailers, wired through the
+  same `core.hooksPath` install as the existing hook.
 - **Version sites agree by test, not convention.** `test_plugin_manifest.py`
   asserted only that the plugin manifest *has* a version; the release
   checklist called the copies "kept in sync by convention". It now asserts

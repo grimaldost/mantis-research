@@ -1,0 +1,10 @@
+#!/bin/sh
+# Commit-message gate, wired through the same core.hooksPath install as the
+# pre-commit gate (see scripts/git-hooks/pre-commit for why this goes through
+# `uv run python -m pre_commit` rather than `pre-commit install`).
+#
+# Holds the message to Conventional Commits and rejects AI-attribution
+# trailers. Install (one-off, per clone):
+#     git config core.hooksPath scripts/git-hooks
+set -e
+exec uv run python -m pre_commit run --config .pre-commit-config.yaml --hook-stage commit-msg --commit-msg-filename "$1"
