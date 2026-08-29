@@ -28,8 +28,9 @@ import sys
 from collections.abc import Iterable
 from pathlib import Path
 
-# What ships to a consumer of this repo: the package and the repo-local gate scripts.
-SOURCE_PREFIXES = ('src/', 'scripts/')
+# What ships to a consumer of this repo: the package, the repo-local gate scripts, and the
+# agent-facing skill surface the plugin manifest serves — behavior surface, not documentation.
+SOURCE_PREFIXES = ('src/', 'scripts/', 'skills/')
 RECORD = 'CHANGELOG.md'
 DECLARATION = re.compile(r'^Changelog: none \(.+\)\s*$', re.MULTILINE)
 

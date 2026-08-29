@@ -107,7 +107,7 @@ artifact trees stay readable. Details and enforcement:
 - Every user-visible change appends to `CHANGELOG.md` under **Unreleased**
   (Keep a Changelog format), in the same change that lands it. CI enforces
   this on pull requests (`scripts/changelog_currency.py`): a diff touching
-  `src/` or `scripts/` with no `CHANGELOG.md` edit fails, unless a commit in
+  `src/`, `scripts/` or `skills/` with no `CHANGELOG.md` edit fails, unless a commit in
   the range declares `Changelog: none (<reason>)`.
 
 ## Releases

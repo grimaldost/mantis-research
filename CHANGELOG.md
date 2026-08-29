@@ -15,7 +15,7 @@ releases (starting with 0.1.0).
   hook was the only mechanical gate, its own comment said so, and
   `--no-verify` had nothing behind it. A PR-only changelog-currency job
   (`scripts/changelog_currency.py`, ported from keel's working gate) fails a
-  diff that touches `src/` or `scripts/` without a `CHANGELOG.md` entry or a
+  diff that touches `src/`, `scripts/` or `skills/` without a `CHANGELOG.md` entry or a
   `Changelog: none (<reason>)` declaration — the rule this file's own
   convention stated but nothing enforced. A version arm on the same job fails
   a PR whose release cut moves the newest heading backwards; the version-site

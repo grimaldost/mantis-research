@@ -36,6 +36,12 @@ class TestChangelogCurrency:
         gate = _load_gate()
         assert gate.unrecorded_source_paths(['scripts/check_core_purity.py'])
 
+    def test_skills_count_as_source(self) -> None:
+        # The skill file is the agent-facing usage surface the plugin
+        # manifest ships — behavior surface, not documentation.
+        gate = _load_gate()
+        assert gate.unrecorded_source_paths(['skills/research/SKILL.md'])
+
     def test_changelog_edit_records_the_change(self) -> None:
         gate = _load_gate()
         changed = ['src/mantis_research/core/state.py', 'CHANGELOG.md']
