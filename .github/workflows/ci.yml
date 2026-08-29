@@ -3,6 +3,10 @@ on:
   push:
     branches: [main]
   pull_request:
+# Both jobs only check out the repo and run local commands, so the workflow
+# token needs nothing beyond reading contents.
+permissions:
+  contents: read
 jobs:
   check:
     strategy:

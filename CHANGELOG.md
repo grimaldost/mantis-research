@@ -56,6 +56,10 @@ releases (starting with 0.1.0).
 
 ### Changed
 
+- **CI workflow token scoped to read.** The workflow declared no
+  `permissions:` block, so its `GITHUB_TOKEN` carried the default writable
+  grant; both jobs only check out the repo and run local commands, and the
+  token is now `contents: read`.
 - **Release ritual tightened.** CONTRIBUTING now states what practice mostly
   already did: the release commit is metadata-only (CHANGELOG roll, the two
   version copies, `uv.lock`) — the 0.4.0 release commit carried the whole
