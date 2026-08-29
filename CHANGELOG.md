@@ -18,6 +18,12 @@ releases (starting with 0.1.0).
   diff that touches `src/` or `scripts/` without a `CHANGELOG.md` entry or a
   `Changelog: none (<reason>)` declaration — the rule this file's own
   convention stated but nothing enforced.
+- **Version sites agree by test, not convention.** `test_plugin_manifest.py`
+  asserted only that the plugin manifest *has* a version; the release
+  checklist called the copies "kept in sync by convention". It now asserts
+  `pyproject.toml`, `.claude-plugin/plugin.json`, the `uv.lock` root-package
+  entry, and the newest CHANGELOG release heading name the same version, so a
+  drifted copy fails the suite instead of shipping.
 
 ## [0.4.0] - 2026-08-28
 

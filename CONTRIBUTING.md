@@ -114,11 +114,12 @@ artifact trees stay readable. Details and enforcement:
 
 1. Move the Unreleased entries under a new version heading with today's date.
 2. Bump `version` in `pyproject.toml` and mirror it in
-   `.claude-plugin/plugin.json` (kept in sync by convention — the manifest
-   test only checks presence). Those are the only two hand-maintained
-   copies: what `mantis version` prints is `mantis_research.__version__`,
-   which reads the installed distribution's metadata rather than carrying a
-   third copy.
+   `.claude-plugin/plugin.json` (`test_plugin_manifest.py` asserts the two
+   copies, the `uv.lock` root-package entry, and the newest CHANGELOG release
+   heading all agree — drift fails the suite). Those are the only two
+   hand-maintained copies: what `mantis version` prints is
+   `mantis_research.__version__`, which reads the installed distribution's
+   metadata rather than carrying a third copy.
 3. Run `uv lock` (or any `uv sync`) so the committed `uv.lock`, which records
    the root package's version too, matches the bump. Re-syncing is also what
    refreshes the editable install's metadata — until then `mantis version`
