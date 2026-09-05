@@ -3,6 +3,13 @@
 - **Status:** Accepted
 - **Date:** 2026-07-03
 
+> **Naming note, 2026-09-05.** The memory project is **sealore**, not mantis, and
+> has been since the engine migrated out of the `mantis-ai` codebase. Where this
+> record says "mantis ingestion" it means the journal sink this runner feeds, whose
+> implementation is sealore today. The `mantis` CLI name and this repository keep
+> theirs. The text below is left as written, because it records the decision as it
+> was taken.
+
 ## Context
 
 The runner was conceived as the research arm of the mantis memory project:

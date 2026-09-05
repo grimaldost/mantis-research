@@ -14,7 +14,7 @@ re-deriving decisions.
 | ADR | Decision | Status |
 |---|---|---|
 | [0001](0001-architecture-invariants-baseline.md) | Adopt invariants I1–I6 (core purity, Protocol-typed stages/adapters, additive-only persisted schemas, resumability, legacy artifacts stay readable) as the project's coordinate system. | Accepted |
-| [0002](0002-reposition-as-agent-researcher-tool.md) | The tool's primary purpose is deep research for agent consumers; mantis journal ingestion becomes an optional output sink. | Accepted |
+| [0002](0002-reposition-as-agent-researcher-tool.md) | The tool's primary purpose is deep research for agent consumers; journal ingestion into the memory project becomes an optional output sink. | Accepted |
 | [0003](0003-epistemic-sidecar-artifact.md) | Every synthesis emits a versioned, machine-readable sidecar (`<stem>.sidecar.json`); the model authors the epistemic fields, the runner authors identity and provenance. | Accepted |
 | [0004](0004-request-level-entry-point.md) | `mantis research "<question>"` is a façade that builds a one-topic config in memory and runs the existing stages; `--assurance` selects the stage subset. | Accepted |
 | [0005](0005-primary-brief-selection-in-config.md) | `models.primary` selects which research brief anchors the synthesis, making Path B a config field instead of a file-shuffle script. | Accepted |

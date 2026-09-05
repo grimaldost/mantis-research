@@ -17,7 +17,8 @@ adversarial falsification pass and a gated evaluation pass are available for
 higher-stakes questions.
 
 It also drives staged batch runs, and its outputs double as reference material
-for downstream mantis knowledge ingestion — but the primary purpose is
+for downstream ingestion into sealore, the memory project — but the primary
+purpose is
 grounded, cross-checked research for agent consumers (see
 [ADR-0002](docs/adr/0002-reposition-as-agent-researcher-tool.md)).
 
@@ -83,7 +84,7 @@ The other flags:
 |---|---|---|
 | `--substrates` | `openai,deepseek,google` | The Path B set, each resolved to the vendor's newest frontier model. Add `,perplexity` with a working Sonar model for real-time-search coverage. |
 | `--primary` | `openrouter:<first substrate>` | Which brief anchors the synthesis, e.g. `openrouter:openai`. |
-| `--journal` / `--no-journal` | off | Also emit a mantis-ingestion journal. |
+| `--journal` / `--no-journal` | off | Also emit a journal envelope for sealore ingestion. |
 | `--batch-name` | `research-<slug>-<timestamp>` | Names the run's directory tree. |
 | `--dry-run` | off | Validate the whole pipeline with no model calls. The manifest is marked `"dry_run": true` and writes no state a later real run treats as finished. |
 | `--log-level` | `INFO` | Level for the structured logs on stderr. The batch subcommands have no level flag. |
