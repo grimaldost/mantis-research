@@ -23,7 +23,7 @@ and everything after synthesis is optional checking.
                  synthesis (Claude CLI, multi-turn)
                    ├─▶ synthesis brief (markdown)
                    ├─▶ <stem>.sidecar.json  (epistemic contract)
-                   └─▶ journal (optional turn, mantis ingestion)
+                   └─▶ journal (optional turn, sealore ingestion)
                               │
         ┌─────────────────────┼─────────────────────┐
         ▼                     ▼                     ▼
