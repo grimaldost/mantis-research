@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       # The committed uv.lock (which also records the root package's version)
       # must be current; a stale lock reds CI. This must run before any
       # `uv sync`/`uv run`, which would quietly re-lock first.
@@ -42,7 +42,7 @@ jobs:
         with:
           fetch-depth: 0 # the merge-base with the target branch has to exist locally
           persist-credentials: false
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       - run: |
           git log --format=%B "origin/${GITHUB_BASE_REF}..HEAD" > "${RUNNER_TEMP}/commit-messages.txt"
           git diff --name-only "origin/${GITHUB_BASE_REF}...HEAD" \
@@ -64,7 +64,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       - run: uvx zizmor==1.30.0 --min-severity high .github/workflows
         env:
           GH_TOKEN: ${{ github.token }}
