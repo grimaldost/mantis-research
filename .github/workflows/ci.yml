@@ -15,8 +15,10 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
       # The committed uv.lock (which also records the root package's version)
       # must be current; a stale lock reds CI. This must run before any
       # `uv sync`/`uv run`, which would quietly re-lock first.
@@ -36,17 +38,33 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0 # the merge-base with the target branch has to exist locally
-      - uses: astral-sh/setup-uv@v5
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
       - run: |
-          git log --format=%B "origin/${{ github.base_ref }}..HEAD" > "${RUNNER_TEMP}/commit-messages.txt"
-          git diff --name-only "origin/${{ github.base_ref }}...HEAD" \
+          git log --format=%B "origin/${GITHUB_BASE_REF}..HEAD" > "${RUNNER_TEMP}/commit-messages.txt"
+          git diff --name-only "origin/${GITHUB_BASE_REF}...HEAD" \
             | uv run --no-project python scripts/changelog_currency.py --messages "${RUNNER_TEMP}/commit-messages.txt"
       # Version arm: a PR that cuts a new release heading must move the newest version strictly
       # forward; the version-site equality tests in the `check` job hold every site to that
       # same heading.
       - run: |
-          git show "origin/${{ github.base_ref }}:CHANGELOG.md" > "${RUNNER_TEMP}/base-changelog.md"
+          git show "origin/${GITHUB_BASE_REF}:CHANGELOG.md" > "${RUNNER_TEMP}/base-changelog.md"
           uv run --no-project python scripts/changelog_currency.py --headings "${RUNNER_TEMP}/base-changelog.md" CHANGELOG.md
+
+  zizmor:
+    # Security audit of GitHub Actions workflows: check for impostor refs,
+    # dependency confusion, and stale action versions via zizmor.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - run: uvx zizmor==1.30.0 --min-severity high .github/workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
