@@ -7,6 +7,8 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-13
+
 ### Added
 
 - **Hosted CI.** Every push to main and every pull request now runs the gate
