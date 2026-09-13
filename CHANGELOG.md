@@ -7,6 +7,8 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-13
+
 ### Changed
 
 - **ruff 0.15.12 → 0.16.5.** This repo's explicit `select` list absorbs almost
