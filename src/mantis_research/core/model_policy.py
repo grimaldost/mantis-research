@@ -278,8 +278,10 @@ def resolve_openrouter_model(
             source='unresolved',
             requested=model,
             notes=(
-                "openrouter 'auto'/'latest' needs a vendor — set "
-                "'model' to e.g. 'auto:openai' or pin a concrete id",
+                (
+                    "openrouter 'auto'/'latest' needs a vendor — set "
+                    "'model' to e.g. 'auto:openai' or pin a concrete id"
+                ),
             ),
         )
 
