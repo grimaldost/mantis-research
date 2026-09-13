@@ -22,9 +22,7 @@ FORBIDDEN = (
 
 def attribution_lines(message: str) -> list[str]:
     """The lines in ``message`` that attribute authorship to an AI tool ([] when clean)."""
-    return [
-        line for line in message.splitlines() if any(rx.search(line) for rx in FORBIDDEN)
-    ]
+    return [line for line in message.splitlines() if any(rx.search(line) for rx in FORBIDDEN)]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -32,7 +30,9 @@ def main(argv: list[str] | None = None) -> int:
     offending = attribution_lines(Path(args[0]).read_text(encoding='utf-8'))
     if not offending:
         return 0
-    print('Commit message carries an AI-attribution line; the contribution guidelines forbid these:')
+    print(
+        'Commit message carries an AI-attribution line; the contribution guidelines forbid these:'
+    )
     for line in offending:
         print(f'  {line}')
     print('Remove the line and re-commit.')

@@ -7,6 +7,20 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+### Changed
+
+- **ruff 0.15.12 → 0.16.5.** This repo's explicit `select` list absorbs almost
+  none of the new version's changed defaults; the bump surfaced one lint
+  error and one formatting drift. `core/model_policy.py`'s
+  `resolve_openrouter_model` built its "no vendor" `notes` entry as a bare
+  implicit string concatenation inside a one-element tuple — ambiguous with a
+  missing comma, which is what the new `ISC004` check flags. The two literals
+  are now wrapped in their own parentheses (ruff's own suggested fix); the
+  message text is unchanged. `scripts/check_commit_message.py` had drifted
+  from the 0.16 formatter's line-fitting change — it sits outside `ruff
+  format --check src tests`'s CI scope, so nothing caught it until now — and
+  is reformatted with no logic change.
+
 ## [0.5.0] - 2026-09-13
 
 ### Added
