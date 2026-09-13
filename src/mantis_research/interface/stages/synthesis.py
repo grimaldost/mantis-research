@@ -26,6 +26,7 @@ from mantis_research.core.sidecar import (
     Provenance,
     ResearchSidecar,
     SidecarContractError,
+    SidecarOutcome,
     SourceRef,
     derive_source_overlaps,
 )
@@ -46,12 +47,39 @@ if TYPE_CHECKING:
 log = structlog.get_logger(__name__)
 
 # Sidecar validate-and-re-ask budget: one initial write + this many re-asks
-# on the same session before the attempt fails (§14).
+# on the same session before the sidecar is recorded as failed (§14, ADR-0011).
 _SIDECAR_MAX_ATTEMPTS = 3
 
 
 def _stem_for(topic_id: str, slug: str) -> str:
     return topic_stem(topic_id, slug)
+
+
+def _succeeded(state: SynthesisState) -> AttemptResult:
+    """The attempt's own outcome, carrying the sidecar's beside it (ADR-0011).
+
+    The attempt succeeds on the synthesis document; the sidecar's outcome rides
+    along in ``extras`` so a caller reading the result — rather than the state
+    file — can still tell a run with an epistemic contract from one without.
+    """
+    status = state.sidecar_status or SidecarOutcome.NOT_RUN
+    return AttemptResult.ok(
+        output_bytes=state.synthesis_bytes,
+        sidecar=status.value,
+        sidecar_error=state.sidecar_error,
+    )
+
+
+def _publish(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` through a sibling temp file and one rename.
+
+    The published path is the one a watcher and ``research_status`` key on, so
+    it must never hold a partial document. Same idiom as ``TopicState.save``;
+    ``Path.replace`` is atomic on the same filesystem on POSIX and Windows.
+    """
+    tmp = path.with_name(f'{path.name}.tmp')
+    tmp.write_text(text, encoding='utf-8')
+    tmp.replace(path)
 
 
 def _fingerprint(path: Path) -> tuple[int, int] | None:
@@ -219,6 +247,11 @@ class SynthesisStage:
         journal_dir.mkdir(parents=True, exist_ok=True)
         synthesis_path = synthesis_dir / f'{stem}.md'
         sidecar_path = synthesis_dir / f'{stem}.sidecar.json'
+        # The model writes here; the runner publishes the merged document onto
+        # `sidecar_path` (MANT-B/T16b). A reader of the published path therefore
+        # never meets a half-made sidecar — `sources: []`, `provenance: {}` —
+        # which is what a watcher keyed on its presence used to read as finished.
+        sidecar_draft_path = synthesis_dir / f'{stem}.sidecar.draft.json'
         journal_path = journal_dir / f'{stem}-journal.md'
 
         # Resolve primary + secondaries from config (ADR-0005). Default is the
@@ -340,16 +373,22 @@ class SynthesisStage:
                 )
 
         # ── Sidecar — epistemic JSON (bounded validate-and-re-ask) ──
-        # A malformed sidecar must not fail the whole 2-turn attempt; the loop
-        # re-asks on the same session up to twice before giving up (ADR-0003 §14).
+        # The sidecar is a *derived* product: it is read out of a synthesis
+        # document that already exists. Its failure is therefore recorded on its
+        # own axis (ADR-0011) rather than returned as this attempt's failure —
+        # which used to mark the topic FAILED, stop the pipeline before
+        # falsification, and send the retry back to regenerate a synthesis that
+        # was finished and paid for (3 field reports). The loop still re-asks on
+        # the same session up to twice before giving up (ADR-0003 §14).
         if not ctx.dry_run:
             try:
-                sidecar_ok = await self._emit_sidecar(
+                failure = await self._emit_sidecar(
                     topic=topic,
                     dirs=dirs,
                     stem=stem,
                     synthesis_path=synthesis_path,
                     sidecar_path=sidecar_path,
+                    draft_path=sidecar_draft_path,
                     briefs=briefs,
                     model=model,
                     effort=effort,
@@ -357,14 +396,17 @@ class SynthesisStage:
                     state=state,
                 )
             except SidecarContractError as exc:
-                # The runner-authored zone is incomplete — fail loudly rather
-                # than ship a sidecar a consumer cannot cite (MANT-B06).
-                log.error('sidecar contract violated', topic_id=topic.id, error=str(exc))
-                return AttemptResult.fail(error=str(exc))
-            if not sidecar_ok:
-                return AttemptResult.fail(
-                    error=f'sidecar not valid after retries at {sidecar_path.name}',
-                )
+                # The runner-authored zone is incomplete. Still loud, and still
+                # unpublished — but re-asking cannot fix a runner-side gap and
+                # neither can re-buying the synthesis (MANT-B06).
+                failure = f'sidecar contract violated: {exc}'
+            if failure is None:
+                state.sidecar_status = SidecarOutcome.OK
+                state.sidecar_error = None
+            else:
+                log.error('sidecar not produced', topic_id=topic.id, error=failure)
+                state.sidecar_status = SidecarOutcome.FAILED
+                state.sidecar_error = failure
             state.sidecar_bytes = sidecar_path.stat().st_size if sidecar_path.exists() else None
 
         # Journal (Turn 2) is optional: stages.journal.enabled=False skips it and
@@ -372,7 +414,7 @@ class SynthesisStage:
         # batch default stays journal-on (ADR-0002).
         if topic.stages.journal.enabled is False:
             state.journal_bytes = None
-            return AttemptResult.ok(output_bytes=state.synthesis_bytes)
+            return _succeeded(state)
 
         # Build Turn-2 (journal) prompt
         journal_template = (
@@ -421,7 +463,7 @@ class SynthesisStage:
             )
         state.journal_bytes = journal_path.stat().st_size if journal_path.exists() else 0
 
-        return AttemptResult.ok(output_bytes=state.synthesis_bytes)
+        return _succeeded(state)
 
     # ── sidecar emission ──────────────────────────────────────────
 
@@ -433,26 +475,30 @@ class SynthesisStage:
         stem: str,
         synthesis_path: Path,
         sidecar_path: Path,
+        draft_path: Path,
         briefs: _Briefs,
         model: str,
         effort: str,
         ts: str,
         state: SynthesisState,
-    ) -> bool:
+    ) -> str | None:
         """Emit + validate the epistemic sidecar with bounded re-asks (§14).
 
-        The model reads the brief and writes the JSON sidecar (its own turn, so a
-        malformed sidecar never re-runs the synthesis). On schema-validation
-        failure the loop re-asks on the same session, feeding back the error, up
-        to ``_SIDECAR_MAX_ATTEMPTS`` total. On success the runner-authored
-        identity/provenance fields are merged in and the file rewritten. Returns
-        True on a valid, merged sidecar; False when the budget is exhausted
-        (the brief is left intact for the next attempt).
+        The model reads the brief and writes its JSON to ``draft_path`` (its own
+        turn, so a malformed sidecar never re-runs the synthesis). On
+        schema-validation failure the loop re-asks on the same session, feeding
+        back the error, up to ``_SIDECAR_MAX_ATTEMPTS`` total. On success the
+        runner-authored identity/provenance fields are merged in and the merged
+        document is published onto ``sidecar_path`` by rename.
+
+        Returns ``None`` on a published sidecar, or the reason it has none —
+        which the caller records as the sidecar's own outcome rather than as the
+        attempt's (ADR-0011). The synthesis document is left intact either way.
         """
         sidecar_session = str(uuid.uuid4())
         base_prompt = default_prompts.SYNTHESIS_SIDECAR.format(
             synthesis_path=synthesis_path.as_posix(),
-            sidecar_path=sidecar_path.as_posix(),
+            sidecar_path=draft_path.as_posix(),
         )
         last_error = 'sidecar not written'
         for attempt in range(_SIDECAR_MAX_ATTEMPTS):
@@ -461,8 +507,8 @@ class SynthesisStage:
                 base_prompt
                 if first
                 else (
-                    f'Your previous sidecar at {sidecar_path.as_posix()} failed schema '
-                    f'validation:\n{last_error}\n\nRewrite {sidecar_path.as_posix()} as '
+                    f'Your previous sidecar at {draft_path.as_posix()} failed schema '
+                    f'validation:\n{last_error}\n\nRewrite {draft_path.as_posix()} as '
                     f'valid JSON matching the required shape. Emit ONLY the JSON object.'
                 )
             )
@@ -482,19 +528,22 @@ class SynthesisStage:
             if not result.success:
                 last_error = result.error or 'sidecar turn failed'
                 continue
-            # File read / validate / merge / rewrite is synchronous, kept out of
+            # File read / validate / merge / publish is synchronous, kept out of
             # this async method (blocking Path I/O belongs in a sync helper).
-            err = self._validate_and_merge(sidecar_path, topic, dirs, synthesis_path, briefs, state)
+            err = self._validate_and_merge(
+                draft_path, sidecar_path, topic, dirs, synthesis_path, briefs, state
+            )
             if err is None:
-                return True
+                return None
             last_error = err
             log.info('sidecar invalid, re-asking', topic_id=topic.id, attempt=attempt + 1)
         log.warning('sidecar failed after retries', topic_id=topic.id, error=last_error)
-        return False
+        return f'sidecar not valid after {_SIDECAR_MAX_ATTEMPTS} attempts: {last_error}'
 
     @classmethod
     def _validate_and_merge(
         cls,
+        draft_path: Path,
         sidecar_path: Path,
         topic: TopicConfig,
         dirs: RunDirs,
@@ -502,21 +551,31 @@ class SynthesisStage:
         briefs: _Briefs,
         state: SynthesisState,
     ) -> str | None:
-        """Validate the model-written sidecar and, on success, rewrite it with
-        the runner-authored fields merged in. Returns None on success, or an
-        error string to feed back to the next re-ask. Synchronous (Path I/O)."""
-        if not sidecar_path.exists():
+        """Validate the model's draft and publish the merged document.
+
+        Returns None on success, or an error string to feed back to the next
+        re-ask. Synchronous (Path I/O).
+
+        The draft and the published path are deliberately different files. The
+        model used to write straight to the published path, so between its Write
+        and this merge the sidecar existed on disk with `sources: []` and
+        `provenance: {}` — and a watcher keyed on the file's presence read that
+        as finished. The published path is now written exactly once, by the
+        runner, by rename.
+        """
+        if not draft_path.exists():
             return 'sidecar file not written'
         try:
-            sc = ResearchSidecar.from_model_json(sidecar_path.read_text(encoding='utf-8'))
+            sc = ResearchSidecar.from_model_json(draft_path.read_text(encoding='utf-8'))
         except ValidationError as exc:
             return str(exc)
         merged = cls._fill_runner_fields(sc, topic, dirs, synthesis_path, briefs, state)
-        # Gate the write on the runner-authored zone (MANT-B06). This raises
+        # Gate the publish on the runner-authored zone (MANT-B06). This raises
         # rather than returning an error string, because the missing field is
         # ours: a re-ask would spend a Claude turn to produce the same gap.
         merged.require_complete()
-        sidecar_path.write_text(merged.to_json(), encoding='utf-8')
+        _publish(sidecar_path, merged.to_json())
+        draft_path.unlink(missing_ok=True)
         return None
 
     @staticmethod

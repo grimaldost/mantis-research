@@ -177,9 +177,20 @@ the runner fills the question, the rest of the identity, sources, and
 provenance (durations, token/cost) after the model-authored part validates.
 `ResearchSidecar.require_complete()` then gates the write on the
 runner-authored zone — `question`, `generated_at`, non-empty `sources` — so a
-document that cannot be cited fails the stage rather than reaching disk. That
-gate raises instead of feeding back into the model re-ask loop: a gap there is
-the runner's, and a re-ask would spend a Claude turn reproducing it. Consumers:
+document that cannot be cited is recorded as a failed sidecar rather than
+reaching disk. That gate raises instead of feeding back into the model re-ask
+loop: a gap there is the runner's, and a re-ask would spend a Claude turn
+reproducing it.
+
+The sidecar's outcome is the run's *second* outcome, separate from the
+synthesis document's ([ADR-0011](adr/0011-two-outcomes-per-synthesis-run.md)):
+it is recorded on `SynthesisState.sidecar_status` / `sidecar_error`, surfaced on
+the run manifest's `sidecar` block, and never fails the synthesis stage. A topic
+whose sidecar failed is DONE but not *settled*, so re-entering the run retries
+the sidecar turn alone — `run_attempt` skips Turn 1 once the synthesis document
+is recorded. The model writes its JSON to `<stem>.sidecar.draft.json` and the
+runner renames the merged document onto the published path, so the path a
+watcher keys on holds a complete document or nothing. Consumers:
 the field-by-field guide
 is in [skills/research/SKILL.md](../skills/research/SKILL.md);
 `core/sidecar.py::project_for_agent` produces the size-bounded projection the

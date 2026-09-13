@@ -29,7 +29,8 @@ from mantis_research.core.logging import configure_logging
 from mantis_research.core.paths import RunDirs, topic_stem
 from mantis_research.core.progress import RunEvent, emit
 from mantis_research.core.prompts import RESEARCH_REQUEST
-from mantis_research.core.state import OpenRouterResearchState
+from mantis_research.core.sidecar import SidecarOutcome
+from mantis_research.core.state import OpenRouterResearchState, SynthesisState
 from mantis_research.interface.seat import process_is_alive
 
 if TYPE_CHECKING:
@@ -230,6 +231,12 @@ def _manifest(
         'stages': {stage: {'exit_code': rc} for stage, rc in results.items()},
         'outputs': outputs,
         'cost': _read_cost(dirs, stem),
+        # Two outcomes, not one (ADR-0011). `ok` is the stages: did the run
+        # produce the documents it was asked for. The sidecar reports itself —
+        # a derived artifact's failure never retracts one that was produced,
+        # and folding them together is what turned three complete, paid-for
+        # syntheses into failed runs.
+        'sidecar': _read_sidecar_outcome(dirs, list(results), dry_run=dry_run),
         'ok': all(rc == 0 for rc in results.values()),
     }
 
@@ -446,6 +453,31 @@ def resume_research(
         on_event=on_event,
         _resume_history=history,
     )
+
+
+def _read_sidecar_outcome(dirs: RunDirs, stages: Sequence[str], *, dry_run: bool) -> dict[str, Any]:
+    """The sidecar's own outcome for this run, read off the synthesis state.
+
+    The synthesis stage records it (ADR-0011); this reads it back the way
+    :func:`_read_cost` reads the OpenRouter state. Anything it cannot establish
+    — no synthesis stage ran, a dry run, an unreadable or pre-field state file —
+    is reported as what it is rather than guessed at.
+    """
+    absent = {'status': SidecarOutcome.NOT_RUN.value, 'error': None}
+    if not produces_sidecar(stages):
+        return {'status': SidecarOutcome.NOT_OWED.value, 'error': None}
+    if dry_run:
+        return absent
+    state_path = dirs.state('synthesis') / '1.json'
+    if not state_path.exists():
+        return absent
+    try:
+        state = SynthesisState.model_validate_json(state_path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return absent
+    if state.sidecar_status is None:
+        return absent
+    return {'status': state.sidecar_status.value, 'error': state.sidecar_error}
 
 
 def _read_cost(dirs: RunDirs, stem: str) -> dict[str, Any]:

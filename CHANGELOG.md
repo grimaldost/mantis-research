@@ -48,6 +48,26 @@ releases (starting with 0.1.0).
   (`STREAM_LINE_LIMIT_BYTES`, 16 MiB) on the spawn, and a contract test feeds a
   200 KB single line through the real reader.
 
+- **A failed sidecar reported a complete synthesis as a failed run.**
+  `run_attempt` returned one `AttemptResult` for Turn 1 and the sidecar loop
+  together, so a sidecar that would not validate marked the topic FAILED,
+  stopped the pipeline before falsification, and sent the retry back to
+  regenerate a synthesis that was finished and paid for — three reports, 45 to
+  63 KB of good output each time. The two outcomes are now separate
+  ([ADR-0011](docs/adr/0011-two-outcomes-per-synthesis-run.md)): the attempt
+  succeeds on the synthesis document, and the sidecar's own result is recorded
+  on `SynthesisState.sidecar_status` / `sidecar_error` and reported as a
+  `sidecar` block on the run manifest and the MCP result. A topic whose sidecar
+  failed is DONE but not *settled*, so re-entering the run buys the sidecar turn
+  alone rather than the synthesis.
+
+- **The published sidecar could be read half-made.** The model wrote its JSON
+  straight to `<stem>.sidecar.json`, so between its write and the runner's merge
+  the file existed with `sources: []` and `provenance: {}` — and a watcher keyed
+  on its presence read that as finished. The model now writes
+  `<stem>.sidecar.draft.json` and the runner renames the merged document into
+  place, so the published path holds a whole document or nothing.
+
 - **A retry re-bought a synthesis that was already on disk.** The idempotent
   re-entry guard reads `state.synthesis_bytes`, and that was assigned *after*
   the Turn-1 adapter call — so a turn that ended by raising, which is what a

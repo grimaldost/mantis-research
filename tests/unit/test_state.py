@@ -9,6 +9,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
+from mantis_research.core.sidecar import SidecarOutcome
 from mantis_research.core.state import (
     ClaudeResearchState,
     EvaluationState,
@@ -194,6 +195,39 @@ class TestTopicStateTransitions:
         s.mark_in_flight()
         s.mark_in_flight()
         assert s.attempts == 3
+
+
+class TestASynthesisWithoutItsSidecarIsNotSettled:
+    """ADR-0011 — decoupling must not turn a failed sidecar into a skipped one.
+
+    A failed sidecar no longer fails the attempt, so the topic reaches DONE. If
+    DONE also meant "skip me", a resume would walk past a run that owes an
+    epistemic contract and never produced one. Re-entry is cheap: `run_attempt`
+    skips Turn 1 when the synthesis document is already recorded, so what gets
+    re-bought is the sidecar turn, not the synthesis.
+    """
+
+    @staticmethod
+    def _done(**extra: object) -> SynthesisState:
+        state = SynthesisState(id='1', slug='t', synthesis_bytes=4096, **extra)
+        state.mark_done()
+        return state
+
+    def test_a_done_topic_with_a_published_sidecar_is_settled(self) -> None:
+        assert self._done(sidecar_status=SidecarOutcome.OK).settled is True
+
+    def test_a_done_topic_with_a_failed_sidecar_is_not_settled(self) -> None:
+        assert self._done(sidecar_status=SidecarOutcome.FAILED).settled is False
+
+    def test_a_record_that_predates_the_field_is_settled(self) -> None:
+        # Historical state files carry no sidecar status. Treating absence as a
+        # failure would re-run every finished topic on the next invocation.
+        assert self._done().settled is True
+
+    def test_a_dry_run_is_still_unsettled_whatever_the_sidecar_says(self) -> None:
+        state = self._done(sidecar_status=SidecarOutcome.OK)
+        state.dry_run = True
+        assert state.settled is False
 
 
 class TestStateInvariantsHypothesis:

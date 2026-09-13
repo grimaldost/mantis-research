@@ -197,6 +197,41 @@ class TestWhatIsStillReturned:
         assert result['sidecar_available'] is False
 
 
+class TestTheSidecarOutcomeReachesTheCaller:
+    """ADR-0011 — the result says which of the two outcomes went wrong.
+
+    Decoupling the sidecar from the synthesis is only half the change: if the
+    caller could not see the second outcome, a failed sidecar would have become
+    invisible rather than separately reported.
+    """
+
+    def test_the_result_carries_the_manifest_s_sidecar_block(self, tmp_path: Path) -> None:
+        _write_sidecar(tmp_path)
+        manifest = _manifest(
+            tmp_path,
+            ok=True,
+            dry_run=False,
+            stages={'openrouter': {'exit_code': 0}, 'synthesis': {'exit_code': 0}},
+        )
+        manifest['sidecar'] = {'status': 'failed', 'error': 'schema drift on every re-ask'}
+        result = _agent_result(manifest)
+        assert result['sidecar']['status'] == 'failed'
+        assert 'schema drift' in result['sidecar']['error']
+
+    def test_an_older_manifest_without_the_block_reads_as_not_run(self, tmp_path: Path) -> None:
+        # Run records written before this field exist on disk and are resumed.
+        _write_sidecar(tmp_path)
+        result = _agent_result(
+            _manifest(
+                tmp_path,
+                ok=True,
+                dry_run=False,
+                stages={'synthesis': {'exit_code': 0}},
+            )
+        )
+        assert result['sidecar'] == {'status': 'not_run', 'error': None}
+
+
 class TestAResearchOnlyRunIsNotIncomplete:
     """MANT-B60 — the refusal must learn which runs owe a sidecar.
 

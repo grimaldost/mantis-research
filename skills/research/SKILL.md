@@ -72,7 +72,15 @@ Arguments:
 A single JSON object: the run **manifest**, plus — when a sidecar was produced —
 the sidecar's epistemic content merged in at the top level.
 
-- `ok` (bool), `question`, `assurance` — run identity.
+- `ok` (bool), `question`, `assurance` — run identity. `ok` reports the
+  **stages**: whether the run produced the documents it was asked for.
+- `sidecar` — `{ status, error }`, the run's *second* outcome, reported
+  separately from `ok`. `status` is `ok` (published), `failed` (the sidecar turn
+  or its validation failed; `error` says how, and the synthesis document is
+  still on disk), `not_owed` (a `research`-tier run) or `not_run` (a dry run, or
+  a run that stopped before the synthesis stage). A failed sidecar no longer
+  fails the synthesis stage — re-enter the run with `resume` and only the
+  sidecar turn is bought again.
 - `cost` — `{ cost_usd, tokens_prompt, tokens_completion, available }`, summed
   across the OpenRouter substrates (`available: false` with zeroed totals if the
   cost state was unreadable).
