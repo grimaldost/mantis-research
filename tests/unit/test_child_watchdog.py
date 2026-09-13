@@ -8,6 +8,12 @@ by hand.
 
 The clock is on silence, not on runtime: a child that keeps talking runs as long
 as it likes.
+
+This module is the home for every contract of the shared streaming runner that
+needs a real spawn to exercise — the watchdog, the cadence pairing, the audible
+child, the stdin close, the bounded reap, and the stdout line ceiling. Keeping
+them together is what keeps the hermetic floor's spawn opt-in list at three
+entries instead of one per contract.
 """
 
 from __future__ import annotations
@@ -24,7 +30,10 @@ import pytest
 
 from mantis_research.core.cli_stream import OutputCadence
 from mantis_research.core.retry import FailureKind, classify_failure
-from mantis_research.interface.adapters._subprocess import run_streaming
+from mantis_research.interface.adapters._subprocess import (
+    STREAM_LINE_LIMIT_BYTES,
+    run_streaming,
+)
 from mantis_research.interface.adapters.claude_cli import (
     ClaudeCliAdapter,
     ClaudeCliOptions,
@@ -38,6 +47,15 @@ if TYPE_CHECKING:
     from mantis_research.core.progress import RunEvent
 
 _MUTE_CHILD = 'import time; time.sleep(30)'
+#: Comfortably past asyncio's 64 KiB default, and in the size class the field
+#: incident produced — a whole synthesis document echoed onto one stream line.
+_LONG_LINE_BYTES = 200_000
+_LONG_LINE_CHILD = (
+    'import sys\n'
+    f"sys.stdout.write('x' * {_LONG_LINE_BYTES})\n"
+    "sys.stdout.write('\\n')\n"
+    "sys.stdout.write('done\\n')\n"
+)
 _TALKING_CHILD = (
     'import sys, time\n'
     'for i in range(6):\n'
@@ -171,6 +189,36 @@ class TestTheTripPathThroughTheAdapter:
         # strand the killed session as unresumable.
         result = await self._trip(tmp_path, monkeypatch)
         assert result.session_id == 's'
+
+
+class TestTheStdoutLineCeilingIsDeclared:
+    """One long line must not kill a turn that already did its work.
+
+    `asyncio.StreamReader` caps a line at 64 KiB by default and `readline()`
+    *raises* past it, so the ceiling was inherited from a stream default chosen
+    for interactive terminals. A Claude turn that echoes its own synthesis onto
+    one line blew through it — 2 of 2 runs in one report, 7 of 7 in a later
+    wave, always after three research briefs and a full synthesis were already
+    on disk. These drive the real spawn: the failure lives in the reader, and no
+    fake adapter can produce it.
+    """
+
+    def test_the_ceiling_is_declared_rather_than_inherited(self) -> None:
+        # 64 KiB is asyncio's default and is the number the field exception
+        # named. The runner says what it accepts rather than inheriting it.
+        assert STREAM_LINE_LIMIT_BYTES > 64 * 1024
+
+    async def test_a_single_line_past_the_default_is_read_not_fatal(self, tmp_path: Path) -> None:
+        result = await _run(_LONG_LINE_CHILD, tmp_path, 30.0)
+        assert result.exit_code == 0
+        assert result.timed_out is False
+        assert 'done' in result.output
+
+    async def test_the_long_line_survives_whole_into_the_transcript(self, tmp_path: Path) -> None:
+        # Truncating instead of raising would be the other way to lose the turn:
+        # the rate-limit classifier and the cost parser both read this text.
+        await _run(_LONG_LINE_CHILD, tmp_path, 30.0)
+        assert 'x' * _LONG_LINE_BYTES in (tmp_path / 'tx.log').read_text(encoding='utf-8')
 
 
 class TestTheCadenceContract:

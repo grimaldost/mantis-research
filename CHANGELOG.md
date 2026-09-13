@@ -38,6 +38,16 @@ releases (starting with 0.1.0).
 
 ### Fixed
 
+- **One long output line killed the synthesis turn after it was paid for.** The
+  shared streaming runner read the local-seat child with
+  `asyncio.StreamReader`'s inherited 64 KiB line cap, so a Claude turn that
+  echoed its own synthesis onto a single line raised
+  `ValueError: … chunk … limit` — reproduced 2 of 2 in one report and 7 of 7 in
+  a later wave, always after three research briefs and a full synthesis were
+  already on disk. The runner now declares its own ceiling
+  (`STREAM_LINE_LIMIT_BYTES`, 16 MiB) on the spawn, and a contract test feeds a
+  200 KB single line through the real reader.
+
 - **The MCP research tool died at dispatch on unix hosts.** First run of the
   new ubuntu CI leg: the orchestrator wires SIGINT with
   `loop.add_signal_handler`, which unix accepts only on the process's main
