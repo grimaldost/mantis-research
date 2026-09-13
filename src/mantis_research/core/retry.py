@@ -42,12 +42,36 @@ RATE_LIMIT_PATTERNS: frozenset[str] = frozenset(
 )
 
 
+# Failure texts naming a deterministic limit no retry can move, lowercased.
+# Both are `asyncio.StreamReader.readline()`'s own message — it re-raises
+# `LimitOverrunError`'s text as a bare `ValueError`, and which of the two you
+# get depends on whether the separator had arrived by the time the buffer
+# filled. Neither says anything about the environment: the same command reads
+# the same oversized line and overruns again. Keep this set to texts that are
+# deterministic *by construction*; a transient failure misfiled here loses its
+# retries.
+PRECONDITION_PATTERNS: frozenset[str] = frozenset(
+    {
+        'chunk is longer than limit',
+        'chunk exceed the limit',
+    }
+)
+
+
 def detect_rate_limit(output: str) -> bool:
     """True if output contains any known rate-limit indicator (case-insensitive)."""
     if not output:
         return False
     lower = output.lower()
     return any(pat in lower for pat in RATE_LIMIT_PATTERNS)
+
+
+def detect_precondition(output: str) -> bool:
+    """True if output names a deterministic failure retrying cannot change."""
+    if not output:
+        return False
+    lower = output.lower()
+    return any(pat in lower for pat in PRECONDITION_PATTERNS)
 
 
 class FailureKind(StrEnum):
@@ -126,7 +150,16 @@ class RetryPolicy:
 
 
 def classify_failure(error_text: str) -> FailureKind:
-    """Bucket an error text/output into RATE_LIMIT vs GENERIC."""
+    """Bucket an error text/output into PRECONDITION, RATE_LIMIT or GENERIC.
+
+    Precondition is tested first, and that order is the point: a stream-limit
+    overrun stays deterministic even when the same captured text also happens to
+    mention a limit being hit, and reading it as transient is what bought it
+    three attempts. Only a failure the environment can resolve on its own
+    deserves the transient budget.
+    """
+    if detect_precondition(error_text):
+        return FailureKind.PRECONDITION
     return FailureKind.RATE_LIMIT if detect_rate_limit(error_text) else FailureKind.GENERIC
 
 

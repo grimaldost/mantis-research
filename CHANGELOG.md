@@ -48,6 +48,16 @@ releases (starting with 0.1.0).
   (`STREAM_LINE_LIMIT_BYTES`, 16 MiB) on the spawn, and a contract test feeds a
   200 KB single line through the real reader.
 
+- **A deterministic stream failure bought three attempts.** A stream-limit
+  overrun is the same on every attempt, but nothing classified it: it reached
+  the orchestrator's unexpected-exception path, which recorded the exception
+  only in `error` while the classifier reads `error_output`, so every crash
+  drew the transient budget. In one wave that was three attempts and roughly 50
+  minutes per run, spent after the work was done. `classify_failure` now
+  recognises asyncio's own stream-limit texts as `PRECONDITION` — one attempt,
+  no backoff — and a crashing attempt carries its exception text into the field
+  the classifier reads, without losing it from `last_error`.
+
 - **The MCP research tool died at dispatch on unix hosts.** First run of the
   new ubuntu CI leg: the orchestrator wires SIGINT with
   `loop.add_signal_handler`, which unix accepts only on the process's main

@@ -565,6 +565,56 @@ class TestAPreconditionFailureStopsAtOneAttempt:
         assert await self._orch(stage, tmp_path).run() == 1
 
 
+class TestACrashingAttemptIsClassifiedByItsException:
+    """An attempt that raises still has failure text; the loop was discarding it.
+
+    `run_attempt` raising is caught here and turned into a failure whose only
+    description lives in `error`, while the classifier reads `error_output` —
+    which was left empty. So every crash, deterministic or not, drew the
+    transient budget. The stream-limit overrun that killed 7 of 7 runs in one
+    wave arrives on exactly this path.
+    """
+
+    @staticmethod
+    def _raising(exc: Exception) -> FakeStage:
+        @dataclass
+        class Raising(FakeStage):
+            async def run_attempt(self, topic, state, ctx):  # type: ignore[no-untyped-def]
+                self.calls.append(topic.id)
+                raise exc
+
+        return Raising(results={'1': [AttemptResult.fail(error='unused')]})
+
+    @staticmethod
+    async def _run(stage: FakeStage, tmp_path: Path) -> int:
+        return await Orchestrator(
+            stage=stage,
+            state_class=ClaudeResearchState,
+            config=_config_with_topics(1),
+            state_dir=tmp_path / 'state',
+            output_dir=tmp_path / 'out',
+            transcript_dir=tmp_path / 'tx',
+        ).run()
+
+    async def test_a_raised_stream_limit_overrun_is_attempted_once(self, tmp_path: Path) -> None:
+        stage = self._raising(ValueError('Separator is found, but chunk is longer than limit'))
+        await self._run(stage, tmp_path)
+        assert stage.calls == ['1']
+
+    async def test_an_ordinary_crash_still_gets_every_attempt(self, tmp_path: Path) -> None:
+        stage = self._raising(RuntimeError('transient wobble'))
+        await self._run(stage, tmp_path)
+        assert stage.calls == ['1', '1', '1']
+
+    async def test_the_recorded_error_still_names_the_exception(self, tmp_path: Path) -> None:
+        # Classification must not cost the diagnosis: `last_error` is what an
+        # operator reads off the state file.
+        stage = self._raising(ValueError('Separator is found, but chunk is longer than limit'))
+        await self._run(stage, tmp_path)
+        state = json.loads((tmp_path / 'state' / '1.json').read_text(encoding='utf-8'))
+        assert 'chunk is longer than limit' in state['last_error']
+
+
 class TestARetryDoesNotReuseADeadSession:
     """MANT-B59 — regenerating the session identity between attempts.
 
