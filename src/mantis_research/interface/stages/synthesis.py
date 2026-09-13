@@ -54,6 +54,20 @@ def _stem_for(topic_id: str, slug: str) -> str:
     return topic_stem(topic_id, slug)
 
 
+def _fingerprint(path: Path) -> tuple[int, int] | None:
+    """``(size, mtime_ns)`` of ``path``, or ``None`` when it is not there.
+
+    Taken before a turn and again after it, this is what distinguishes the
+    document *this* turn produced from one an earlier run left behind — which
+    matters because ``--force`` clears state but never outputs (I5).
+    """
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_size, st.st_mtime_ns)
+
+
 def _claude_path(dirs: RunDirs, topic_id: str, slug: str) -> Path:
     return dirs.output('claude') / f'{_stem_for(topic_id, slug)}.md'
 
@@ -287,12 +301,29 @@ class SynthesisStage:
                 ),
                 allowed_tools=('Read', 'Write'),
             )
-            t1 = await self._adapter.run(
-                prompt=synth_prompt,
-                options=t1_options,
-                transcript_path=t1_transcript,
-                dry_run=ctx.dry_run,
-            )
+            # What Turn 1 produced is a fact on disk, and the record of it must
+            # not depend on the call returning. It used to: the assignment sat
+            # after the success checks, so an adapter that *raised* — which is
+            # what a stream-limit overrun does, typically once the model has
+            # already written the document — unwound straight past it. The next
+            # attempt then read "file on disk, no recorded size" as "no brief
+            # yet" and re-bought the expensive turn, overwriting a finished
+            # synthesis with a differently-structured one (3 field reports).
+            before = _fingerprint(synthesis_path)
+            try:
+                t1 = await self._adapter.run(
+                    prompt=synth_prompt,
+                    options=t1_options,
+                    transcript_path=t1_transcript,
+                    dry_run=ctx.dry_run,
+                )
+            finally:
+                produced = _fingerprint(synthesis_path)
+                # Only when the document changed: an untouched file is an
+                # earlier run's work, not this turn's, and adopting it would
+                # make `--force` ship the document it was asked to replace.
+                if produced is not None and produced != before:
+                    state.synthesis_bytes = produced[0]
             state.session_id = t1.session_id
             state.turn_1_duration_s = t1.duration_s
             if not t1.success:
@@ -307,7 +338,6 @@ class SynthesisStage:
                     error_output=t1.prose_output,
                     failure_kind=t1.failure_kind,
                 )
-            state.synthesis_bytes = synthesis_path.stat().st_size if synthesis_path.exists() else 0
 
         # ── Sidecar — epistemic JSON (bounded validate-and-re-ask) ──
         # A malformed sidecar must not fail the whole 2-turn attempt; the loop

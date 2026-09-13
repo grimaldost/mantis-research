@@ -48,6 +48,17 @@ releases (starting with 0.1.0).
   (`STREAM_LINE_LIMIT_BYTES`, 16 MiB) on the spawn, and a contract test feeds a
   200 KB single line through the real reader.
 
+- **A retry re-bought a synthesis that was already on disk.** The idempotent
+  re-entry guard reads `state.synthesis_bytes`, and that was assigned *after*
+  the Turn-1 adapter call — so a turn that ended by raising, which is what a
+  stream-limit overrun does once the model has written the document, unwound
+  past the assignment. The next attempt read "file on disk, no recorded size"
+  as "no brief yet" and regenerated it, which is the field's byte-level
+  evidence (60,542 B → 57,271 B, 11 sections → 14). Turn 1's product is now
+  recorded from disk in a `finally`, against a fingerprint taken before the
+  turn, so the record cannot be skipped and a document an earlier run left
+  behind is never adopted as this turn's work.
+
 - **A deterministic stream failure bought three attempts.** A stream-limit
   overrun is the same on every attempt, but nothing classified it: it reached
   the orchestrator's unexpected-exception path, which recorded the exception
