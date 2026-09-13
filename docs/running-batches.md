@@ -83,12 +83,22 @@ Per-stage flags:
 
 The commands are scriptable; the process exit code is the contract.
 
-| Command | 0 | 1 | 2 |
-|---|---|---|---|
-| `mantis run <stage>` | every selected topic done (or already done) | any topic failed, rate-limited, or blocked upstream in a live run (a dry run does not count blocked as a failure) | unknown stage name (typer rejects it as an unknown subcommand) |
-| `mantis research` | manifest `ok: true` | manifest `ok: false` — a stage returned non-zero | invalid argument (unknown `--assurance`, empty `--substrates`, a `--resume` directory outside `outputs/` or owned by a live process) |
-| `mantis monitor <stage>` | all topics terminal (`ALL_TERMINAL`) | `progress.json` not found | neither a stage nor `--snapshot` given |
-| `mantis monitor --snapshot` | the config loaded and the table printed | a missing config path or an invalid config — the error propagates | — |
+| Command | 0 | 1 | 2 | 3 |
+|---|---|---|---|---|
+| `mantis run <stage>` | every selected topic done (or already done) | any topic failed, rate-limited, or blocked upstream in a live run (a dry run does not count blocked as a failure) | unknown stage name (typer rejects it as an unknown subcommand) | — |
+| `mantis research` | manifest `ok: true` **and** the run delivered its epistemic sidecar | manifest `ok: false` — a stage returned non-zero | invalid argument (unknown `--assurance`, empty `--substrates`, a `--resume` directory outside `outputs/` or owned by a live process) | every stage passed and the run has no sidecar it owed — the reason is on stderr |
+| `mantis monitor <stage>` | all topics terminal (`ALL_TERMINAL`) | `progress.json` not found | neither a stage nor `--snapshot` given | — |
+| `mantis monitor --snapshot` | the config loaded and the table printed | a missing config path or an invalid config — the error propagates | — | — |
+
+`mantis research`'s 3 exists because `ok` reports the **stages**, not the
+product ([ADR-0011](adr/0011-two-outcomes-per-synthesis-run.md)): a sidecar turn
+can fail over a synthesis document that is complete and on disk, and `ok` is
+then legitimately true. Folding that into 1 would discard the distinction, and
+moving a failed stage off 1 would break the contract above. Both this exit code
+and the MCP tool's `IncompleteRunError` come from one function,
+`research_service.missing_product`, so the two surfaces cannot disagree about
+whether a run delivered an answer. A research-only tier and a dry run owe no
+sidecar and never see 3.
 
 A stage listed in `DISABLED_STAGES` also exits 1, but not cleanly: the guard in
 `interface/cli/dispatch.py` raises `RuntimeError`, so the pointer message

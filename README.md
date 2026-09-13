@@ -91,8 +91,9 @@ The other flags:
 
 The manifest lists every output path (briefs, synthesis, sidecar, falsification,
 evaluation), each stage's exit code, and best-effort token/cost totals.
-`mantis research` itself exits 0 when the manifest is `ok`, 1 when a stage
-failed, and 2 on a bad argument (the full table is in
+`mantis research` itself exits 0 when the manifest is `ok` and the run delivered
+its sidecar, 1 when a stage failed, 2 on a bad argument, and 3 when every stage
+passed but the sidecar it owed is missing (the full table is in
 [docs/running-batches.md](docs/running-batches.md#exit-codes)).
 
 ## Why multi-substrate

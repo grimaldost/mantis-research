@@ -50,6 +50,23 @@ releases (starting with 0.1.0).
   (`STREAM_LINE_LIMIT_BYTES`, 16 MiB) on the spawn, and a contract test feeds a
   200 KB single line through the real reader.
 
+- **The two serving surfaces disagreed about what a run delivered.** Making
+  `ok` report the stages (below) left `mantis research` exiting **0** on a run
+  the MCP tool refuses with `IncompleteRunError` — the CLI still read `ok` as
+  "the product exists". The judgement now has one producer,
+  `research_service.missing_product`, which answers whether a run owes a
+  sidecar it does not have and why; the MCP refusal builds its blame line from
+  it and the CLI derives its exit code from it, so a change to one is a change
+  to both. `tests/integration/test_surfaces_agree_on_completeness.py` asserts
+  the two agree over every manifest shape.
+
+  `mantis research` gains **exit code 3**: every stage passed and the sidecar it
+  owed is missing, with the reason on stderr. Deliberately not 1 — `ok` is
+  genuinely true about the stages in that case, so folding it into the
+  stage-failure code would discard the distinction ADR-0011 exists to draw;
+  deliberately not a reuse of 1 for a failed *stage* either, since scripts key
+  on that today. 0 was the defect.
+
 - **A failed sidecar reported a complete synthesis as a failed run.**
   `run_attempt` returned one `AttemptResult` for Turn 1 and the sidecar loop
   together, so a sidecar that would not validate marked the topic FAILED,

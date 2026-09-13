@@ -21,6 +21,7 @@ import os
 import re
 import secrets
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from mantis_research.core import paths
@@ -34,8 +35,7 @@ from mantis_research.core.state import OpenRouterResearchState, SynthesisState
 from mantis_research.interface.seat import process_is_alive
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-    from pathlib import Path
+    from collections.abc import Mapping, Sequence
 
     from mantis_research.core.progress import ProgressCallback
     from mantis_research.core.stage import SeatProbe
@@ -253,6 +253,53 @@ def read_run_record(run_dir: Path) -> dict[str, Any]:
         msg = f'run record at {path} is unreadable: {exc}'
         raise ValueError(msg) from exc
     return record
+
+
+#: What `mantis research` exits when every stage passed and the run still has no
+#: epistemic sidecar. Distinct from 1 on purpose: since ADR-0011 `ok` is true
+#: about the *stages* in exactly that case, so folding it into the stage-failure
+#: code would discard the distinction that ADR exists to draw — and moving a
+#: failed stage off 1 would break a contract this change has no business
+#: touching. 2 is already the invalid-argument code.
+MISSING_PRODUCT_EXIT_CODE = 3
+
+
+def missing_product(manifest: Mapping[str, Any]) -> str | None:
+    """Why this run owes an epistemic sidecar it does not have, or None.
+
+    The one place that judgement is made. The sidecar is the product (ADR-0003),
+    so "did this run deliver an answer" is a question about the artifact, not
+    about ``ok`` — which since ADR-0011 reports the stages. Both serving surfaces
+    read this: the MCP tool builds its refusal from the returned reason, and
+    ``mantis research`` derives its exit code from it.
+
+    One function rather than a test at each surface, because the copy is what
+    drifts: for one release candidate the MCP path refused a run whose sidecar
+    had failed while the CLI exited 0 over the identical manifest, because only
+    one of the two had been reconciled with ``ok``'s new meaning.
+
+    A run that never owed a sidecar is not missing one — a research-only tier
+    (MANT-B60) or a dry run legitimately has none, and refusing those would
+    refuse the one tier that runs without a local seat.
+    """
+    if manifest.get('dry_run', False):
+        return None
+    # Absent, the flag reads as owed: every tier before it was.
+    if not manifest.get('produces_sidecar', True):
+        return None
+    if Path(str(manifest['outputs']['sidecar'])).exists():
+        return None
+    stages: Mapping[str, Mapping[str, Any]] = manifest.get('stages') or {}
+    failed = sorted(stage for stage, rc in stages.items() if rc.get('exit_code', 0) != 0)
+    if failed:
+        return f'{", ".join(failed)} exited non-zero'
+    reason = (manifest.get('sidecar') or {}).get('error')
+    if reason:
+        # Since ADR-0011 a stage can exit 0 with its sidecar recorded as failed,
+        # and that reason is more use than the exit codes it no longer shows up
+        # in.
+        return f'every stage exited 0 and the sidecar turn failed: {reason}'
+    return 'every stage exited 0, so the artifact was lost rather than refused'
 
 
 def produces_sidecar(stages: Sequence[str]) -> bool:

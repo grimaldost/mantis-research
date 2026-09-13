@@ -47,7 +47,16 @@ a reason — recorded on the stage's state, surfaced on the run manifest as a
 degraded outcome on a successful run; it no longer fails the stage, stops the
 pipeline, or marks the topic `FAILED`.
 
-Two supporting rules follow from the same reading:
+Three supporting rules follow from the same reading:
+
+- **"Did this run deliver an answer" has one producer.** `ok` no longer answers
+  it, so every surface that used to read `ok` for it must read the same new
+  judgement instead: `research_service.missing_product` returns the reason a run
+  owes a sidecar it does not have, or `None`. The MCP tool builds its
+  `IncompleteRunError` blame line from it and `mantis research` derives its exit
+  code from it. A per-surface copy of the test is what drifts — and did, within
+  this very change: the first cut reconciled the MCP path and left the CLI
+  exiting 0 over a manifest that path refuses.
 
 - **What an attempt produced is observed, not assigned.** Turn 1's product is
   recorded from disk in a `finally`, against a fingerprint taken before the
@@ -81,6 +90,14 @@ Two supporting rules follow from the same reading:
 - **New invariant.** A derived artifact's failure is reported on its own axis;
   it never retracts an artifact that was produced. Later stages that add
   derived outputs follow the same shape.
+- **A second invariant, learned the hard way in this change.** Every surface
+  that reports whether a run delivered an answer reads `missing_product`, and a
+  test asserts they agree. Changing what a widely-read field means obliges you
+  to find every reader of it — and the cheapest way to keep that true later is a
+  cross-surface test rather than care.
+- `mantis research` gains exit code **3**: the stages passed and the sidecar
+  they owed is missing. 1 keeps meaning "a stage failed", because scripts key on
+  it and because `ok` is genuinely true in the new case.
 - `SynthesisState` gains `sidecar_status` / `sidecar_error` (additive optional,
   I4). Historical state files read as "unknown", which is what they are.
 - The MCP result gains a `sidecar` block (additive, ADR-0009). A caller that
@@ -102,7 +119,7 @@ pre-mortem certification this wave does not have. Rows are the triage's.
 | T14a | Pass an explicit 16 MiB `limit=` to `create_subprocess_exec`; contract test feeds a 200 KB single line through the real consumer | `interface/adapters/_subprocess.py` |
 | T15a | `classify_failure` recognises asyncio's own stream-limit texts as `PRECONDITION`; the orchestrator's unexpected-exception path carries the exception text into `error_output` so the classifier can see it | `core/retry.py`, `interface/orchestrator.py` |
 | T15b | Fingerprint the synthesis path before Turn 1; record what is on disk in a `finally`, only when it changed | `interface/stages/synthesis.py` |
-| T16a | Sidecar outcome recorded on state, surfaced on the manifest and the MCP result; the attempt no longer fails on it | `interface/stages/synthesis.py`, `core/state.py`, `core/sidecar.py`, `interface/research_service.py`, `interface/mcp/server.py` |
+| T16a | Sidecar outcome recorded on state, surfaced on the manifest and the MCP result; the attempt no longer fails on it. `missing_product` is the one producer of the completeness judgement both surfaces read, and `mantis research` exits 3 when the stages passed without it | `interface/stages/synthesis.py`, `core/state.py`, `core/sidecar.py`, `interface/research_service.py`, `interface/mcp/server.py`, `interface/cli/research.py` |
 | T16b | Model writes `<stem>.sidecar.draft.json`; the runner renames the merged document onto `<stem>.sidecar.json` | `interface/stages/synthesis.py` |
 
 Out of this wave, and unchanged: T25a (prompt provenance), T26a (`SKILL.md`

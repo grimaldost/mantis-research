@@ -20,7 +20,9 @@ from mantis_research.core.progress import RunEvent
 from mantis_research.interface.research_service import (
     _DEFAULT_SUBSTRATES,
     _TIER_STAGES,
+    MISSING_PRODUCT_EXIT_CODE,
     build_config,
+    missing_product,
     resume_research,
     run_research,
 )
@@ -105,4 +107,14 @@ def research_cmd(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=2) from exc
     typer.echo(json.dumps(manifest, indent=2))
-    raise typer.Exit(code=0 if manifest['ok'] else 1)
+    # Two questions, two codes. `ok` reports the stages (ADR-0011), so it is no
+    # longer the whole of "did this run deliver an answer" — the sidecar is the
+    # product (ADR-0003), and whether one is owed and missing is decided by
+    # `missing_product`, the same call the MCP tool refuses on. Reading `ok`
+    # alone made this command exit 0 over a run that path refuses.
+    missing = missing_product(manifest)
+    if missing is not None:
+        typer.echo(f'no epistemic sidecar: {missing}', err=True)
+    if not manifest['ok']:
+        raise typer.Exit(code=1)
+    raise typer.Exit(code=MISSING_PRODUCT_EXIT_CODE if missing is not None else 0)
