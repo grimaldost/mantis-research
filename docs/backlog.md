@@ -718,8 +718,17 @@ conflict with MANT-B48 in any case. *triage*
 Reconciled against `CHANGELOG.md` (0.1.0 → 0.2.0) and history through
 `b4050b2`. Recorded here so the same findings are not re-proposed.
 
+The 0.5.0 rows carry the 2026-09-13 delta-2 triage's own ids (`T14a` onward)
+rather than `MANT-Bnn`: those rows never had an item on this list, and minting
+one at the point they land would be bookkeeping for its own sake.
+
 | What | Release | Closes |
 |---|---|---|
+| The local-seat stream reader declares its own line ceiling (`STREAM_LINE_LIMIT_BYTES`, 16 MiB) instead of inheriting asyncio's 64 KiB, with a contract test driving a real spawn and a 200 KB line | 0.5.0 | Triage row **T14a** (2026-09-13 delta-2). Reproduced 2/2 in one report and 7/7 in a later wave, always after the briefs and synthesis were paid for |
+| A deterministic stream overrun classifies as `PRECONDITION` — one attempt, no backoff — and a crashing attempt carries its exception text into the field the classifier reads | 0.5.0 | Triage row **T15a**. The three blind retries were about 50 minutes per run for an error no attempt could change |
+| Turn 1's product is recorded from disk in a `finally`, against a fingerprint taken before the turn | 0.5.0 | Triage row **T15b**, which the triage could not diagnose from source. The assignment sat after a call that raises, so the guard never learned the document existed; the "only when it changed" clause is what keeps `--force` from adopting a stale synthesis |
+| The sidecar's outcome is the run's second outcome (ADR-0011): recorded on the synthesis state, reported as a `sidecar` block on the manifest and the MCP result, never the synthesis stage's failure. A DONE topic with a failed sidecar is not *settled*, so a resume buys the sidecar turn alone | 0.5.0 | Triage row **T16a**, 3 reports. `IncompleteRunError` deliberately unchanged — refusing a run with no sidecar at all is ADR-0003's own decision |
+| The model writes `<stem>.sidecar.draft.json`; the runner renames the merged document onto the published path | 0.5.0 | Triage row **T16b**. Renaming only the runner's own write would have left the hazard intact — the half-made document at the published path was the *model's* |
 | The child watchdog measures silence rather than runtime: output cadence travels with the format, `run_streaming` requires the caller to declare it, and a silence watchdog over a mute-by-design child raises. The envelope is parsed so the classifier sees prose, a `thinking` event goes out while the child works, and the turn's cost is recorded | 0.4.0 | **MANT-B58.** 66 of 237 historically successful local-seat stages exceeded the 600 s ceiling the watchdog enforced |
 | Retry budget is a function of the failure's class; a watchdog kill and an unreapable child are `PRECONDITION` and get one attempt. The producer declares the kind rather than the orchestrator guessing it from text, and a retry mints its own session | 0.4.0 | **MANT-B59.** The text classifier could never recognise the one failure that produces no text |
 | `assurance: "research"` — briefs and cost, no local-seat stage, no seat probe. The serving path's sidecar refusal reads a `produces_sidecar` flag, absent meaning owed | 0.4.0 | **MANT-B60.** The tier that ran where the others could not |
