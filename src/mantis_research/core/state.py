@@ -54,6 +54,11 @@ from typing import TYPE_CHECKING, Self
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# Runtime import, not a type-checking one: pydantic resolves a field's
+# annotation against module globals when the model class is built, and
+# `SynthesisState.sidecar_status` is annotated with this enum.
+from mantis_research.core.sidecar import SidecarOutcome
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -260,6 +265,25 @@ class SynthesisState(TopicState):
     synthesis_bytes: int | None = None
     journal_bytes: int | None = None
     sidecar_bytes: int | None = None  # additive (I4); the epistemic sidecar (§14)
+    # The sidecar's own outcome, separate from the synthesis document's
+    # (ADR-0011). Additive optional (I4): absent on every historical state file,
+    # which reads as NOT_RUN — the attempt predates the record.
+    sidecar_status: SidecarOutcome | None = None
+    sidecar_error: str | None = None
+
+    @property
+    def settled(self) -> bool:
+        """DONE, and with the epistemic contract this stage owes (ADR-0011).
+
+        A failed sidecar no longer fails the attempt, so without this a topic
+        would go DONE with no sidecar and a later run — a resume, in particular
+        — would skip it as finished. It is not: the sidecar is the product
+        (ADR-0003), and re-entry is cheap because ``run_attempt`` skips Turn 1
+        when the synthesis document is already recorded. So this reports what
+        re-entry should do, on the state class that owns the field, rather than
+        teaching the generic orchestrator about sidecars.
+        """
+        return super().settled and self.sidecar_status is not SidecarOutcome.FAILED
 
 
 class JournalPassesState(TopicState):

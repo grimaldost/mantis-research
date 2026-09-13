@@ -202,10 +202,15 @@ compensate for briefs that had nothing to disagree about.
 ## Epistemic sidecar (ADR-0003, spec §14)
 
 After the synthesis brief is written, the stage runs a **dedicated sidecar
-turn**: the model reads the brief and writes `<stem>.sidecar.json` — the
+turn**: the model reads the brief and writes `<stem>.sidecar.draft.json` — the
 machine-readable epistemic contract agent consumers load instead of parsing
-prose. The schema is `core/sidecar.py` (`ResearchSidecar`, `sidecar_version: 2`),
-with two authorship zones:
+prose. The **runner** publishes it: it validates the draft, merges its own zone
+in, renames the merged document onto `<stem>.sidecar.json` and removes the
+draft. The model never writes the published path, so a reader keyed on that
+file's presence cannot meet a half-made sidecar with `sources: []` and
+`provenance: {}` — which is what it used to meet. The schema is
+`core/sidecar.py` (`ResearchSidecar`, `sidecar_version: 2`), with two authorship
+zones:
 
 - **model-authored** — `claims`, `divergences`, `verification_queue`,
   `agreements_worth_verifying`, `coverage_notes` (drawn from the synthesis's
@@ -219,12 +224,18 @@ Mechanics that matter:
 
 - The prompt template (`SYNTHESIS_SIDECAR` in `core/prompts.py`) brace-escapes
   its JSON example so `str.format` binds only `{synthesis_path}` / `{sidecar_path}`.
+  The template is unchanged by the draft/publish split — the stage binds
+  `{sidecar_path}` to the draft, so the model is told where to write without the
+  prompt having to know why.
 - A malformed sidecar does **not** re-run the expensive synthesis: the stage
   validates and re-asks on the same session up to `_SIDECAR_MAX_ATTEMPTS` times,
   and an orchestrator retry skips Turn 1 when the brief already exists (the
   sidecar is a cheap, model-fallible step, isolated from the brief).
-- The sidecar joins the synthesis done-condition — an unrecoverable sidecar
-  fails the attempt (brief left intact for the retry).
+- The sidecar's outcome is the run's **second** outcome, not the attempt's
+  (ADR-0011): an unrecoverable sidecar is recorded on
+  `SynthesisState.sidecar_status` / `sidecar_error` and reported on the manifest,
+  and the attempt still succeeds on the synthesis document. The topic is then
+  DONE but not *settled*, so re-entering the run buys the sidecar turn alone.
 - The **runner-authored zone is gated separately** from the model's. After the
   merge, `require_complete()` demands `question`, `generated_at` and a non-empty
   `sources`, and raises if any is absent. That failure does not consume a

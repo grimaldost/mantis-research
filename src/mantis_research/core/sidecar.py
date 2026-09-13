@@ -28,6 +28,7 @@ a hollow artifact ship.
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -49,6 +50,30 @@ REQUIRED_ON_WRITE: tuple[str, ...] = ('question', 'generated_at', 'sources')
 
 class SidecarContractError(ValueError):
     """A merged sidecar is missing a field the agent contract requires."""
+
+
+class SidecarOutcome(StrEnum):
+    """How a run's sidecar ended, on its own axis from the synthesis (ADR-0011).
+
+    The sidecar is the product (ADR-0003) but it is a *derived* product: it is
+    read out of a synthesis document that already exists. Reporting its failure
+    as the synthesis stage's failure converted a finished, paid-for synthesis
+    into a failed run, stopped the pipeline before falsification, and sent the
+    retry back to regenerate the document it already had.
+
+    Closed vocabulary — the stage records only ``OK`` / ``FAILED``; the run
+    manifest fills the other two, which are facts about the run rather than
+    about a sidecar turn.
+    """
+
+    #: Written, validated, merged and published.
+    OK = 'ok'
+    #: The sidecar turn or its validation failed; the reason travels beside it.
+    FAILED = 'failed'
+    #: The stage never reached the sidecar — a dry run, or an earlier failure.
+    NOT_RUN = 'not_run'
+    #: This tier owes no sidecar (a research-only run, MANT-B60).
+    NOT_OWED = 'not_owed'
 
 
 class SidecarModel(BaseModel):

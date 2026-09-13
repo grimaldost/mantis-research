@@ -42,6 +42,16 @@ DEFAULT_CHILD_IDLE_TIMEOUT_S = 600.0
 #: channel to say one thing — that the stage is still alive.
 ANNOUNCE_EVERY_S = 20.0
 
+#: The longest single line the runner will read off a child's stdout.
+#: ``asyncio.StreamReader`` defaults to 64 KiB and ``readline()`` *raises* past
+#: it, so the ceiling was inherited from a stream default chosen for interactive
+#: terminals — and a Claude turn that echoes its own synthesis onto one line
+#: blew straight through it, killing the turn after three research briefs and a
+#: full synthesis were already paid for (7 of 7 runs in one wave). 16 MiB is
+#: past any line this pipeline has produced while still bounding the buffer a
+#: hostile child could make the runner hold.
+STREAM_LINE_LIMIT_BYTES = 16 * 1024 * 1024
+
 #: How long to wait for a killed child to be reaped before giving up on it.
 #: The wait after the kill used to be unbounded, and the seat lock is released
 #: only when this function returns — so a child that resisted termination held
@@ -105,6 +115,9 @@ async def run_streaming(
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        # Declared, not inherited: see STREAM_LINE_LIMIT_BYTES. Without it the
+        # reader below raises on the first line past 64 KiB.
+        limit=STREAM_LINE_LIMIT_BYTES,
     )
     if process.stdout is None:
         msg = 'subprocess stdout pipe missing — should never happen with PIPE config'

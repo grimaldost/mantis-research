@@ -5,28 +5,42 @@ is ``synthesis-topic-*``, the sidecar turn ``sidecar-topic-*``, the journal turn
 carries no name) and writes the files each turn is expected to produce. Runs
 non-dry-run so the sidecar sub-loop actually fires; briefs live under a batch
 layout with ``outputs_root`` redirected to tmp.
+
+The sidecar turn writes wherever its prompt points, which since ADR-0011 is a
+draft path the runner publishes from — so the fake follows the runner rather
+than a path this module hard-codes. Whether a failed sidecar fails the attempt
+is that ADR's own subject and lives in ``test_sidecar_outcome.py``; this module
+stays on what the sidecar *contains*.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 
 from mantis_research.core import prompts as default_prompts
 from mantis_research.core.config import load_batch_config
-from mantis_research.core.sidecar import SIDECAR_VERSION, ResearchSidecar
+from mantis_research.core.sidecar import SIDECAR_VERSION, ResearchSidecar, SidecarOutcome
 from mantis_research.core.stage import RunContext
 from mantis_research.core.state import SynthesisState
 from mantis_research.interface.adapters.claude_cli import ClaudeCliOptions, ClaudeCliResult
 from mantis_research.interface.stages.synthesis import SynthesisStage
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from mantis_research.core.config import BatchConfig
+
+_TARGET = re.compile(r'(\S+\.sidecar(?:\.draft)?\.json)')
+
+
+def _write(target: Path, content: str) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding='utf-8')
+
 
 _VALID = json.dumps(
     {
@@ -52,6 +66,8 @@ class ScriptedAdapter:
     brief_calls: int = 0
     sidecar_calls: int = 0
     journal_calls: int = 0
+    #: Script the journal turn to fail, to exercise re-entry into the attempt.
+    journal_fails: bool = False
 
     def preflight(self) -> None:
         return None
@@ -69,17 +85,20 @@ class ScriptedAdapter:
             i = self.sidecar_calls
             self.sidecar_calls += 1
             content = self.sidecar_contents[i] if i < len(self.sidecar_contents) else None
+            match = _TARGET.search(prompt)
+            assert match is not None, 'the sidecar prompt must name a path to write'
             if content is not None:
-                self.sidecar_path.parent.mkdir(parents=True, exist_ok=True)
-                self.sidecar_path.write_text(content, encoding='utf-8')
+                _write(Path(match.group(1)), content)
         elif 'synthesis-topic' in name:
             self.brief_calls += 1
-            self.synthesis_path.parent.mkdir(parents=True, exist_ok=True)
-            self.synthesis_path.write_text('# synthesis brief', encoding='utf-8')
+            _write(self.synthesis_path, '# synthesis brief')
         else:  # journal turn (no name)
             self.journal_calls += 1
-            self.journal_path.parent.mkdir(parents=True, exist_ok=True)
-            self.journal_path.write_text('journal', encoding='utf-8')
+            if self.journal_fails:
+                return ClaudeCliResult(
+                    success=False, exit_code=1, duration_s=1.0, error='journal turn failed'
+                )
+            _write(self.journal_path, 'journal')
         return ClaudeCliResult(success=True, exit_code=0, duration_s=1.0, session_id='s')
 
 
@@ -152,20 +171,23 @@ class TestSidecarEmission:
         assert merged.question == 'T'
         assert merged.sidecar_version == SIDECAR_VERSION
 
-    async def test_missing_required_field_fails_the_stage_loudly(
+    async def test_missing_required_field_keeps_the_hollow_artifact_off_disk(
         self, paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         # A hollow artifact must not ship. The failure names the field and does
         # NOT burn re-asks: the missing field is runner-authored, so re-asking
-        # the model cannot fix it.
+        # the model cannot fix it. Since ADR-0011 it is the *sidecar's* failure,
+        # not the synthesis document's — see test_sidecar_outcome.py.
         monkeypatch.setattr(
             'mantis_research.interface.stages.synthesis.SynthesisStage._fill_runner_fields',
             staticmethod(lambda sc, *a, **k: sc.model_copy(update={'question': None})),
         )
         adapter = ScriptedAdapter(paths['synthesis'], paths['sidecar'], paths['journal'], [_VALID])
-        result = await _run(adapter, _config(), tmp_path, SynthesisState(id='1', slug='t'))
-        assert not result.success
-        assert 'question' in (result.error or '')
+        state = SynthesisState(id='1', slug='t')
+        await _run(adapter, _config(), tmp_path, state)
+        assert not paths['sidecar'].exists()
+        assert state.sidecar_status is SidecarOutcome.FAILED
+        assert 'question' in (state.sidecar_error or '')
         assert adapter.sidecar_calls == 1  # no re-ask burned on a runner-side gap
 
     async def test_source_overlap_membership_is_recomputed_not_trusted(
@@ -331,22 +353,25 @@ class TestSidecarEmission:
         assert adapter.brief_calls == 1  # brief generated exactly once
         assert adapter.sidecar_calls == 2  # one re-ask
 
-    async def test_all_invalid_fails_with_brief_intact(self, paths, tmp_path: Path) -> None:
+    async def test_all_invalid_leaves_no_sidecar_and_spends_the_budget(
+        self, paths, tmp_path: Path
+    ) -> None:
         adapter = ScriptedAdapter(
             paths['synthesis'], paths['sidecar'], paths['journal'], [_INVALID, _INVALID, _INVALID]
         )
-        result = await _run(adapter, _config(), tmp_path, SynthesisState(id='1', slug='t'))
-        assert not result.success
+        await _run(adapter, _config(), tmp_path, SynthesisState(id='1', slug='t'))
         assert adapter.sidecar_calls == 3  # exhausted the budget
-        assert paths['synthesis'].exists()  # brief left intact for the next attempt
-        assert adapter.journal_calls == 0  # never reached the journal
+        assert paths['synthesis'].exists()  # brief left intact
+        assert not paths['sidecar'].exists()  # nothing invalid published
 
     async def test_retry_after_failure_does_not_recall_turn1(self, paths, tmp_path: Path) -> None:
         state = SynthesisState(id='1', slug='t')
         cfg = _config()
-        # First attempt: sidecar exhausts → fail, but the brief is written and sized.
+        # First attempt: the journal turn fails, which is the remaining reason a
+        # retry re-enters `run_attempt` on the same state (a failed sidecar no
+        # longer is — ADR-0011). The brief is written and sized.
         first = ScriptedAdapter(
-            paths['synthesis'], paths['sidecar'], paths['journal'], [_INVALID, _INVALID, _INVALID]
+            paths['synthesis'], paths['sidecar'], paths['journal'], [_VALID], journal_fails=True
         )
         r1 = await _run(first, cfg, tmp_path, state)
         assert not r1.success

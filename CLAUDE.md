@@ -141,7 +141,12 @@ Other env vars actually read at runtime: `OPENROUTER_API_KEY`,
 - Each synthesis emits `<stem>.sidecar.json` (schema `core/sidecar.py`,
   `sidecar_version: 2`) — the agent-consumable epistemic contract. (ADR-0003.)
   The runner fills `question` verbatim from the topic and gates the write on
-  `question` / `generated_at` / non-empty `sources`.
+  `question` / `generated_at` / non-empty `sources`. The model writes a
+  `.sidecar.draft.json`; the runner renames the merged document onto the
+  published path. The sidecar's outcome is reported separately from the
+  synthesis document's — `SynthesisState.sidecar_status` / `sidecar_error`, and
+  a `sidecar` block on the manifest and the MCP result — and never fails the
+  synthesis stage. (ADR-0011.)
 
 Decisions are recorded as ADRs in `docs/adr/`; the pivot spec + method live in
 `docs/specs/` and `docs/method/`.

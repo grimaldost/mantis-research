@@ -22,6 +22,8 @@ re-deriving decisions.
 | [0007](0007-typed-stage-context.md) | Stages receive validated `BatchConfig` / `TopicConfig` models across the orchestrator boundary, not dicts. | Accepted |
 | [0008](0008-research-prompt-templating.md) | `topics[].research_prompt` is inherited by any research subsession that omits its own prompt; resolution keys on presence, never truthiness. | Accepted |
 | [0009](0009-agent-serving-via-mcp-plugin.md) | Agents consume the tool through a local stdio MCP server exposing a `research` tool, packaged as a Claude Code plugin; the MCP contract evolves additively. | Accepted |
+| [0010](0010-one-progress-surface.md) | `mantis status` folds into `mantis monitor --snapshot`: one progress surface, not two shapes of the same question. | Accepted |
+| [0011](0011-two-outcomes-per-synthesis-run.md) | A synthesis attempt reports two outcomes — the synthesis document and the epistemic sidecar — so a failed derived artifact never retracts one that was produced. | Accepted |
 
 ## Writing a new ADR
 

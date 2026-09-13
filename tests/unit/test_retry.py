@@ -80,6 +80,54 @@ class TestClassifyFailure:
         assert classify_failure('') is FailureKind.GENERIC
 
 
+class TestADeterministicStreamFailureIsAPrecondition:
+    """The retry cannot undo a limit the reader itself enforced.
+
+    `asyncio.StreamReader.readline()` raises a plain `ValueError` when a line
+    overruns the reader's limit. It is deterministic — the same command into the
+    same environment produces the same overrun — but the only classifier was a
+    rate-limit text scan, so it drew the transient budget: 7 of 7 runs in one
+    wave retried it three times each, about 50 minutes per run, after the
+    research briefs and the synthesis were already paid for.
+
+    The two texts below are asyncio's own, verbatim: `readline` re-raises
+    `LimitOverrunError`'s message, and that message differs depending on whether
+    the separator had arrived by the time the buffer filled.
+    """
+
+    @pytest.mark.parametrize(
+        'text',
+        [
+            'ValueError: Separator is found, but chunk is longer than limit',
+            'ValueError: Separator is not found, and chunk exceed the limit',
+            # The shape the orchestrator's own unexpected-exception path produces.
+            'unexpected: Separator is found, but chunk is longer than limit',
+        ],
+    )
+    def test_a_stream_limit_overrun_is_a_precondition(self, text: str) -> None:
+        assert classify_failure(text) is FailureKind.PRECONDITION
+
+    def test_a_precondition_text_outranks_an_incidental_rate_limit_word(self) -> None:
+        # A deterministic overrun stays deterministic even when the child's
+        # output happened to mention a limit being hit; waiting cannot help.
+        text = "Separator is found, but chunk is longer than limit (you've hit your limit)"
+        assert classify_failure(text) is FailureKind.PRECONDITION
+
+    @pytest.mark.parametrize(
+        'text',
+        [
+            'exit code 1',
+            'the chunk arrived after the deadline',
+            'limit of patience exceeded',
+        ],
+    )
+    def test_ordinary_failure_text_is_still_generic(self, text: str) -> None:
+        assert classify_failure(text) is FailureKind.GENERIC
+
+    def test_a_rate_limit_is_still_a_rate_limit(self) -> None:
+        assert classify_failure('HTTP 429 Too Many Requests') is FailureKind.RATE_LIMIT
+
+
 class TestRetryPolicy:
     def test_defaults_match_legacy(self) -> None:
         # These defaults match the values previously hard-coded across all 5 runners.

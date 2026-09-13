@@ -107,6 +107,48 @@ class TestStatusReadsWhatIsOnDisk:
         assert status['state'] == 'finished'
         assert status['ok'] is False
 
+    async def test_the_sidecar_outcome_is_reported_beside_ok(self, rooted: Path) -> None:
+        # ADR-0011 — polling is the surface an agent uses to decide whether to
+        # collect a detached run, so the run's second outcome has to reach it.
+        # `ok: true` with a failed sidecar is exactly the case a poller must be
+        # able to see.
+        run_dir = rooted / 'outputs_root' / 'sidecar-failed-run'
+        run_dir.mkdir(parents=True)
+        (run_dir / 'run.json').write_text(
+            json.dumps(
+                {
+                    'question': 'q',
+                    'batch_name': 'sidecar-failed-run',
+                    'status': 'complete',
+                    'ok': True,
+                    'dry_run': False,
+                    'produces_sidecar': True,
+                    'assurance': 'fast',
+                    'stages': {'synthesis': {'exit_code': 0}},
+                    'sidecar': {'status': 'failed', 'error': 'schema drift on every re-ask'},
+                    'outputs': {'sidecar': str(run_dir / 'nothing.json')},
+                }
+            ),
+            encoding='utf-8',
+        )
+        status = await research_status(str(run_dir))
+        assert status['ok'] is True
+        assert status['sidecar']['status'] == 'failed'
+        assert 'schema drift' in status['sidecar']['error']
+
+    async def test_a_record_predating_the_sidecar_block_reads_as_not_run(
+        self, rooted: Path
+    ) -> None:
+        # Run records written before the field exist on disk and are polled.
+        run_dir = rooted / 'outputs_root' / 'older-run'
+        run_dir.mkdir(parents=True)
+        (run_dir / 'run.json').write_text(
+            json.dumps({'batch_name': 'older-run', 'status': 'complete', 'ok': True}),
+            encoding='utf-8',
+        )
+        status = await research_status(str(run_dir))
+        assert status['sidecar'] == {'status': 'not_run', 'error': None}
+
 
 def _dir(rooted: Path) -> str:
     return str(next((rooted / 'outputs_root').iterdir()))

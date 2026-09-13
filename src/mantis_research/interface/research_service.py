@@ -21,6 +21,7 @@ import os
 import re
 import secrets
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from mantis_research.core import paths
@@ -29,12 +30,12 @@ from mantis_research.core.logging import configure_logging
 from mantis_research.core.paths import RunDirs, topic_stem
 from mantis_research.core.progress import RunEvent, emit
 from mantis_research.core.prompts import RESEARCH_REQUEST
-from mantis_research.core.state import OpenRouterResearchState
+from mantis_research.core.sidecar import SidecarOutcome
+from mantis_research.core.state import OpenRouterResearchState, SynthesisState
 from mantis_research.interface.seat import process_is_alive
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-    from pathlib import Path
+    from collections.abc import Mapping, Sequence
 
     from mantis_research.core.progress import ProgressCallback
     from mantis_research.core.stage import SeatProbe
@@ -230,6 +231,12 @@ def _manifest(
         'stages': {stage: {'exit_code': rc} for stage, rc in results.items()},
         'outputs': outputs,
         'cost': _read_cost(dirs, stem),
+        # Two outcomes, not one (ADR-0011). `ok` is the stages: did the run
+        # produce the documents it was asked for. The sidecar reports itself —
+        # a derived artifact's failure never retracts one that was produced,
+        # and folding them together is what turned three complete, paid-for
+        # syntheses into failed runs.
+        'sidecar': _read_sidecar_outcome(dirs, list(results), dry_run=dry_run),
         'ok': all(rc == 0 for rc in results.values()),
     }
 
@@ -246,6 +253,53 @@ def read_run_record(run_dir: Path) -> dict[str, Any]:
         msg = f'run record at {path} is unreadable: {exc}'
         raise ValueError(msg) from exc
     return record
+
+
+#: What `mantis research` exits when every stage passed and the run still has no
+#: epistemic sidecar. Distinct from 1 on purpose: since ADR-0011 `ok` is true
+#: about the *stages* in exactly that case, so folding it into the stage-failure
+#: code would discard the distinction that ADR exists to draw — and moving a
+#: failed stage off 1 would break a contract this change has no business
+#: touching. 2 is already the invalid-argument code.
+MISSING_PRODUCT_EXIT_CODE = 3
+
+
+def missing_product(manifest: Mapping[str, Any]) -> str | None:
+    """Why this run owes an epistemic sidecar it does not have, or None.
+
+    The one place that judgement is made. The sidecar is the product (ADR-0003),
+    so "did this run deliver an answer" is a question about the artifact, not
+    about ``ok`` — which since ADR-0011 reports the stages. Both serving surfaces
+    read this: the MCP tool builds its refusal from the returned reason, and
+    ``mantis research`` derives its exit code from it.
+
+    One function rather than a test at each surface, because the copy is what
+    drifts: for one release candidate the MCP path refused a run whose sidecar
+    had failed while the CLI exited 0 over the identical manifest, because only
+    one of the two had been reconciled with ``ok``'s new meaning.
+
+    A run that never owed a sidecar is not missing one — a research-only tier
+    (MANT-B60) or a dry run legitimately has none, and refusing those would
+    refuse the one tier that runs without a local seat.
+    """
+    if manifest.get('dry_run', False):
+        return None
+    # Absent, the flag reads as owed: every tier before it was.
+    if not manifest.get('produces_sidecar', True):
+        return None
+    if Path(str(manifest['outputs']['sidecar'])).exists():
+        return None
+    stages: Mapping[str, Mapping[str, Any]] = manifest.get('stages') or {}
+    failed = sorted(stage for stage, rc in stages.items() if rc.get('exit_code', 0) != 0)
+    if failed:
+        return f'{", ".join(failed)} exited non-zero'
+    reason = (manifest.get('sidecar') or {}).get('error')
+    if reason:
+        # Since ADR-0011 a stage can exit 0 with its sidecar recorded as failed,
+        # and that reason is more use than the exit codes it no longer shows up
+        # in.
+        return f'every stage exited 0 and the sidecar turn failed: {reason}'
+    return 'every stage exited 0, so the artifact was lost rather than refused'
 
 
 def produces_sidecar(stages: Sequence[str]) -> bool:
@@ -446,6 +500,31 @@ def resume_research(
         on_event=on_event,
         _resume_history=history,
     )
+
+
+def _read_sidecar_outcome(dirs: RunDirs, stages: Sequence[str], *, dry_run: bool) -> dict[str, Any]:
+    """The sidecar's own outcome for this run, read off the synthesis state.
+
+    The synthesis stage records it (ADR-0011); this reads it back the way
+    :func:`_read_cost` reads the OpenRouter state. Anything it cannot establish
+    — no synthesis stage ran, a dry run, an unreadable or pre-field state file —
+    is reported as what it is rather than guessed at.
+    """
+    absent = {'status': SidecarOutcome.NOT_RUN.value, 'error': None}
+    if not produces_sidecar(stages):
+        return {'status': SidecarOutcome.NOT_OWED.value, 'error': None}
+    if dry_run:
+        return absent
+    state_path = dirs.state('synthesis') / '1.json'
+    if not state_path.exists():
+        return absent
+    try:
+        state = SynthesisState.model_validate_json(state_path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return absent
+    if state.sidecar_status is None:
+        return absent
+    return {'status': state.sidecar_status.value, 'error': state.sidecar_error}
 
 
 def _read_cost(dirs: RunDirs, stem: str) -> dict[str, Any]:

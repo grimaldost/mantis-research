@@ -202,7 +202,12 @@ class Orchestrator:
             try:
                 result = await self.stage.run_attempt(topic, state, ctx)
             except Exception as e:
-                result = AttemptResult.fail(error=f'unexpected: {e}')
+                # The exception's text is the only failure text this path has,
+                # and the classifier reads `error_output`. Leaving it empty made
+                # every crash GENERIC — including the deterministic stream-limit
+                # overrun, which then bought two more attempts it could not use.
+                text = f'{type(e).__name__}: {e}'
+                result = AttemptResult.fail(error=f'unexpected: {e}', error_output=text)
                 bound.exception('attempt raised unexpectedly', attempt=attempt)
 
             if result.success:

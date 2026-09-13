@@ -91,8 +91,9 @@ The other flags:
 
 The manifest lists every output path (briefs, synthesis, sidecar, falsification,
 evaluation), each stage's exit code, and best-effort token/cost totals.
-`mantis research` itself exits 0 when the manifest is `ok`, 1 when a stage
-failed, and 2 on a bad argument (the full table is in
+`mantis research` itself exits 0 when the manifest is `ok` and the run delivered
+its sidecar, 1 when a stage failed, 2 on a bad argument, and 3 when every stage
+passed but the sidecar it owed is missing (the full table is in
 [docs/running-batches.md](docs/running-batches.md#exit-codes)).
 
 ## Why multi-substrate
@@ -126,9 +127,12 @@ uv run python -m mantis_research.interface.mcp
 The agent calls the `research` tool (`question`, `assurance`, optional
 `substrates` / `primary` / `journal` / `dry_run`) and gets back the run manifest
 plus the sidecar's `claims` / `divergences` / `verification_queue` (bounded to the
-MCP result-size budget), with synthesis and briefs referenced by path. Because the server runs
-locally, its synthesis stages inherit your authenticated `claude` seat (see
-Requirements). Reference skill: `skills/research/SKILL.md`.
+MCP result-size budget), with synthesis and briefs referenced by path. The
+manifest reports two outcomes, not one: `ok` is the stages, and a `sidecar`
+block (`{ status, error }`) is the epistemic contract's own result
+([ADR-0011](docs/adr/0011-two-outcomes-per-synthesis-run.md)). Because the
+server runs locally, its synthesis stages inherit your authenticated `claude`
+seat (see Requirements). Reference skill: `skills/research/SKILL.md`.
 
 ## The epistemic sidecar
 
@@ -143,9 +147,11 @@ schema in `core/sidecar.py`, `sidecar_version: 2`):
   model's JSON validates.
 
 The write is gated: a merged sidecar missing `question`, `generated_at` or a
-non-empty `sources` fails the synthesis stage instead of shipping. Without the
-question a frozen sidecar cannot be cited, and can be adopted as the answer to a
-different question.
+non-empty `sources` is recorded as a failed sidecar instead of shipping. Without
+the question a frozen sidecar cannot be cited, and can be adopted as the answer
+to a different question. The model writes a `.sidecar.draft.json` and the runner
+renames the merged document onto the published path, so a reader never meets a
+half-made sidecar at the path that means "finished".
 
 An agent consumes the sidecar for structured signal and reads the markdown only
 when it needs the prose.

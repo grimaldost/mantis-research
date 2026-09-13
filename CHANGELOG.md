@@ -7,6 +7,8 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-13
+
 ### Added
 
 - **Hosted CI.** Every push to main and every pull request now runs the gate
@@ -37,6 +39,74 @@ releases (starting with 0.1.0).
   drifted copy fails the suite instead of shipping.
 
 ### Fixed
+
+- **One long output line killed the synthesis turn after it was paid for.** The
+  shared streaming runner read the local-seat child with
+  `asyncio.StreamReader`'s inherited 64 KiB line cap, so a Claude turn that
+  echoed its own synthesis onto a single line raised
+  `ValueError: … chunk … limit` — reproduced 2 of 2 in one report and 7 of 7 in
+  a later wave, always after three research briefs and a full synthesis were
+  already on disk. The runner now declares its own ceiling
+  (`STREAM_LINE_LIMIT_BYTES`, 16 MiB) on the spawn, and a contract test feeds a
+  200 KB single line through the real reader.
+
+- **The two serving surfaces disagreed about what a run delivered.** Making
+  `ok` report the stages (below) left `mantis research` exiting **0** on a run
+  the MCP tool refuses with `IncompleteRunError` — the CLI still read `ok` as
+  "the product exists". The judgement now has one producer,
+  `research_service.missing_product`, which answers whether a run owes a
+  sidecar it does not have and why; the MCP refusal builds its blame line from
+  it and the CLI derives its exit code from it, so a change to one is a change
+  to both. `tests/integration/test_surfaces_agree_on_completeness.py` asserts
+  the two agree over every manifest shape.
+
+  `mantis research` gains **exit code 3**: every stage passed and the sidecar it
+  owed is missing, with the reason on stderr. Deliberately not 1 — `ok` is
+  genuinely true about the stages in that case, so folding it into the
+  stage-failure code would discard the distinction ADR-0011 exists to draw;
+  deliberately not a reuse of 1 for a failed *stage* either, since scripts key
+  on that today. 0 was the defect.
+
+- **A failed sidecar reported a complete synthesis as a failed run.**
+  `run_attempt` returned one `AttemptResult` for Turn 1 and the sidecar loop
+  together, so a sidecar that would not validate marked the topic FAILED,
+  stopped the pipeline before falsification, and sent the retry back to
+  regenerate a synthesis that was finished and paid for — three reports, 45 to
+  63 KB of good output each time. The two outcomes are now separate
+  ([ADR-0011](docs/adr/0011-two-outcomes-per-synthesis-run.md)): the attempt
+  succeeds on the synthesis document, and the sidecar's own result is recorded
+  on `SynthesisState.sidecar_status` / `sidecar_error` and reported as a
+  `sidecar` block on the run manifest and the MCP result. A topic whose sidecar
+  failed is DONE but not *settled*, so re-entering the run buys the sidecar turn
+  alone rather than the synthesis.
+
+- **The published sidecar could be read half-made.** The model wrote its JSON
+  straight to `<stem>.sidecar.json`, so between its write and the runner's merge
+  the file existed with `sources: []` and `provenance: {}` — and a watcher keyed
+  on its presence read that as finished. The model now writes
+  `<stem>.sidecar.draft.json` and the runner renames the merged document into
+  place, so the published path holds a whole document or nothing.
+
+- **A retry re-bought a synthesis that was already on disk.** The idempotent
+  re-entry guard reads `state.synthesis_bytes`, and that was assigned *after*
+  the Turn-1 adapter call — so a turn that ended by raising, which is what a
+  stream-limit overrun does once the model has written the document, unwound
+  past the assignment. The next attempt read "file on disk, no recorded size"
+  as "no brief yet" and regenerated it, which is the field's byte-level
+  evidence (60,542 B → 57,271 B, 11 sections → 14). Turn 1's product is now
+  recorded from disk in a `finally`, against a fingerprint taken before the
+  turn, so the record cannot be skipped and a document an earlier run left
+  behind is never adopted as this turn's work.
+
+- **A deterministic stream failure bought three attempts.** A stream-limit
+  overrun is the same on every attempt, but nothing classified it: it reached
+  the orchestrator's unexpected-exception path, which recorded the exception
+  only in `error` while the classifier reads `error_output`, so every crash
+  drew the transient budget. In one wave that was three attempts and roughly 50
+  minutes per run, spent after the work was done. `classify_failure` now
+  recognises asyncio's own stream-limit texts as `PRECONDITION` — one attempt,
+  no backoff — and a crashing attempt carries its exception text into the field
+  the classifier reads, without losing it from `last_error`.
 
 - **The MCP research tool died at dispatch on unix hosts.** First run of the
   new ubuntu CI leg: the orchestrator wires SIGINT with

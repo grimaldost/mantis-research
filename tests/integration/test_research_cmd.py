@@ -9,6 +9,9 @@ import pytest
 import typer
 
 from mantis_research.core.config import load_batch_config
+from mantis_research.core.paths import RunDirs
+from mantis_research.core.sidecar import SidecarOutcome
+from mantis_research.core.state import SynthesisState
 from mantis_research.interface.cli.research import (
     _DEFAULT_SUBSTRATES,
     _TIER_STAGES,
@@ -268,6 +271,86 @@ class TestRunIdentityBeforeDispatch:
         assert manifest['stages']['synthesis']['exit_code'] == 1
         assert 'falsification' not in manifest['stages']  # broke after synthesis
         assert calls == ['openrouter', 'synthesis']
+
+
+class TestTheManifestReportsTheSidecarOnItsOwnAxis:
+    """ADR-0011 — `ok` reports the stages; the sidecar reports itself.
+
+    Three reports watched a complete synthesis come back as `ok: false` because
+    the sidecar turn failed inside the same attempt. The stage no longer folds
+    the two together, so the manifest has to carry the second outcome or it
+    would have been dropped instead of decoupled.
+    """
+
+    @staticmethod
+    def _rooted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        for fn in ('state_root', 'outputs_root', 'transcripts_root', 'logs_root'):
+            monkeypatch.setattr(f'mantis_research.core.paths.{fn}', lambda fn=fn: tmp_path / fn)
+
+    def test_a_research_tier_owes_no_sidecar(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._rooted(monkeypatch, tmp_path)
+        manifest = run_research(
+            'q', assurance='research', batch_name='b', dry_run=True, log_level='CRITICAL'
+        )
+        assert manifest['sidecar']['status'] == SidecarOutcome.NOT_OWED.value
+
+    def test_a_dry_run_never_reached_its_sidecar(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._rooted(monkeypatch, tmp_path)
+        manifest = run_research(
+            'q', assurance='fast', batch_name='b', dry_run=True, log_level='CRITICAL'
+        )
+        assert manifest['sidecar']['status'] == SidecarOutcome.NOT_RUN.value
+
+    def test_a_failed_sidecar_is_named_beside_an_ok_run(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._rooted(monkeypatch, tmp_path)
+
+        def fake_dispatch(stage: str, cfg: object, **_: object) -> int:
+            if stage == 'synthesis':
+                SynthesisState(
+                    id='1',
+                    slug='q',
+                    sidecar_status=SidecarOutcome.FAILED,
+                    sidecar_error='schema drift on every re-ask',
+                ).save(RunDirs('batch', 'b').state('synthesis'))
+            return 0
+
+        monkeypatch.setattr(
+            'mantis_research.interface.cli.dispatch.dispatch_stage_config', fake_dispatch
+        )
+        manifest = run_research(
+            'q', assurance='fast', substrates=['openai'], batch_name='b', log_level='CRITICAL'
+        )
+        # The stages did what they were asked, so `ok` says so — and the
+        # sidecar's failure is legible rather than folded into that flag.
+        assert manifest['ok'] is True
+        assert manifest['sidecar']['status'] == SidecarOutcome.FAILED.value
+        assert 'schema drift' in manifest['sidecar']['error']
+
+    def test_a_published_sidecar_is_reported_ok(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._rooted(monkeypatch, tmp_path)
+
+        def fake_dispatch(stage: str, cfg: object, **_: object) -> int:
+            if stage == 'synthesis':
+                SynthesisState(id='1', slug='q', sidecar_status=SidecarOutcome.OK).save(
+                    RunDirs('batch', 'b').state('synthesis')
+                )
+            return 0
+
+        monkeypatch.setattr(
+            'mantis_research.interface.cli.dispatch.dispatch_stage_config', fake_dispatch
+        )
+        manifest = run_research(
+            'q', assurance='fast', substrates=['openai'], batch_name='b', log_level='CRITICAL'
+        )
+        assert manifest['sidecar'] == {'status': SidecarOutcome.OK.value, 'error': None}
 
 
 class TestSeatPreconditionRunsBeforeAnythingIsSpent:

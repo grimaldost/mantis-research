@@ -43,6 +43,7 @@ from pydantic import Field
 from mantis_research.core.sidecar import ResearchSidecar, project_for_agent
 from mantis_research.interface.research_service import (
     RUN_RECORD_NAME,
+    missing_product,
     resume_research,
     run_research,
 )
@@ -52,6 +53,9 @@ if TYPE_CHECKING:
     from mantis_research.core.progress import ProgressCallback, RunEvent
 
 _SERVER_NAME = 'mantis-research'
+
+#: What the sidecar's outcome reads as on a run record that predates the field.
+_UNKNOWN_SIDECAR: dict[str, Any] = {'status': 'not_run', 'error': None}
 
 #: How long a detached call waits for the run to name itself. The run emits
 #: `run_named` after building its config and before dispatching any stage, so
@@ -71,16 +75,13 @@ class IncompleteRunError(RuntimeError):
     """
 
 
-def _incomplete(manifest: dict[str, Any], sidecar_path: Path) -> IncompleteRunError:
-    """Build the refusal, naming what is missing, what failed, and the way back."""
-    failed = sorted(
-        stage for stage, rc in manifest['stages'].items() if rc.get('exit_code', 0) != 0
-    )
-    blame = (
-        f'{", ".join(failed)} exited non-zero'
-        if failed
-        else 'every stage exited 0, so the artifact was lost rather than refused'
-    )
+def _incomplete(manifest: dict[str, Any], sidecar_path: Path, blame: str) -> IncompleteRunError:
+    """Build the refusal around the blame line the judgement already produced.
+
+    ``blame`` comes from :func:`missing_product`, which is also what the CLI's
+    exit code reads — so the reason an agent is given and the reason an operator
+    is given cannot drift apart.
+    """
     outputs_dir = manifest.get('outputs_dir') or manifest.get('batch_name', '')
     return IncompleteRunError(
         f'the run produced no epistemic sidecar at {sidecar_path} — {blame}. '
@@ -117,21 +118,23 @@ def _agent_result(manifest: dict[str, Any]) -> dict[str, Any]:
         'cost': manifest['cost'],
         'stages': manifest['stages'],
         'outputs': manifest['outputs'],
+        # The run's second outcome (ADR-0011). Absent on run records written
+        # before the field, which a resume still reads: unknown, not fine.
+        'sidecar': manifest.get('sidecar') or _UNKNOWN_SIDECAR,
     }
     sidecar_path = Path(manifest['outputs']['sidecar'])
+    # A live run that owed a sidecar and has none produced no answer. Which runs
+    # those are, and why, is decided once in `missing_product` — the CLI's exit
+    # code reads the same call, so the two surfaces cannot disagree about what a
+    # run delivered.
+    blame = missing_product(manifest)
+    if blame is not None:
+        raise _incomplete(manifest, sidecar_path, blame)
     if sidecar_path.exists():
         sc = ResearchSidecar.from_model_json(sidecar_path.read_text(encoding='utf-8'))
         result['sidecar_available'] = True
         result.update(project_for_agent(sc))
         return result
-    # A live run that owed a sidecar and has none produced no answer. A run
-    # that never owed one — a research-only tier, or a dry run — legitimately
-    # has none, and refusing those would refuse the tier that exists precisely
-    # because the synthesis stage could not run (MANT-B60). Absent, the flag
-    # reads as owed: every tier before this one was.
-    owed = manifest.get('produces_sidecar', True)
-    if owed and not result['dry_run']:
-        raise _incomplete(manifest, sidecar_path)
     result['sidecar_available'] = False
     return result
 
@@ -214,6 +217,7 @@ def _project(record: dict[str, Any]) -> dict[str, Any]:
         'assurance': record.get('assurance'),
         'ok': record.get('ok'),
         'stages': record.get('stages') or {},
+        'sidecar': record.get('sidecar') or _UNKNOWN_SIDECAR,
         'cost': record.get('cost') or {},
         'outputs': record.get('outputs') or {},
     }
