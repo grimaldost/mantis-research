@@ -204,6 +204,6 @@ class TestTheNameStillFitsAPath:
         from mantis_research.interface.research_service import _mint_run_name
 
         name = _mint_run_name('a very long question ' * 20)
-        root = 'C:/Users/grima/Documents/mantis-research-runner'
+        root = 'D:/work/projects/checkouts/mantis-research-runner'
         deepest = f'{root}/outputs/{name}/openrouter/01-some-topic-slug/deepseek.md'
         assert len(deepest) < 260
