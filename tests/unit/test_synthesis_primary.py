@@ -73,6 +73,24 @@ class TestOpenRouterPrimary:
         assert briefs.secondaries  # sonar remains a secondary
         assert all(label != 'claude' for label, _ in briefs.secondaries)
 
+    def test_path_b_secondaries_carry_their_subslug_label(self, brief_root: Path) -> None:
+        # T30a: the secondaries were all labelled a bare 'openrouter', so the
+        # synthesis prompt and its independence note read "openrouter:openai,
+        # openrouter, openrouter" while the sidecar's sources[] named the same
+        # briefs 'openrouter:<subslug>'. One label per brief, in both turns.
+        _write(brief_root / 'openrouter' / '01-t' / 'openai.md')
+        _write(brief_root / 'openrouter' / '01-t' / 'deepseek.md')
+        _write(brief_root / 'openrouter' / '01-t' / 'google.md')
+        briefs = syn._resolve_briefs(_DIRS, '1', 't', 'openrouter:openai')
+        assert briefs.primary_label == 'openrouter:openai'
+        assert sorted(label for label, _ in briefs.secondaries) == [
+            'openrouter:deepseek',
+            'openrouter:google',
+        ]
+        assert dict(briefs.secondaries)['openrouter:deepseek'] == (
+            brief_root / 'openrouter' / '01-t' / 'deepseek.md'
+        )
+
     def test_missing_openrouter_primary_is_none(self, brief_root: Path) -> None:
         _write(brief_root / 'openrouter' / '01-t' / 'sonar.md')
         briefs = syn._resolve_briefs(_DIRS, '1', 't', 'openrouter:not-there')

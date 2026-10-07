@@ -117,7 +117,8 @@ Settable in `.env`:
   instead. The package default disables nothing.
 
 Other env vars actually read at runtime: `OPENROUTER_API_KEY`,
-`OPENROUTER_BASE_URL`, `MANTIS_HTTP_REFERER`, `MANTIS_APP_TITLE`
+`OPENROUTER_BASE_URL`, `MANTIS_HTTP_REFERER`, `MANTIS_APP_TITLE`, `MANTIS_HOME`
+(the data root runs write under; `core/paths.py` `data_root`)
 (`core/settings.py`). `LOG_LEVEL` / `LOG_FORCE_JSON` are declared on
 `Settings` but nothing reads them — the log level comes from `mantis research
 --log-level` (default `INFO`); `mantis run <stage>` has no level flag. See
@@ -139,7 +140,7 @@ Other env vars actually read at runtime: `OPENROUTER_API_KEY`,
   subsession that omits its own `prompt`. Resolution keys on **presence**
   (`is not None`): an explicit empty-string prompt is kept. (ADR-0008.)
 - Each synthesis emits `<stem>.sidecar.json` (schema `core/sidecar.py`,
-  `sidecar_version: 2`) — the agent-consumable epistemic contract. (ADR-0003.)
+  `sidecar_version: 3`) — the agent-consumable epistemic contract. (ADR-0003.)
   The runner fills `question` verbatim from the topic and gates the write on
   `question` / `generated_at` / non-empty `sources`. The model writes a
   `.sidecar.draft.json`; the runner renames the merged document onto the
@@ -163,9 +164,13 @@ The tool is served to agents as a **local stdio MCP server** exposing a
   orchestrator extracted from `mantis research`) and returns the run manifest +
   the sidecar's claims / divergences / verification_queue (bounded to the MCP
   size budget via `core/sidecar.py::project_for_agent`), with synthesis + briefs
-  by path. The handler takes the FastMCP `Context` (SDK-injected, absent from the
+  by path. The handler takes the MCPServer `Context` (SDK-injected, absent from the
   input schema) and bridges `core/progress.py`'s `RunEvent`s onto the session's
-  loop — a run that says nothing is indistinguishable from a hang.
+  loop — a run that says nothing is indistinguishable from a hang. A call whose
+  tier uses the local seat detaches unless it passes `detach=false`
+  (`_should_detach`): the run continues in a server thread and the call returns
+  a handle; `research_status` polls it, and a `resume` of the finished run
+  collects the result in one blocking call.
 - **Plugin:** `.claude-plugin/plugin.json` bundles the server inline (launched
   via `uv run --project ${CLAUDE_PLUGIN_ROOT} python -m …mcp`); the reference
   skill is `skills/research/SKILL.md`. Install for local testing with `claude

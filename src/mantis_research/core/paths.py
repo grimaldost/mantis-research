@@ -1,16 +1,20 @@
 """Project path layout — single source of truth for where things live.
 
-The project root is the directory containing ``pyproject.toml``. All
-runtime directories (state, outputs, logs, transcripts) sit at the project
-root. This module returns ``Path`` objects only — it does NOT create
-directories. Callers create what they need (directories are created at
-write time inside the relevant adapter or stage).
+The project root is the directory containing ``pyproject.toml``; config lookup
+resolves against it. All runtime directories (state, outputs, logs,
+transcripts) sit at the **data root** (:func:`data_root`), which is the project
+root in a checkout and a stable per-user directory when the package runs from
+Claude Code's versioned plugin cache. This module returns ``Path`` objects only
+— it does NOT create directories. Callers create what they need (directories
+are created at write time inside the relevant adapter or stage).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+
+from mantis_research.core.settings import settings
 
 
 def _find_project_root(start: Path) -> Path:
@@ -40,31 +44,87 @@ def project_root() -> Path:
     return _find_project_root(Path(__file__).resolve())
 
 
+#: The path segments Claude Code installs plugins under. A plugin's files sit
+#: below them in one directory per marketplace, plugin and version.
+_PLUGIN_CACHE_PARTS = ('.claude', 'plugins', 'cache')
+
+#: The per-user data root a plugin-cache install falls back to, under the home
+#: directory.
+_USER_DATA_DIR = '.mantis'
+
+
+def in_plugin_cache(path: Path) -> bool:
+    """True when ``path`` lies inside Claude Code's plugin cache."""
+    parts = path.parts
+    width = len(_PLUGIN_CACHE_PARTS)
+    return any(parts[i : i + width] == _PLUGIN_CACHE_PARTS for i in range(len(parts) - width + 1))
+
+
+def _resolve_data_root(
+    package_file: Path,
+    *,
+    override: str | None,
+    home: Path,
+    project_root: Path,
+) -> Path:
+    """Decide where runtime data lives, from the facts passed in (pure).
+
+    An explicit ``override`` (``MANTIS_HOME``) wins; an empty one counts as
+    unset, which is what a bare ``MANTIS_HOME=`` line in a ``.env`` reads as.
+    Otherwise a package running from the plugin cache writes under
+    ``<home>/.mantis``: the cache keeps one directory per plugin version, so
+    data kept there is left behind by every upgrade and deleted with the old
+    version, and two versions would each hold their own seat lock. Anything
+    else — a checkout, or an installed wheel's working-directory fallback —
+    keeps the project root, so existing trees stay where they are.
+    """
+    if override:
+        return Path(override).expanduser()
+    if in_plugin_cache(package_file):
+        return home / _USER_DATA_DIR
+    return project_root
+
+
+def data_root() -> Path:
+    """Return the directory every runtime tree (outputs, state, logs, transcripts) sits in.
+
+    Distinct from :func:`project_root`, which config lookup keeps using: a
+    plugin's configs ship with its version, its runs must not.
+    """
+    return _resolve_data_root(
+        Path(__file__).resolve(),
+        override=settings.MANTIS_HOME,
+        home=Path.home(),
+        project_root=project_root(),
+    )
+
+
 def outputs_root() -> Path:
-    """Return the ``outputs/`` directory under the project root."""
-    return project_root() / 'outputs'
+    """Return the ``outputs/`` directory under the data root."""
+    return data_root() / 'outputs'
 
 
 def state_root() -> Path:
-    """Return the ``state/`` directory under the project root."""
-    return project_root() / 'state'
+    """Return the ``state/`` directory under the data root."""
+    return data_root() / 'state'
 
 
 def logs_root() -> Path:
-    """Return the ``logs/`` directory under the project root."""
-    return project_root() / 'logs'
+    """Return the ``logs/`` directory under the data root."""
+    return data_root() / 'logs'
 
 
 def transcripts_root() -> Path:
-    """Return the ``transcripts/`` directory under the project root."""
-    return project_root() / 'transcripts'
+    """Return the ``transcripts/`` directory under the data root."""
+    return data_root() / 'transcripts'
 
 
 def seat_lock_path() -> Path:
     """Return the lock file for the machine's single local Claude seat.
 
     Machine-scoped, not run-scoped: the seat is one authenticated CLI, so every
-    run on this checkout queues on the same file (MANT-B08).
+    run queues on the same file (MANT-B08). It sits under the data root, which
+    for a plugin install is the same directory whichever version is running.
     """
     return state_root() / 'claude-seat.lock'
 
@@ -101,8 +161,8 @@ def topic_stem(topic_id: str, slug: str) -> str:
 def legacy_state_dir(stage_name: str) -> Path:
     """Return the pre-refactor flat state directory for a stage."""
     if stage_name == 'claude':
-        return project_root() / 'state'
-    return project_root() / f'state-{stage_name}'
+        return data_root() / 'state'
+    return data_root() / f'state-{stage_name}'
 
 
 LEGACY_OUTPUT_DIRS: dict[str, str] = {
@@ -119,7 +179,7 @@ LEGACY_OUTPUT_DIRS: dict[str, str] = {
 
 def legacy_output_dir(stage_name: str) -> Path:
     """Return the pre-refactor flat output directory for a stage."""
-    return project_root() / LEGACY_OUTPUT_DIRS.get(stage_name, stage_name)
+    return data_root() / LEGACY_OUTPUT_DIRS.get(stage_name, stage_name)
 
 
 # ── layout-aware run directories (ADR-0006) ──────────────────────────

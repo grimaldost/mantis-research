@@ -27,6 +27,18 @@ def _isolate_structlog() -> None:
 
 
 @pytest.fixture(autouse=True)
+def _no_ambient_data_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ignore a ``MANTIS_HOME`` set in the environment running the suite.
+
+    It outranks the project root, so a developer who sets it for their plugin
+    install would point every test that redirects the project root at their
+    real data root instead, and those tests would write there. Tests that are
+    about the override set it themselves.
+    """
+    monkeypatch.setattr('mantis_research.core.settings.settings.MANTIS_HOME', None)
+
+
+@pytest.fixture(autouse=True)
 def _no_live_seat_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the suite off the machine's real Claude seat.
 

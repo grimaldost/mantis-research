@@ -7,6 +7,328 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+### Added
+
+- **`research_status` with no argument lists the runs.** A caller that had lost a
+  run's `outputs_dir` had no way to find it from the server. `outputs_dir` is now
+  optional (the schema loses only `required`, so every existing call is
+  unchanged); without it the tool returns `runs`: each run directory under the
+  data root that holds a `run.json`, newest first by `started_at` (the
+  directory's modification time when a record has none). Each entry is the usual
+  status projection plus `age_s`, `question_slug` and `batch_name`. At most 50 are
+  listed and `truncated` counts the older ones; a record that cannot be read is
+  listed with state `unknown` and a `detail` rather than failing the listing.
+  The single-run status also reports `started_at` and `question_slug`. A
+  finished run's record now keeps the `started_at` its `dispatching` record had
+  (see Fixed), so a finished run sorts and ages by when it started.
+- **A `research` result names its run.** The result of a blocking call, and of a
+  resume, now carries `outputs_dir` and `batch_name` from the run manifest, so a
+  caller can poll or resume the run without a second lookup. Both fields are
+  additive.
+- **A run queued for the local seat says how many runs are waiting and when it
+  can expect its turn.** A queued run reported only `waiting`, with nothing about
+  how long: in the field on 2026-09-27, runs that had finished research at 11:35
+  and 12:22 were still queued at 13:15, and a caller could not tell a long queue
+  from a stuck run. Each run waiting for the seat now keeps a ticket,
+  `<pid>-<token>.json` (`pid`, `owner`, `since`), in a
+  `claude-seat.lock.waiters/` directory beside the lock, and removes it when the
+  wait ends, whether it took the seat or gave up; a ticket whose pid is no longer
+  a live process is skipped by readers, which change nothing (a status poll
+  stays read-only), and removed by the next run that joins the queue. A pid the
+  operating system has since given to another process still reads as live, so
+  such a ticket stays counted until that process ends. `research_status`
+  for a run that holds a ticket, and the `detach` handle of a run whose tier uses
+  the seat (not a dry run), carry `seat: { waiting, holder, expected_start_s,
+  reason }`. `waiting` counts the runs queued now and `holder` names the run
+  holding the seat. `expected_start_s` is `[early, late]` in seconds: early if
+  this run is taken next (the holder's remaining time on the median seat turn),
+  late if every other waiter goes first (one median turn each). The median is
+  taken over the 20 most recent complete runs whose synthesis took the seat,
+  from taking the seat to the end of the synthesis stage. That span includes the
+  sidecar turn, which runs after the seat is released, so the range errs late.
+  With no such run on record, `expected_start_s` is `null` and `reason` says so.
+  There is no queue position: every waiter polls the lock every 5 s, and
+  whichever polls first after a release takes the seat. On the handle, the range
+  is for the run as if it queued now; it queues once its research stage is done.
+  To feed the median, a stage records `seat_acquired_at` when it first takes the
+  seat (a new `seat_acquired` run event), and a finished or failed run's `stages`
+  entries keep `started_at` and `finished_at` (and `seat_acquired_at`) beside
+  `exit_code`. The manifest the `research` call returns is unchanged.
+- **The synthesis prompt shows how far the briefs share their sources.** Its
+  independence note spoke only of shared training substrate. In one 2026-09-27
+  batch, two of three briefs cited an identical set of five URLs and none of the
+  third brief's ten, so "two of three agree" was one retrieval pool against
+  another, and the synthesizer found that by counting links by hand. The
+  synthesis stage now reads the URLs each brief links (inline links, angle
+  autolinks and reference definitions; query string and fragment dropped;
+  scheme, `www.` and a trailing slash folded, the key the sidecar already merges
+  citations on) and computes the Jaccard overlap of every pair of briefs. The
+  default template's independence note prints it through a new
+  `{retrieval_overlap}` placeholder, one line such as
+  `openrouter:deepseek / openrouter:google 1.00`, and its training-substrate
+  sentence is rewritten to cover retrieval: agreement between briefs that cite
+  the same URLs is shared retrieval, not independent confirmation. A custom
+  synthesis template without the placeholder renders as before. The helper is
+  the new pure module `core/retrieval_overlap.py`.
+- **Each sidecar source overlap can say whether the source supports the
+  briefs.** A `source_overlaps` entry could record that the briefs citing a
+  source disagree with each other (`figures_conflict`), but not that they agree
+  on something the source does not say. In the field on 2026-09-27, two briefs
+  cited one repository and agreed on five named items its README does not
+  contain, and the overlap read `figures_conflict: false`. `SourceOverlap` gains
+  `source_check`: `confirmed`, `contradicted`, `shared_unsupported` or
+  `not_checked`. It is model-authored, the merge carries it onto the recomputed
+  overlap by normalized reference, and it reaches the MCP result's
+  `source_overlaps`. The sidecar prompt's example shows the field, and one added
+  line tells the sidecar turn to carry over a verdict the synthesis records and
+  otherwise leave `not_checked`. Neither turn can fetch a page, so a verdict
+  exists only where the synthesis settled it from what the briefs quote; the
+  effect on real runs is checked on the next paid run. ADR-0003 gains an
+  amendment; the synthesis playbook and the skill document the field.
+  **For callers:** the field is additive with the default `not_checked`, so
+  it needs no version bump of its own and every sidecar already on disk still
+  validates. This release writes `sidecar_version` 3 (see the entry on sidecar
+  paths).
+  Filters on `figures_conflict` are unchanged. Read `not_checked` as unknown,
+  not as clean. Every overlap a new sidecar writes carries the key, default
+  included, so a consumer that rejects unknown keys must learn it: the 0.5.1
+  schema itself forbids unknown keys and rejects such a sidecar.
+- **A sidecar verification item can name the check that resolves it.**
+  `verification_queue` items were free text, so every consumer re-parsed `claim`
+  to decide what to check; one scripted pass over a queue resolved 5 of 7 items
+  and caught a repository that does not exist (MANT-B19). `VerificationItem`
+  gains two optional, model-authored fields: `check_kind`, one of `repo_exists`,
+  `metric`, `license` or `url_resolves`, and `target`, the repository slug, URL
+  or metric that check runs against. Both reach the MCP result's
+  `verification_queue`. The sidecar prompt's example shows both keys, and one
+  added sentence tells the sidecar turn to set them only when one of the four
+  kinds fits and otherwise to omit both, because any other `check_kind` fails
+  validation and costs a re-ask. `sources_disagree` keeps its meaning. The
+  synthesis playbook and the skill document the fields.
+  **For callers:** both fields default to `null`, so they need no version bump
+  of their own and every sidecar already on disk still validates, its items
+  reading `null` for both. This release writes `sidecar_version` 3 (see the
+  entry on sidecar paths). Dispatch on `check_kind` when it is set and fall back
+  to `claim` when it is `null`. Every verification item a new sidecar writes
+  carries both keys, `null` included, and the 0.5.1 schema, which forbids
+  unknown keys, rejects such a sidecar.
+
+### Changed
+
+- **MCP SDK 1.x → 2.x.** The server now builds on `mcp.server.mcpserver.MCPServer`
+  (the 2.x name for `FastMCP`, whose module no longer exists) and the dependency
+  floor is raised from `mcp>=1.28.1` to `mcp>=2.2,<3`, locked at 2.3.0. Callers
+  that install this package into an environment pinned to `mcp` 1.x must move to
+  2.x; the `mantis-mcp` entry point and the plugin launch command are unchanged.
+  The two tools (`research`, `research_status`) keep their names and input
+  schemas — a snapshot taken before the port is now a test, and an in-process
+  client session lists both tools and completes a `dry_run` call. The 2.x SDK
+  requires progress values to strictly increase, so the progress bridge no longer
+  sends a progress notification for a step that does not advance the run (a stage
+  start shares its step with the previous stage's finish); the log line for every
+  event is still sent. The `<3` ceiling keeps a fresh unlocked install from
+  meeting the next major's import break. Supersedes the Dependabot bump to 2.2.0,
+  which failed `ty check src` on this module.
+  **For callers:** an environment pinned to `mcp` 1.x cannot install this
+  release; move it to `mcp>=2.2,<3`. Tool names, input schemas and result shapes
+  are unchanged. A client that listens for progress notifications sees none for
+  a step that repeats the previous one; every event is still sent as a log line.
+- **Runtime data moved off the versioned plugin cache.** Run directories
+  (`outputs/`, `state/`, `logs/`, `transcripts/`) and the seat lock now sit under
+  a data root (`core/paths.py` `data_root`), separate from the project root that
+  config lookup keeps using. It resolves to `MANTIS_HOME` when that is set (a new
+  setting; `~` is expanded), to `~/.mantis` when the package runs from Claude
+  Code's plugin cache, and otherwise to the project root as before: a checkout
+  keeps writing at the repository root and an installed tool in the working
+  directory. Before this, a plugin install wrote everything inside its own
+  versioned cache directory, so each upgrade left earlier runs behind, pruning an
+  old version deleted them, and two installed versions each held their own seat
+  lock and could drive the one `claude` seat at once. Now every version queues on
+  `~/.mantis/state/claude-seat.lock`. `research_status` gains a `data_root` field
+  (additive). The legacy-layout progress fallback in `mantis monitor` reads the
+  state root rather than the project root.
+  **For callers:** for plugin users, runs written by 0.5.1 and earlier stay in
+  `~/.claude/plugins/cache/<marketplace>/mantis-research/<version>/`, and Claude
+  Code removes that directory when it prunes the version, so copy out any run you
+  want to keep. Resuming one now fails the containment check, and the refusal
+  names the two ways back: set `MANTIS_HOME` to that version directory and resume
+  in place, or move `outputs/<run>`, `state/<run>` and `transcripts/<run>` under
+  the data root and resume from there (a resume rebuilds every path from the run
+  name, so the absolute paths in the moved `run.json` do not matter).
+  `research_status` still reads an old run directory wherever it is.
+- **A plain `research` call to a seat tier detaches, and a resume of a finished
+  run collects.** `detach` was off by default, so a plain `fast`, `standard` or
+  `high` call blocked for the whole run: research takes 5–10 min, then each
+  local-seat turn about 7 min (median), queued on one seat for every run on the
+  machine, which outlasts what an MCP client holds one tool call open for.
+  `detach` is now `boolean | null` with default `null`, which means automatic: a
+  run whose tier includes a local-seat stage detaches, and a `research`-tier run
+  or a dry run blocks as before. An explicit `true` or `false` is honoured as
+  before. A real (not dry-run) `resume` of a run that finished, a real run whose
+  record is `complete` with every stage at exit 0 and a sidecar that did not
+  fail, is a collect: it blocks and returns the full result whatever `detach`
+  says, where `detach=true` used to answer it with another handle. A collect
+  reads the run's record and the artifacts on disk and writes nothing, so it
+  keeps the run's seat timings and its place in the run listing, and it does not
+  need the local seat. A resume of a run with stages left to run (`failed`,
+  `complete` with a stage that exited non-zero, abandoned, or a dry run's
+  `validated` record) re-runs them and is not a collect: an explicit `detach` is
+  honoured, and unset it detaches or blocks by the tier in the record, not the
+  call's `assurance`. So is a run whose sidecar failed (`ok` true,
+  `sidecar.status` `failed`, ADR-0011): its resume re-enters the synthesis stage
+  for the sidecar alone, which is the recovery that run's refusal names. A run
+  refused before it names itself (an unusable seat, an invalid argument) now
+  raises that refusal from a detached call as well, instead of "did not name
+  itself within 30s", and a detached resume that finds the run already finished
+  returns its result. ADR-0009 gains an amendment recording this as a deliberate exception to
+  its additive-only rule for the tool's result. The tool description gains a
+  `detach` entry with those durations, held by a test to the constants
+  `RESEARCH_STAGE_MINUTES` and `LOCAL_SEAT_TURN_MEDIAN_MINUTES` that the skill
+  cites, and says a subagent caller keeps the detached default and collects with
+  `resume`.
+  **For callers:** a plain `fast`, `standard` or `high` call now returns a
+  handle (`state: "running"`, `outputs_dir`, `batch_name`, the run's identity
+  and a `seat` block) instead of the result. Poll `research_status` until the
+  run is `finished`, then call `research(resume=<outputs_dir>)` to collect it,
+  or pass `detach=false` to block as before. Callers that already pass
+  `detach` see no change, except that a resume of a finished run now always
+  returns the result. Read `ok` and `sidecar.status` before collecting: a resume
+  of a run whose `ok` is false re-runs its failed stage, a resume of a run whose
+  sidecar failed retries the sidecar, and on a seat tier either returns another
+  handle unless you pass `detach=false`. Only a run that succeeded, with `ok`
+  true and a sidecar delivered (or none owed), is collected.
+- **The research prompt asks where each named source came from.** The default
+  research template (`RESEARCH_REQUEST`, what `mantis research` and the
+  `research` tool send every substrate) said only to mark anything unverifiable
+  "Not found", and briefs attached confident figures (stars, versions, benchmark
+  scores) to repositories and papers the model only remembered. That sentence is
+  rewritten as one provenance rule, with no line added: for every named
+  repository, paper, product or benchmark the brief says whether it was
+  retrieved this turn or recalled from training, attaches no specific numbers to
+  one it only recalls, and marks anything it cannot verify either way
+  "Not found". A test pins the sentence. Whether briefs carry fewer wrong
+  figures is checked on the next paid run.
+- **Sidecar paths are relative to the run root, and `sidecar_version` is 3.**
+  `sources[].path` and `synthesis_path` held absolute machine paths. A frozen
+  sidecar copied to another directory or machine named files that were not
+  there, and a consumer had to rewrite the paths by hand before the sources
+  opened (MANT-B16). The runner now records both relative to the run root, with
+  `/` separators, for example `openrouter/01-slug/openai.md` and
+  `synthesis/01-slug.md`. The run root is the directory two levels above the
+  sidecar file: the run's `outputs_dir` under the `batch` layout, and the data
+  root under `legacy`. The field names and types are unchanged but their
+  meaning is not, so the version moves from 2 to 3 under the schema's own rule
+  for an incompatible change. `core/sidecar.py` adds two pure helpers:
+  `run_root_of(sidecar_path)`, and `ResearchSidecar.resolved_paths(run_root)`,
+  which joins v3 paths onto a run root and returns v1 and v2 paths unchanged.
+  Versions 1 and 2 still validate. The sidecar prompt's example shows version 3;
+  the runner stamps the version either way. ADR-0003 gains an amendment that
+  also records the alternative not taken: additive `rel_path` fields with no
+  bump. The source-check and verification-item entries above are additive on
+  their own and need no bump, but this release writes 3.
+  **For callers:** a sidecar written from now on carries `sidecar_version: 3`.
+  A consumer that opens `sources[].path` or `synthesis_path` must join it onto
+  the directory two levels above the sidecar file (for an MCP or
+  `mantis research` run, the run's `outputs_dir`), or call
+  `ResearchSidecar.resolved_paths(run_root_of(sidecar_path))`. Opened as it is,
+  a relative path resolves against the consumer's own working directory and
+  names the wrong file or none. Branch on `sidecar_version`: 1 and 2 keep
+  absolute paths. The 0.5.1 schema accepts only versions 1 and 2, so a consumer
+  that validates with it rejects a v3 sidecar. The MCP result's inline sidecar
+  projection carries no paths and is unchanged.
+
+### Fixed
+
+- **A run that ended on an exception no longer reads as `running` forever.**
+  `run_research` wrote `run.json` as `dispatching` and rewrote it only on the
+  success path, so a stage that raised (rather than returning a non-zero exit
+  code) left the record at `dispatching`. A detached run's worker thread died
+  while the server's pid lived on, and `research_status` kept answering
+  `running` for as long as that pid did. Every exit from the stage loop and the
+  manifest build now writes a terminal record before re-raising: `status:
+  "failed"`, `ok: false`, `finished_at`, the stages that completed, and an
+  `error` string (the exception's `repr`, cut to 500 characters). The write is
+  retried when Windows refuses the `replace` because a reader has the record
+  open, and uses a temporary file per writer instead of the fixed `run.json.tmp`.
+  **For callers:** `research_status` reports such a run as `state: "finished"`
+  with `ok: false` and an additive `error` field, so the state vocabulary
+  (`running` / `finished` / `abandoned` / `unknown`) is unchanged; read `ok`
+  before collecting. `resume` re-enters a failed run like any record that is not
+  `dispatching`. A record can now carry `status: "failed"` beside `complete` and
+  `validated`.
+- **`research_status` shows a live run's progress instead of `stages={}`.**
+  `run_research` wrote `run.json` before its first stage and after its last, so a
+  poller saw `stages={}` and `sidecar.status: "not_run"` for the whole life of a
+  healthy run. In the field on 2026-09-27, 10 of 11 collectors polling detached
+  runs saw nothing change for 45 minutes while briefs, syntheses and sidecars
+  landed on disk, and gave up with `ok=false`. The record is now rewritten as the
+  run moves: when a stage starts or finishes, when a research substrate's brief
+  is written, and when a stage starts or stops waiting (queued for the local
+  seat, or in a rate-limit backoff). The seat repeats its wait every 5 s; only
+  the change into `waiting` is written. Each `stages` entry carries `state`
+  (`running`, `waiting` or `done`), `started_at`, `exit_code` (`null` until the
+  stage is done) and, once done, `finished_at`; the research stage also lists
+  `substrates_done`, and the record names `current_stage`. These writes are
+  best-effort: when Windows still refuses the `replace` after the usual retries
+  because a poller holds the record open, the write is skipped and the next
+  transition writes the whole state again. On the other side, `research_status`
+  retries a read that Windows refuses while the record is being replaced, rather
+  than answering `unknown`, which a poll meeting a write otherwise did (25 of 577
+  polls under continuous writes). While the record says `dispatching`,
+  `research_status` also returns an `artifacts` block read from the run
+  directory itself — `briefs` (`openrouter/**/*.md`), `synthesis`
+  (`synthesis/*.md`) and `sidecar` (`synthesis/*.sidecar.json`) — so a record
+  that lags, or one written by an earlier version, still shows what is on disk.
+  **For callers:** `stages` entries now exist mid-run with `exit_code: null`, so
+  a collector must read an entry's `state` rather than take its presence as a
+  finished stage. `current_stage` and `artifacts` are additive, and a finished
+  record's `stages` entries keep `exit_code` (with the stage's timings beside
+  it, see Added).
+- **The skill's latency figure counts turns, not stages, and names the seat
+  queue (docs).** `skills/research` said `fast` adds one local-seat turn,
+  `standard` two and `high` four; counting the sidecar turn that runs inside
+  synthesis the counts are 0, 2, 3 and 5 (one more when the journal is on). The
+  bullet also did not say that every run on the machine queues its local-seat
+  turns on one seat lock, so N questions that finish research together take
+  about N times the synthesis time (27 to 85 minutes from research done to
+  sidecar in the field). The skill now states both, and a test derives the
+  counts from the tier registry. The research range and the median turn length
+  it quotes are now the constants `RESEARCH_STAGE_MINUTES` and
+  `LOCAL_SEAT_TURN_MEDIAN_MINUTES` in `research_service`. No behaviour change.
+  Known gap, not changed here: the sidecar turn does not take the seat lock and
+  reports no progress.
+- **The synthesis and sidecar turns name each brief the same way, and the
+  sidecar turn is told where the briefs are.** Resolving the briefs labelled
+  every OpenRouter secondary a bare `openrouter`, so on a Path-B run the
+  synthesis prompt's secondary block and its independence note read
+  `openrouter:openai, openrouter, openrouter`, while the sidecar's `sources[]`
+  named the same briefs `openrouter:<subslug>`. The sidecar turn, which builds
+  `source_citations` from the briefs, was given only the synthesis path, and its
+  `--add-dir` grant was the synthesis directory alone: in the field on
+  2026-09-27 it spent 4 of its 16 tool calls finding the briefs, and its
+  `substrate` labels matched `sources[]` only because the synthesis had renamed
+  the substrates itself. An OpenRouter brief is now labelled
+  `openrouter:<subslug>` when the briefs are resolved (`openrouter:single` for
+  the one-file layout), and that one list feeds the synthesis prompt, the
+  sidecar prompt and `sources[]`. `SYNTHESIS_SIDECAR` gains a `{brief_block}`
+  placeholder, one `- [label] path` line per brief with the primary first, and
+  tells the turn to read each brief for its inventory and to use the listed
+  label as `substrate`. The turn may now read the OpenRouter output directory,
+  and the Claude and Gemini output directories when a brief lives there. A batch
+  whose own synthesis prompt reads `{secondary_block}`, `{gemini_block}` or
+  `{substrate_list}` now sees the subslug labels there too.
+- **A resume of a finished run asks for that run's own substrates.** The
+  terminal record of a `complete` run was the manifest, which lists no
+  substrates, so resuming a run whose research stage had exited non-zero ran it
+  with the default set (`openai`, `deepseek`, `google`) and bought briefs from
+  models the caller had not asked for. The record also dropped `started_at`, so
+  the run listing fell back to the directory's modification time, which any later
+  write moves. A `complete` or `validated` record now keeps `substrates` and
+  `started_at`, as the `dispatching` and `failed` records already did. A collect
+  of a record written before this reads the substrates off the brief paths.
+  **For callers:** both fields are additive in `run.json`; the manifest the
+  `research` call returns is unchanged.
+
 ## [0.5.1] - 2026-09-13
 
 ### Changed

@@ -1,4 +1,4 @@
-"""Epistemic sidecar schema v2 — the agent-consumable contract (ADR-0003).
+"""Epistemic sidecar schema v3 — the agent-consumable contract (ADR-0003).
 
 Each synthesis produces a ``<stem>.sidecar.json`` alongside the markdown brief.
 It carries the pipeline's highest-value signal — divergences, hallucination
@@ -19,7 +19,12 @@ The schema evolves additively (I4); an incompatible change bumps
 ``sidecar_version``. v2 adds ``question`` (a sidecar with no question is not a
 citation surface — a consumer cannot tell which question it answers) and the
 typed source-provenance block. Both additions are readable by a v1 consumer,
-and v1 documents on disk still validate (I6).
+and v1 documents on disk still validate (I6). v3 changes what two
+runner-authored fields mean: ``sources[].path`` and ``synthesis_path`` are
+relative to the run root (:func:`run_root_of`), with ``/`` separators, where v1
+and v2 wrote absolute machine paths. A consumer that opened them as before would
+resolve a v3 path against its own working directory, so the version moves;
+:meth:`ResearchSidecar.resolved_paths` reads all three.
 
 Emission is gated: :func:`missing_required_fields` names what a merged document
 still lacks, and :meth:`ResearchSidecar.require_complete` raises rather than let
@@ -28,10 +33,14 @@ a hollow artifact ship.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from mantis_research.core.retrieval_overlap import normalize_reference
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -40,16 +49,49 @@ if TYPE_CHECKING:
 
 SUPPORT_QUALITY = Literal['direct', 'indirect', 'none']
 CITATION_KIND = Literal['url', 'repository', 'package', 'paper', 'other']
+#: The model's brief-against-source verdict on a shared source (T32a): what the
+#: source itself says against what the briefs read out of it. ``not_checked`` is
+#: the default and the honest answer when nobody read the source.
+SOURCE_CHECK = Literal['confirmed', 'contradicted', 'shared_unsupported', 'not_checked']
+#: The check that resolves a verification item (T4d). Closed, so a consumer can
+#: dispatch on it; an item no kind fits carries ``None``.
+CHECK_KIND = Literal['repo_exists', 'metric', 'license', 'url_resolves']
 
 #: The schema version the runner writes today. Older versions still validate.
-SIDECAR_VERSION = 2
+SIDECAR_VERSION = 3
 
 #: Runner-authored fields a written sidecar must carry to be usable at all.
 REQUIRED_ON_WRITE: tuple[str, ...] = ('question', 'generated_at', 'sources')
 
+#: The first version whose ``sources[].path`` and ``synthesis_path`` are relative
+#: to the run root (T4b). Earlier versions recorded the paths as written.
+RELATIVE_PATHS_SINCE = 3
+
 
 class SidecarContractError(ValueError):
     """A merged sidecar is missing a field the agent contract requires."""
+
+
+def run_root_of(sidecar_path: Path) -> Path:
+    """Return the run root a sidecar's paths are relative to (v3 on).
+
+    The sidecar sits in the run's synthesis directory, one level below the run
+    root, in both layouts (ADR-0006): ``outputs/<batch>/synthesis/`` under
+    ``batch``, where the run root is the run's ``outputs_dir``, and
+    ``<data root>/research-outputs-synthesis/`` under ``legacy``, where it is the
+    data root. The synthesis document sits beside the sidecar, so its path gives
+    the same answer. Pure path arithmetic.
+    """
+    return sidecar_path.parent.parent
+
+
+@dataclass(frozen=True, slots=True)
+class SidecarPaths:
+    """A sidecar's recorded file paths, resolved against a run root."""
+
+    synthesis: Path | None
+    #: ``(label, path)`` for each ``sources[]`` entry, in the sidecar's order.
+    sources: tuple[tuple[str, Path], ...]
 
 
 class SidecarOutcome(StrEnum):
@@ -108,12 +150,27 @@ class Divergence(SidecarModel):
 
 class VerificationItem(SidecarModel):
     """One claim flagged for external verification (hallucination candidate or
-    weak cross-model agreement)."""
+    weak cross-model agreement).
+
+    Two optional fields let a consumer run the check without re-parsing
+    ``claim`` (T4d):
+
+    - ``check_kind`` — which check resolves the item: ``repo_exists`` (the
+      repository exists), ``metric`` (the figure holds), ``license`` (the license
+      is as claimed) or ``url_resolves`` (the URL resolves). ``None`` when no
+      kind fits, which is also how every item written before the field reads.
+    - ``target`` — what that check runs against: the repository slug, the URL,
+      or the metric. ``None`` by default.
+
+    The prompt asks for both or neither; the schema does not enforce the pair.
+    """
 
     id: str
     claim: str
     reason: str  # why it is flagged (disagreement, single-source, training-uniform)
     sources_disagree: list[str] = Field(default_factory=list)
+    check_kind: CHECK_KIND | None = None
+    target: str | None = None
 
 
 class CitedSource(SidecarModel):
@@ -142,8 +199,14 @@ class SourceOverlap(SidecarModel):
     agreed, but that two of them cited the same source and read incompatible
     figures out of it while a third never cited it at all — which indicts the
     source. ``substrates`` and ``not_cited_by`` are *derived* from the citation
-    inventory; only ``figures_conflict`` / ``conflict`` are the model's
-    judgement.
+    inventory; only ``figures_conflict`` / ``conflict`` / ``source_check`` are
+    the model's judgement.
+
+    ``figures_conflict`` compares the briefs with each other; ``source_check``
+    compares them with the source. Two briefs can agree on a detail the source
+    they share does not contain, which is ``figures_conflict: false`` and
+    ``source_check: 'shared_unsupported'``. The verdict is carried over from a
+    check the synthesis made, never inferred; ``not_checked`` is the default.
     """
 
     id: str
@@ -153,6 +216,7 @@ class SourceOverlap(SidecarModel):
     not_cited_by: list[str] = Field(default_factory=list)
     figures_conflict: bool = False
     conflict: str | None = None  # what disagreed, when figures_conflict
+    source_check: SOURCE_CHECK = 'not_checked'  # the briefs against the source (T32a)
 
 
 # ── runner-authored provenance ───────────────────────────────────────
@@ -162,7 +226,7 @@ class SourceRef(SidecarModel):
     """One research brief that fed the synthesis (runner-authored)."""
 
     label: str  # e.g. 'claude', 'openrouter:gpt-5-exa'
-    path: str
+    path: str  # relative to the run root from v3, e.g. 'openrouter/01-slug/openai.md'
     model_id: str | None = None
     bytes: int | None = None
 
@@ -224,14 +288,14 @@ class Provenance(SidecarModel):
 
 
 class ResearchSidecar(SidecarModel):
-    """The versioned epistemic sidecar (v1).
+    """The versioned epistemic sidecar (v3).
 
     ``from_model_json`` validates only the model-authored zone (identity and
     provenance are runner-filled afterward), so the model may omit those; the
     runner sets them before the final write.
     """
 
-    sidecar_version: Literal[1, 2] = SIDECAR_VERSION
+    sidecar_version: Literal[1, 2, 3] = SIDECAR_VERSION
 
     # runner-authored identity
     # The question the run answered, verbatim from the run manifest. Without it
@@ -241,7 +305,7 @@ class ResearchSidecar(SidecarModel):
     topic_id: str | None = None
     slug: str | None = None
     batch_name: str | None = None
-    synthesis_path: str | None = None
+    synthesis_path: str | None = None  # relative to the run root from v3
     generated_at: str | None = None  # ISO 8601 UTC, stamped by the runner
     sources: list[SourceRef] = Field(default_factory=list)
 
@@ -255,7 +319,7 @@ class ResearchSidecar(SidecarModel):
     # source provenance (v2). The inventory is model-authored — only the model
     # read the briefs. The overlaps are re-derived by the runner from that
     # inventory, so membership is computed; the model's contribution to an
-    # overlap is the conflict judgement alone.
+    # overlap is its judgements alone (figures conflict and source check).
     source_citations: list[SourceCitations] = Field(default_factory=list)
     source_overlaps: list[SourceOverlap] = Field(default_factory=list)
 
@@ -272,6 +336,26 @@ class ResearchSidecar(SidecarModel):
         """Serialize the merged document for the final on-disk write."""
         return self.model_dump_json(indent=2)
 
+    def resolved_paths(self, run_root: Path) -> SidecarPaths:
+        """Return ``synthesis_path`` and every ``sources[].path`` as usable paths.
+
+        From v3 the runner records both relative to the run root, with ``/``
+        separators, so they are joined onto ``run_root`` — wherever the run
+        directory sits now (:func:`run_root_of` finds it from the sidecar's own
+        path). v1 and v2 recorded the paths as written, absolute in practice,
+        and are returned unchanged: a relative value there was relative to the
+        writer's working directory, not to the run root. Pure: touches no file.
+        """
+        relative = self.sidecar_version >= RELATIVE_PATHS_SINCE
+
+        def resolve(value: str) -> Path:
+            return run_root / value if relative else Path(value)
+
+        return SidecarPaths(
+            synthesis=None if self.synthesis_path is None else resolve(self.synthesis_path),
+            sources=tuple((s.label, resolve(s.path)) for s in self.sources),
+        )
+
     def require_complete(self) -> None:
         """Raise unless every :data:`REQUIRED_ON_WRITE` field is populated.
 
@@ -286,20 +370,6 @@ class ResearchSidecar(SidecarModel):
             raise SidecarContractError(msg)
 
 
-def _normalize_reference(reference: str) -> str:
-    """Fold the spellings of one citation into a single key.
-
-    http vs https, a leading ``www.`` and a trailing slash are the same source;
-    a brief that cites it one way and another that cites it the other must not
-    read as two independent sources.
-    """
-    key = reference.strip().lower()
-    for scheme in ('https://', 'http://'):
-        key = key.removeprefix(scheme)
-    key = key.removeprefix('www.')
-    return key.rstrip('/')
-
-
 def derive_source_overlaps(
     citations: Iterable[SourceCitations],
     *,
@@ -311,8 +381,9 @@ def derive_source_overlaps(
     inventory, never taken from the model — that is the whole point of typing
     provenance: "two substrates cited the same URL and disagreed about it" is
     computed, not narrated. ``judgements`` supplies the model's
-    ``figures_conflict`` / ``conflict`` assessment, matched by normalized
-    reference and ignored where it names an artifact no inventory contains.
+    ``figures_conflict`` / ``conflict`` / ``source_check`` assessment, matched
+    by normalized reference and ignored where it names an artifact no inventory
+    contains; an overlap with no judgement keeps every default.
     Pure; the synthesis stage calls it at merge time.
     """
     inventory = list(citations)
@@ -323,7 +394,7 @@ def derive_source_overlaps(
     display: dict[str, tuple[str, CITATION_KIND]] = {}
     for entry in inventory:
         for item in entry.cited:
-            key = _normalize_reference(item.reference)
+            key = normalize_reference(item.reference)
             if not key:
                 continue
             display.setdefault(key, (item.reference, item.kind))
@@ -331,7 +402,7 @@ def derive_source_overlaps(
             if entry.substrate not in substrates:
                 substrates.append(entry.substrate)
 
-    verdict = {_normalize_reference(j.reference): j for j in judgements}
+    verdict = {normalize_reference(j.reference): j for j in judgements}
     overlaps: list[SourceOverlap] = []
     for key, substrates in cited_by.items():
         if len(substrates) < 2:
@@ -347,6 +418,7 @@ def derive_source_overlaps(
                 not_cited_by=[s for s in all_substrates if s not in substrates],
                 figures_conflict=judgement.figures_conflict if judgement else False,
                 conflict=judgement.conflict if judgement else None,
+                source_check=judgement.source_check if judgement else 'not_checked',
             )
         )
     return overlaps

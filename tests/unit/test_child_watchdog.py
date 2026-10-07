@@ -62,6 +62,14 @@ _TALKING_CHILD = (
     "    print(f'line {i}', flush=True)\n"
     '    time.sleep(0.05)\n'
 )
+#: Talks at a steady pace, long enough in total to outlast an idle window that
+#: is still wider than a slow interpreter start.
+_PACED_CHILD = (
+    'import sys, time\n'
+    'for i in range(6):\n'
+    "    print(f'line {i}', flush=True)\n"
+    '    time.sleep(0.4)\n'
+)
 
 
 async def _run(script: str, tmp_path: Path, idle_timeout_s: float | None, **kw):
@@ -99,9 +107,12 @@ class TestWatchdog:
         assert time.monotonic() - start < 15.0
 
     async def test_a_talking_child_runs_past_the_idle_window(self, tmp_path: Path) -> None:
-        # Total runtime (~0.3 s) exceeds the idle timeout (0.2 s), but no single
-        # gap does — the clock resets on every line.
-        result = await _run(_TALKING_CHILD, tmp_path, 0.2)
+        # Total runtime (startup + ~2.4 s) exceeds the idle timeout (1.5 s), but
+        # no single gap does — the clock resets on every line. The clock starts
+        # at spawn, so the first gap is the interpreter's own startup; the window
+        # leaves room for that, which a 0.2 s window did not on a machine where
+        # starting Python takes longer than that.
+        result = await _run(_PACED_CHILD, tmp_path, 1.5)
         assert result.timed_out is False
         assert result.exit_code == 0
         assert 'line 5' in result.output

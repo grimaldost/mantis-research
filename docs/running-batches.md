@@ -22,9 +22,11 @@ mantis_research …` is equivalent everywhere.
    evaluation / claude-prior stages drive the local `claude` CLI against your
    subscription — run where an authenticated Claude Code CLI lives.
    Research-only runs (OpenRouter) work without it.
-3. **Working directory.** All state/output directories resolve at the project
-   root in a checkout, or under the current working directory for an
+3. **Data root.** All state/output directories resolve under one data root:
+   the project root in a checkout, `~/.mantis` when the package runs from
+   Claude Code's plugin cache, or the current working directory for an
    installed tool — `cd` to where you want the run's tree before starting.
+   `MANTIS_HOME` overrides all three (see [Where files land](#where-files-land)).
 
 ## Author the config
 
@@ -147,7 +149,12 @@ status model and the cross-run rules are described in
   `state/claude-seat.lock` that records the holder's PID and a name like
   `<batch>/synthesis:<topic>`. Concurrent runs queue and say who they are waiting
   for; a lock whose recorded PID is gone is reclaimed immediately rather than
-  waited out.
+  waited out. While a run waits it keeps a ticket, `<pid>-<token>.json`, in
+  `state/claude-seat.lock.waiters/` and removes it when the wait ends, whether
+  it took the seat or gave up; a ticket whose PID is gone is ignored by readers
+  (a status poll changes nothing) and removed by the next run that joins the
+  queue. The tickets give a count, not an order: every waiter polls
+  the lock every 5 s, and whichever polls first after a release takes the seat.
 - **An abandoned topic is `dead`, not `failed`.** Every topic records the PID
   that put it `in_flight`. A later run reads that back, and a topic whose owner
   is no longer a live process is marked `dead` (marker `DD` in the snapshot)
@@ -160,6 +167,40 @@ status model and the cross-run rules are described in
   is missing — finish the research stage (or fix `models.primary`) and re-run.
 
 ## Where files land
+
+Every path below is relative to the **data root**, which `core/paths.py`
+`data_root()` resolves in this order:
+
+1. `MANTIS_HOME`, when it is set (environment or `.env`; `~` is expanded).
+2. `~/.mantis`, when the package runs from Claude Code's plugin cache
+   (`~/.claude/plugins/cache/…`). The cache keeps one directory per plugin
+   version, so runs kept there were left behind by each upgrade and deleted
+   when the old version was pruned.
+3. Otherwise the project root: the repository root in a checkout (unchanged),
+   or the current working directory for an installed tool.
+
+The seat lock (`state/claude-seat.lock`) sits under the same root, so every
+plugin version on the machine queues on one lock. Config files still resolve
+against the project root. The MCP `research_status` tool returns the data root
+it is using as `data_root`.
+
+**Runs from 0.5.1 and earlier in a plugin install** stayed in that version's
+cache directory (`~/.claude/plugins/cache/<marketplace>/mantis-research/<version>/`).
+`mantis research --resume` and the MCP `resume` parameter refuse such a run,
+because it is outside the new outputs root, and the refusal names two ways back:
+
+- Resume it in place: set `MANTIS_HOME` to that version directory and resume
+  again. For the plugin, the MCP server inherits the environment Claude Code
+  starts in, so set it there and restart Claude Code; unset it afterwards, or
+  new runs keep landing in the cache.
+- Move it: move or copy `outputs/<batch>`, `state/<batch>` and
+  `transcripts/<batch>` from that version directory into the same places under
+  the data root, then resume `<data root>/outputs/<batch>`. A resume recomputes
+  every path from the batch name, so the absolute paths inside the moved
+  `run.json` do not matter.
+
+Copy any run you want to keep out of the old cache directory before Claude Code
+prunes that version.
 
 Layout is per config (`runner.layout` — see
 [architecture.md](architecture.md#run-layouts)). With `legacy` (the default):
@@ -189,8 +230,22 @@ two digits), with per-substrate research briefs at
 A request-level run (`mantis research`, the MCP `research` tool) also writes
 `outputs/<batch_name>/run.json` **before it dispatches anything**: the question
 and its slug, the batch name, the assurance tier, the substrate set and
-`status: "dispatching"`. When the run finishes it is rewritten with the final
-manifest and `status: "complete"`. A run whose caller walked away is therefore
+`status: "dispatching"`. While the run is in flight the record is rewritten at
+each transition (a stage starting or finishing, a research substrate's brief
+landing, a stage starting or ending a wait for the seat) with a `stages` map and
+a `current_stage`. Each entry carries `state` (`running`, `waiting` or `done`),
+`started_at`, `exit_code` (`null` until the stage is done) and `finished_at`,
+plus `seat_acquired_at` once the stage has taken the local seat.
+These writes are best-effort, and the MCP status tool also lists the artifacts
+already on disk. When the run finishes it is rewritten with the final
+manifest and `status: "complete"` (or `"validated"` for a dry run); each
+`stages` entry keeps its `exit_code` and its timings, without `state`. A run that ends on an
+exception is rewritten too, with `status: "failed"`, `ok: false`, the stages that
+finished and an `error` string, and the status tool reports it as finished with
+`ok` false. While a run waits for the seat, the status tool adds a `seat` block:
+how many runs are queued, which one holds the seat, and an expected start range
+worked out from the median time between taking the seat and finishing synthesis
+over the 20 most recent complete runs that took the seat. A run whose caller walked away is therefore
 still identifiable on disk — which question it was answering and whether it got
 past dispatch — rather than an orphan directory nothing can be matched to.
 
@@ -199,8 +254,11 @@ to re-enter an interrupted run: the question and settings come from it, so
 nothing is retyped, completed stages and topics are skipped, and a run whose
 `owner_pid` is still a live process is refused rather than run twice. Resuming
 an abandoned run appends a `dead` entry to the record's `history` before it
-starts, so the record says what happened rather than being overwritten. The
-directory offered must be strictly inside `outputs/`.
+starts, so the record says what happened rather than being overwritten. A resume
+of a run that finished with `ok` true and a sidecar that did not fail reads the
+record and the files back and writes nothing; a run whose sidecar failed is
+re-entered at the synthesis stage, which retries the sidecar alone. The
+directory offered must be strictly inside the data root's `outputs/`.
 
 ## Cost
 

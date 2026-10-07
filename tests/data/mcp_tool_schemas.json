@@ -1,0 +1,93 @@
+{
+  "research": {
+    "properties": {
+      "assurance": {
+        "default": "fast",
+        "description": "How far the pipeline runs. \"fast\" (the default) is research + synthesis. Escalate explicitly when the extra checking is worth the extra Claude-seat time: \"standard\" adds an adversarial falsification pass over the finished synthesis, \"high\" adds a Claude-prior baseline and a rubric evaluation on top. \"research\" stops after the cross-model briefs and returns their paths and cost with no synthesis and no sidecar \u2014 the tier to use when no local Claude seat is available, or when you want to read the substrates yourself.",
+        "title": "Assurance",
+        "type": "string"
+      },
+      "detach": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Start the run and return its identity immediately (\"state\": \"running\", \"outputs_dir\", \"batch_name\") instead of waiting for it. A run with local-seat turns takes many minutes and outlasts the time a client will hold one tool call open; poll `research_status` with the returned \"outputs_dir\", then call `research` again with `resume=<outputs_dir>` to collect the finished result. Leave it unset to choose by tier: a run whose tier uses the local Claude seat (\"fast\", \"standard\", \"high\") detaches, and a \"research\"-tier run or a dry run blocks and returns the result. Pass false to block on any tier, or true to detach any run. A resume of a finished run is a collect: it blocks and returns the result whatever this says. A resume of a failed run re-runs it, and a resume of a run whose sidecar failed retries the sidecar; both follow this setting.",
+        "title": "Detach"
+      },
+      "dry_run": {
+        "default": false,
+        "description": "Validate orchestration without spending any model calls.",
+        "title": "Dry Run",
+        "type": "boolean"
+      },
+      "journal": {
+        "default": false,
+        "description": "Also emit a mantis-ingestion journal via a second synthesis turn (slower). Off by default.",
+        "title": "Journal",
+        "type": "boolean"
+      },
+      "name": {
+        "default": "",
+        "description": "An optional name for the run, used for its output directory. Without one the name is derived from the question, so several questions sharing a long common preamble read alike; you can also mark the key inline as \"RESEARCH QUESTION (<key>)\".",
+        "title": "Name",
+        "type": "string"
+      },
+      "primary": {
+        "default": "",
+        "description": "Which research brief the synthesis anchors on: \"claude\" or \"openrouter:<slug>\" (e.g. \"openrouter:openai\"). Empty string anchors on the first substrate.",
+        "title": "Primary",
+        "type": "string"
+      },
+      "question": {
+        "description": "The research question to investigate.",
+        "title": "Question",
+        "type": "string"
+      },
+      "resume": {
+        "default": "",
+        "description": "Re-enter an interrupted run instead of starting a new one: pass its output directory (the \"outputs_dir\" of the run you lost, e.g. \"outputs/research-my-question-20260811T101500Z\"). Stages that already finished are skipped, and the question and settings come from that run's own record, so \"question\" is ignored. Pass a finished run's directory to collect its result: that call blocks whatever \"detach\" says. A failed run, or one with a stage that exited non-zero, is re-run from that stage instead, and a run whose sidecar failed has its sidecar retried; \"detach\" applies to either as to a new run.",
+        "title": "Resume",
+        "type": "string"
+      },
+      "substrates": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "OpenRouter research vendor slugs to fan the question across, each run as its newest frontier model. Accepted: openai, google, anthropic, deepseek, perplexity, qwen, x-ai, meta-llama, mistralai. None uses the default Path B set: openai, deepseek, google.",
+        "title": "Substrates"
+      }
+    },
+    "required": [
+      "question"
+    ],
+    "title": "researchArguments",
+    "type": "object"
+  },
+  "research_status": {
+    "properties": {
+      "outputs_dir": {
+        "default": "",
+        "description": "The output directory of a run to report on \u2014 the \"outputs_dir\" a detached `research` call returned. Reads the run's own record and per-stage state; it never starts or changes anything. Leave it empty to list the runs under this server's data root instead, newest first.",
+        "title": "Outputs Dir",
+        "type": "string"
+      }
+    },
+    "title": "research_statusArguments",
+    "type": "object"
+  }
+}

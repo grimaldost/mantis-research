@@ -96,3 +96,31 @@ distribution layer over it.
   never a blocked `.exe` shim). Implementation is specified and built as a
   separate governed change (a [keel](https://github.com/grimaldost/keel) spec), where the tool schema, result shape,
   error mapping, and dry-run/timeout behavior are pinned and pre-mortemed.
+
+## Amendment (2026-10-07): a plain call to a seat tier returns a handle
+
+The Consequences above say the tool's schema and result shape evolve additively.
+This amendment records one deliberate exception to that rule.
+
+Before it, a plain `research` call at `fast`, `standard` or `high` blocked and
+returned the result. After it, `detach` defaults to automatic and such a call
+returns a handle (`state`, `outputs_dir`, `batch_name`, a `seat` block) with no
+epistemic payload. The input schema is additive (`detach` becomes `boolean |
+null`, default `null`), but the result of an unchanged call changes shape, which
+is not additive.
+
+The additive rule exists so that agent callers keep working, and here the old
+default was what broke them. A run with local-seat turns lasts many minutes,
+longer than an MCP client holds one tool call open: the transcripts behind 0.4.0
+recorded 18 non-dry-run calls that blocked, and none of them returned. Keeping
+the blocking default and asking agents to opt in to `detach` left every agent
+that did not read the description on the failing path.
+
+The opt-out is `detach=false`, which blocks on any tier as before. A `research`
+tier run and a dry run still block by default. Collecting is the same tool: a
+`resume` of a finished run returns the full result in that call whatever `detach`
+says. A finished run here is one that ended with `ok` true and a sidecar that did
+not fail; a resume of a run whose sidecar failed re-enters the synthesis stage
+for the sidecar (ADR-0011) and follows `detach` like a new run. The change is
+marked as breaking in the CHANGELOG with a **For callers:** note, and the skill
+documents poll-then-collect.

@@ -125,26 +125,62 @@ uv run python -m mantis_research.interface.mcp
 ```
 
 The agent calls the `research` tool (`question`, `assurance`, optional
-`substrates` / `primary` / `journal` / `dry_run`) and gets back the run manifest
-plus the sidecar's `claims` / `divergences` / `verification_queue` (bounded to the
-MCP result-size budget), with synthesis and briefs referenced by path. The
+`substrates` / `primary` / `journal` / `dry_run` / `name` / `resume` / `detach`)
+and gets back the run manifest plus the sidecar's `claims` / `divergences` /
+`verification_queue` (bounded to the MCP result-size budget), with synthesis and
+briefs referenced by path. The
 manifest reports two outcomes, not one: `ok` is the stages, and a `sidecar`
 block (`{ status, error }`) is the epistemic contract's own result
 ([ADR-0011](docs/adr/0011-two-outcomes-per-synthesis-run.md)). Because the
 server runs locally, its synthesis stages inherit your authenticated `claude`
-seat (see Requirements). Reference skill: `skills/research/SKILL.md`.
+seat (see Requirements). The result also names the run's `outputs_dir` and
+`batch_name`, to poll or resume it by. A second tool, `research_status`, reports
+how a run is going from its `outputs_dir`; called with no argument it lists the
+runs under the data root, newest first (`state`, `age_s`, `question_slug`,
+`batch_name`; at most 50, with `truncated` counting the rest). Reference skill:
+`skills/research/SKILL.md`.
+
+A run with local-seat turns takes longer than a client will hold one tool call
+open, so a plain `fast`, `standard` or `high` call **detaches**: it returns a
+handle at once (`state: "running"`, `outputs_dir`, `batch_name`) while the run
+continues in the server. Poll `research_status` until the run is `finished`,
+then call `research` with `resume=<outputs_dir>`; a resume of a run that
+succeeded (`ok` true and a sidecar delivered, or none owed) blocks and returns
+the full result. One whose `ok` is false re-runs its failed stage, and one whose
+`sidecar.status` is `failed` retries the sidecar, each like a new run. A
+`research`-tier call and a `dry_run` block and return the result directly. Pass
+`detach: false` to block on any tier, or `detach: true` to detach any run.
+
+### Where runs are written
+
+Runs write `outputs/`, `state/`, `logs/` and `transcripts/` under one **data
+root**. Set `MANTIS_HOME` to choose it. Without it, a plugin install writes under
+`~/.mantis`, a clone writes at its own root, and an installed tool writes in the
+working directory. `research_status` reports the root in use as `data_root`.
+
+**Plugin users upgrading from 0.5.1 or earlier:** those versions kept runs inside
+the plugin's versioned cache directory
+(`~/.claude/plugins/cache/<marketplace>/mantis-research/<version>/`), which
+goes away when Claude Code prunes that version. Copy any run you want to keep
+out first. To resume an old run, either set `MANTIS_HOME` to that version
+directory, or move its `outputs/<run>`, `state/<run>` and `transcripts/<run>`
+under the data root. Details:
+[docs/running-batches.md § Where files land](docs/running-batches.md#where-files-land).
 
 ## The epistemic sidecar
 
 Each synthesis writes `<stem>.sidecar.json` next to the markdown brief — the
 agent-consumable contract ([ADR-0003](docs/adr/0003-epistemic-sidecar-artifact.md),
-schema in `core/sidecar.py`, `sidecar_version: 2`):
+schema in `core/sidecar.py`, `sidecar_version: 3`):
 
 - **model-authored** — `claims`, `divergences`, `verification_queue`,
   `agreements_worth_verifying`, `coverage_notes`.
 - **runner-authored** — the `question` verbatim, the rest of the run identity,
   `sources`, and `provenance` (durations, token/cost), merged in after the
-  model's JSON validates.
+  model's JSON validates. `sources[].path` and `synthesis_path` are relative to
+  the run root, the directory two levels above the sidecar, so a copied run
+  directory still resolves them (`ResearchSidecar.resolved_paths`). Versions 1
+  and 2 recorded absolute paths.
 
 The write is gated: a merged sidecar missing `question`, `generated_at` or a
 non-empty `sources` is recorded as a failed sidecar instead of shipping. Without

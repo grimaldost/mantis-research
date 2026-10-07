@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import pytest
 import typer
 
+from mantis_research.core.settings import settings
 from mantis_research.core.state import ClaudeResearchState, TopicStatus
 from mantis_research.interface.cli.monitor import monitor_cmd
 
@@ -76,6 +77,30 @@ def test_monitor_batch_finds_scoped_progress(
     )
     # All-terminal → monitor prints and returns (no infinite loop).
     monitor_cmd('claude', poll_seconds=0, batch_name='b', layout='batch')
+    assert 'ALL_TERMINAL' in capsys.readouterr().out
+
+
+def test_the_legacy_fallback_reads_the_state_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The nested state/<stage>/progress.json fallback looks under the state
+    # root, which follows the data root — not under the project root, which a
+    # plugin install no longer writes to (T4e).
+    monkeypatch.setattr('mantis_research.core.paths.project_root', lambda: tmp_path / 'proj')
+    monkeypatch.setattr(settings, 'MANTIS_HOME', str(tmp_path / 'mantis-home'))
+    sd = tmp_path / 'mantis-home' / 'state' / 'gemini'
+    sd.mkdir(parents=True)
+    (sd / 'progress.json').write_text(
+        json.dumps(
+            {
+                'total_topics': 1,
+                'counts': {'done': 1},
+                'topics': [{'id': '1', 'status': 'done'}],
+            }
+        ),
+        encoding='utf-8',
+    )
+    monitor_cmd('gemini', poll_seconds=0)
     assert 'ALL_TERMINAL' in capsys.readouterr().out
 
 

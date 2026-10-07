@@ -56,6 +56,7 @@ src/mantis_research/
 │   ├── state.py           #   per-topic state models + atomic save/load
 │   ├── sidecar.py         #   sidecar schema v1 + agent projection
 │   ├── prompts.py         #   packaged default prompt templates
+│   ├── retrieval_overlap.py # cited-URL overlap between briefs (synthesis prompt)
 │   ├── model_policy.py    #   auto-latest model selection (pure part)
 │   ├── paths.py           #   layout resolvers (legacy | batch)
 │   ├── retry.py           #   backoff classification/policy
@@ -141,9 +142,11 @@ Two layouts, chosen per config (`runner.layout`,
 [`core/paths.py`](../src/mantis_research/core/paths.py) and a run never mixes
 layouts:
 
-- **`legacy`** (default) — the original flat directories at the project root
-  (`research-outputs*/`, `state*/`, `journals/`, …), byte-identical to what
-  every historical batch used, so old trees keep resuming (invariant I6).
+- **`legacy`** (default) — the original flat directories (`research-outputs*/`,
+  `state*/`, `journals/`, …) at the data root, which in a checkout is the
+  project root ([running-batches.md § Where files land](running-batches.md#where-files-land)),
+  byte-identical to what every historical batch used, so old trees keep
+  resuming (invariant I6).
 - **`batch`** — everything scoped under the batch name
   (`state/<batch>/<stage>/`, `outputs/<batch>/<stage>/`,
   `transcripts/<batch>/`), so runs never collide and a batch can be archived
@@ -170,7 +173,7 @@ Configs may pin model ids or opt into the auto-latest policy
 
 Each synthesis writes `<stem>.sidecar.json` next to the brief — the
 agent-consumable contract ([ADR-0003](adr/0003-epistemic-sidecar-artifact.md),
-schema `core/sidecar.py`, `sidecar_version: 2`). Authorship is split by who
+schema `core/sidecar.py`, `sidecar_version: 3`). Authorship is split by who
 knows what: the synthesis model writes the epistemic fields (claims,
 divergences, verification queue, agreements worth verifying, coverage notes);
 the runner fills the question, the rest of the identity, sources, and

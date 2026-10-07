@@ -9,6 +9,8 @@ Two things live here, both pure:
   indistinguishable from a hang, and the caller's response to a hang is to give
   up. The events are data; who delivers them (the MCP progress channel, stderr,
   nobody) is the caller's business.
+- ``seat_start_range`` — when a run queued for the local seat can expect to
+  take it, from the queue's size and a measured turn length.
 """
 
 from __future__ import annotations
@@ -31,6 +33,9 @@ RunEventKind = Literal[
     'substrate_done',
     'stage_done',
     'waiting',
+    # A waiter took the local Claude seat. The run record stores when, so a
+    # finished run says how long its seat turn took (T1f).
+    'seat_acquired',
     # A spawned child is still working. Emitted from the streaming runner as
     # the child's own output arrives, rate-limited: without it the longest
     # phase of a run — the local-seat turn — reported nothing between
@@ -73,6 +78,30 @@ def emit(callback: ProgressCallback | None, event: RunEvent) -> None:
         # A broken listener must not fail the run: the events are courtesy, the
         # research is the job.
         return
+
+
+def seat_start_range(
+    waiting: int,
+    holder_elapsed_s: float | None,
+    median_s: float | None,
+) -> tuple[float, float] | None:
+    """Seconds until a queued run takes the local seat, as ``(early, late)``.
+
+    ``waiting`` counts the runs queued on the seat, this one included;
+    ``holder_elapsed_s`` is how long the current holder has had it (``None``
+    when nobody does); ``median_s`` is the median measured seat turn. The early
+    bound assumes this run is taken next, so it waits out the holder's
+    remaining turn. The late bound assumes every other waiter goes first, one
+    median turn each. The lock grants the seat to whichever waiter polls first
+    once it frees, so no order between the two bounds can be promised.
+
+    Returns ``None`` when there is no measured turn to estimate from.
+    """
+    if median_s is None:
+        return None
+    early = 0.0 if holder_elapsed_s is None else max(0.0, median_s - holder_elapsed_s)
+    late = early + max(0, waiting - 1) * median_s
+    return early, late
 
 
 def count_by_status(states: list[TopicState]) -> dict[str, int]:

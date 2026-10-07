@@ -7,10 +7,12 @@ Start it with ``python -m mantis_research.interface.mcp``.
 Pinned ``mcp`` SDK API — probed against the installed package (spec 0002 §2 / FM-2,
 FM-B):
 
-- ``from mcp.server.fastmcp import FastMCP``; ``FastMCP(name)``.
+- ``from mcp.server.mcpserver import Context, MCPServer``; ``MCPServer(name)``. The
+  2.x rename of the 1.x ``FastMCP``, whose module no longer exists.
 - ``@server.tool()`` registers a tool; the function's type hints are the input
   schema, and a ``dict`` return annotation yields structured output (the Tool
-  carries an ``outputSchema``).
+  carries an ``output_schema``). A listed Tool's schema is ``Tool.input_schema``
+  (1.x: ``inputSchema``).
 - ``server.run(transport='stdio')`` serves over stdio.
 - ``await server.list_tools()`` is the public tool-introspection API (used by the
   §2 registration test); a synchronous ``server._tool_manager.list_tools()`` also
@@ -23,7 +25,10 @@ FM-B):
   tool's input schema (``Tool.context_kwarg``), so it never reaches the agent as
   an argument to supply.
 
-Progress is reported over that context. Before it, the whole multi-stage run hid
+Progress is reported over that context. The SDK requires each progress value to be
+strictly greater than the last one sent on the same token, and the run emits
+repeated steps (``run_named`` and ``stage_start`` share one), so the bridge drops
+a step that does not advance. Before it, the whole multi-stage run hid
 behind one ``to_thread`` await and the client saw silence from call to return —
 which a client cannot distinguish from a hang, and answers by giving up.
 """
@@ -33,19 +38,27 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
 import structlog
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.mcpserver import Context, MCPServer
 from pydantic import Field
 
+from mantis_research.core import paths
 from mantis_research.core.sidecar import ResearchSidecar, project_for_agent
 from mantis_research.interface.research_service import (
     RUN_RECORD_NAME,
+    is_finished_record,
     missing_product,
+    resolve_resume_dir,
     resume_research,
     run_research,
+    seat_report,
+    seat_report_if_queued,
+    uses_local_seat,
 )
 from mantis_research.interface.seat import process_is_alive
 
@@ -61,6 +74,15 @@ _UNKNOWN_SIDECAR: dict[str, Any] = {'status': 'not_run', 'error': None}
 #: `run_named` after building its config and before dispatching any stage, so
 #: this bounds config validation, not research.
 _NAMING_TIMEOUT_S = 30.0
+
+#: How many times a refused read of a run record is tried, and the pause between
+#: tries. The record is rewritten while a run is polled, and on Windows a read
+#: that lands while ``replace`` swaps the file in raises ``PermissionError``; the
+#: swap takes milliseconds.
+_RECORD_READ_ATTEMPTS = 5
+_RECORD_READ_PAUSE_S = 0.05
+# The most runs one listing returns; older ones are counted, not sent.
+_LIST_LIMIT = 50
 
 log = structlog.get_logger(__name__)
 
@@ -118,6 +140,11 @@ def _agent_result(manifest: dict[str, Any]) -> dict[str, Any]:
         'cost': manifest['cost'],
         'stages': manifest['stages'],
         'outputs': manifest['outputs'],
+        # Where the run lives and what it is called, so a caller that wants to
+        # poll or resume has them from the result in hand (T9c). Both are on
+        # every manifest `run_research` and `resume_research` return.
+        'outputs_dir': manifest.get('outputs_dir'),
+        'batch_name': manifest.get('batch_name'),
         # The run's second outcome (ADR-0011). Absent on run records written
         # before the field, which a resume still reads: unknown, not fine.
         'sidecar': manifest.get('sidecar') or _UNKNOWN_SIDECAR,
@@ -168,12 +195,18 @@ def _run_and_assemble(
     return _agent_result(manifest)
 
 
-async def _deliver(ctx: Any, event: RunEvent) -> None:
-    """Push one run event down the MCP channel (progress + log)."""
+async def _deliver(ctx: Any, event: RunEvent, *, report_progress: bool) -> None:
+    """Push one run event down the MCP channel (progress + log).
+
+    ``report_progress`` is the bridge's verdict on whether this event advances the
+    run; the log line goes out either way."""
     # Both are sent: `report_progress` is the mechanism defined for this, but it
     # no-ops when the client sent no progress token, and a log notification
     # reaches that client anyway. Between them the caller always hears something.
-    if event.step is not None and event.total:
+    # `ctx.info` is deprecated in mcp 2.x (the logging capability is going away,
+    # SEP-2577) but is still delivered, and it is the only channel a client with
+    # no progress token hears; drop it when the SDK does.
+    if report_progress:
         await ctx.report_progress(progress=event.step, total=event.total, message=event.message)
     await ctx.info(event.message)
 
@@ -186,21 +219,52 @@ def _progress_bridge(ctx: Any, loop: asyncio.AbstractEventLoop) -> ProgressCallb
     be handed back across that boundary rather than awaited in place.
     ``run_coroutine_threadsafe`` is that hand-off; the future is deliberately not
     awaited, since the run must not block on its audience.
+
+    Progress must strictly increase, but the run's steps repeat (a stage's start
+    and its predecessor's finish share one), so the highest step sent so far is
+    kept here and an event that does not exceed it is logged without a progress
+    notification. Events arrive from the one worker thread, in order.
     """
+    last_step: float = -1.0
 
     def deliver(event: RunEvent) -> None:
-        asyncio.run_coroutine_threadsafe(_deliver(ctx, event), loop)
+        nonlocal last_step
+        advances = False
+        if event.step is not None and event.total and event.step > last_step:
+            advances = True
+            last_step = event.step
+        asyncio.run_coroutine_threadsafe(_deliver(ctx, event, report_progress=advances), loop)
 
     return deliver
 
 
-def _project(record: dict[str, Any]) -> dict[str, Any]:
+def _artifacts_on_disk(run_dir: Path) -> dict[str, list[str]]:
+    """What a run has already written, read off the disk rather than its record.
+
+    The record is rewritten at each stage transition, but a write can be lost to
+    a reader holding the file, and a run started by a version that wrote the
+    record only at its start and end says nothing until it finishes. The files
+    themselves are the evidence a poller needs either way (T1e).
+    """
+    synthesis = run_dir / 'synthesis'
+    return {
+        'briefs': sorted(str(p) for p in (run_dir / 'openrouter').glob('**/*.md')),
+        'synthesis': sorted(str(p) for p in synthesis.glob('*.md')),
+        'sidecar': sorted(str(p) for p in synthesis.glob('*.sidecar.json')),
+    }
+
+
+def _project(record: dict[str, Any], run_dir: Path) -> dict[str, Any]:
     """Describe a run from its record, without judging it.
 
     Deliberately not :func:`_agent_result`: that raises when a live run owed a
     sidecar and has none, which is right for the call that was supposed to
     deliver one and wrong for a caller asking how a run went. Polling must
     answer the question, not hand back an exception to interpret.
+
+    A run that has not finished also reports the ``artifacts`` already on disk
+    under ``run_dir``, so a lagging record cannot hide them, and a run queued
+    for the local seat reports the queue as ``seat`` (T1f).
     """
     status = str(record.get('status', ''))
     if status == 'dispatching':
@@ -208,19 +272,35 @@ def _project(record: dict[str, Any]) -> dict[str, Any]:
         alive = isinstance(owner, int) and process_is_alive(owner)
         state = 'running' if alive else 'abandoned'
     else:
+        # `failed` — a run that ended on an exception — is a finished run that
+        # did not succeed, not a fifth state: the vocabulary stays closed.
         state = 'finished'
-    return {
+    projection: dict[str, Any] = {
         'state': state,
         'batch_name': record.get('batch_name'),
         'outputs_dir': record.get('outputs_dir'),
         'question': record.get('question'),
+        'question_slug': record.get('question_slug'),
+        'started_at': record.get('started_at'),
         'assurance': record.get('assurance'),
         'ok': record.get('ok'),
+        # Mid-run each entry carries `state`, and `exit_code` stays null until
+        # the stage is done; a finished record carries `exit_code` alone.
         'stages': record.get('stages') or {},
+        'current_stage': record.get('current_stage'),
         'sidecar': record.get('sidecar') or _UNKNOWN_SIDECAR,
         'cost': record.get('cost') or {},
         'outputs': record.get('outputs') or {},
     }
+    if status == 'dispatching':
+        projection['artifacts'] = _artifacts_on_disk(run_dir)
+    if state == 'running':
+        seat = seat_report_if_queued(str(record.get('batch_name') or run_dir.name))
+        if seat is not None:
+            projection['seat'] = seat
+    if record.get('error'):
+        projection['error'] = record['error']
+    return projection
 
 
 async def research_status(
@@ -230,18 +310,43 @@ async def research_status(
             description=(
                 'The output directory of a run to report on — the "outputs_dir" '
                 "a detached `research` call returned. Reads the run's own record "
-                'and per-stage state; it never starts or changes anything.'
+                'and per-stage state; it never starts or changes anything. Leave it '
+                "empty to list the runs under this server's data root instead, "
+                'newest first.'
             )
         ),
-    ],
+    ] = '',
 ) -> dict[str, Any]:
     """Report how a run is going, without waiting for it.
 
-    Returns its state (``running`` / ``finished`` / ``abandoned`` / ``unknown``),
-    per-stage exit codes, cost so far and output paths. A finished run's full
-    epistemic result is fetched by calling ``research`` again with
+    Returns its state (``running`` / ``finished`` / ``abandoned`` / ``unknown``;
+    a run that ended on an exception is ``finished`` with ``ok`` false and an
+    ``error`` string), per-stage exit codes, cost so far and output paths, plus ``data_root``: the
+    directory this server writes runs under (``<data_root>/outputs/<run>``). While
+    a run is in flight, each ``stages`` entry carries ``state`` (``running`` /
+    ``waiting`` / ``done``) and its ``exit_code`` is null until the stage is done;
+    ``current_stage`` names the stage most recently started, and ``artifacts``
+    lists the briefs, syntheses and sidecars already on disk. A finished run's
+    full epistemic result is fetched by calling ``research`` again with
     ``resume=<outputs_dir>``, which skips the stages already done.
+
+    With no ``outputs_dir``, returns ``runs``: every run directory under the data
+    root that holds a record, newest first, each described as above plus
+    ``age_s`` (seconds since it started), ``question_slug`` and ``batch_name``.
+    At most 50 are listed; ``truncated`` counts the older ones left out. A record
+    that cannot be read is listed with state ``unknown`` and a ``detail``.
     """
+    # Off the loop: the read can pause for a writer, and the artifact listing
+    # walks the run directory.
+    if not outputs_dir:
+        listing = await asyncio.to_thread(_list_runs)
+        return {**listing, 'data_root': str(paths.data_root())}
+    status = await asyncio.to_thread(_status, outputs_dir)
+    return {**status, 'data_root': str(paths.data_root())}
+
+
+def _status(outputs_dir: str) -> dict[str, Any]:
+    """Read one run's record into the status shape (``unknown`` when it cannot)."""
     record_path = Path(outputs_dir) / RUN_RECORD_NAME
     if not record_path.exists():
         return {
@@ -253,10 +358,101 @@ async def research_status(
             ),
         }
     try:
-        record = json.loads(record_path.read_text(encoding='utf-8'))
+        record = _read_record(record_path)
     except (OSError, ValueError) as exc:
         return {'state': 'unknown', 'outputs_dir': outputs_dir, 'detail': str(exc)}
-    return _project(record)
+    return _project(record, record_path.parent)
+
+
+def _list_runs() -> dict[str, Any]:
+    """Describe the runs under the outputs root, newest first, capped at the limit.
+
+    A run is a direct child directory holding a record. Each is read through
+    :func:`_status`, so an unreadable record becomes an ``unknown`` entry rather
+    than an exception: a listing that failed on one bad directory would hide
+    every good one. Recency is the record's ``started_at``, falling back to the
+    directory's modification time for a record that has none.
+    """
+    root = paths.outputs_root()
+    try:
+        candidates = [d for d in root.iterdir() if (d / RUN_RECORD_NAME).is_file()]
+    except OSError:
+        candidates = []
+    now = time.time()
+    entries: list[tuple[float, dict[str, Any]]] = []
+    for run_dir in candidates:
+        entry = _status(str(run_dir))
+        started = _epoch(entry.get('started_at'))
+        if started is None:
+            try:
+                started = run_dir.stat().st_mtime
+            except OSError:
+                started = now
+        entry['age_s'] = max(0.0, round(now - started, 1))
+        entry['batch_name'] = entry.get('batch_name') or run_dir.name
+        entry['outputs_dir'] = entry.get('outputs_dir') or str(run_dir)
+        entries.append((started, entry))
+    entries.sort(key=lambda pair: pair[0], reverse=True)
+    return {
+        'runs': [entry for _, entry in entries[:_LIST_LIMIT]],
+        'truncated': max(0, len(entries) - _LIST_LIMIT),
+    }
+
+
+def _epoch(stamp: object) -> float | None:
+    """Parse an ISO-8601 timestamp to epoch seconds, or ``None`` when it is not one."""
+    if not isinstance(stamp, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(stamp)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.timestamp()
+
+
+def _read_record(record_path: Path) -> dict[str, Any]:
+    """Read a run record, retrying a read refused while a writer swaps it in."""
+    attempt = 1
+    while True:
+        try:
+            record: dict[str, Any] = json.loads(record_path.read_text(encoding='utf-8'))
+        except PermissionError:
+            if attempt >= _RECORD_READ_ATTEMPTS:
+                raise
+            attempt += 1
+            time.sleep(_RECORD_READ_PAUSE_S)
+        else:
+            return record
+
+
+def _should_detach(detach: bool | None, *, assurance: str, dry_run: bool, resume: str) -> bool:
+    """Whether this call returns a handle instead of the result (T20a).
+
+    A resume of a run that finished is a collect, and a collect returns the
+    result whatever ``detach`` says: answering it with another handle would
+    leave the caller polling a run that is already finished. Only a run with
+    nothing left to run is a collect (:func:`is_finished_record`); a ``failed``
+    or abandoned one, or one with a stage that exited non-zero, re-runs its
+    remaining stages on resume, and that is as long as a new run. So does one
+    whose sidecar failed, which re-enters the synthesis stage. A record that
+    cannot be read blocks, so the resume's own refusal reaches the caller.
+    Otherwise an explicit ``detach`` is honoured, and unset it detaches exactly
+    the runs that will queue for the local seat, judged on the tier the run will
+    actually use: on a resume, the record's, not the call's.
+    """
+    if resume:
+        try:
+            record = _read_record(resolve_resume_dir(Path(resume)) / RUN_RECORD_NAME)
+        except (OSError, ValueError):
+            return False
+        if not dry_run and is_finished_record(record):
+            return False
+        assurance = str(record.get('assurance') or 'fast')
+    if detach is not None:
+        return detach
+    return uses_local_seat(assurance, dry_run=dry_run)
 
 
 def _detach(
@@ -281,10 +477,18 @@ def _detach(
 
     The handle carries no epistemic payload. There is nothing to report yet, and
     a result shaped like an answer is exactly what let a briefs-only run read as
-    one.
+    one. When the run will need the local seat, it carries the queue it will
+    join as ``seat`` (T1f).
+
+    A resume can turn out to be a collect: the record the caller's check read
+    was ``dispatching``, and its owner finished before this worker resumed it.
+    A collect names no run, so the worker returns before any name arrives, and
+    its result is returned as a blocking collect would return it.
     """
     started = threading.Event()
     identity: dict[str, Any] = {}
+    refused: list[Exception] = []
+    collected: list[dict[str, Any]] = []
 
     def note(event: RunEvent) -> None:
         if event.kind == 'run_named' and not identity:
@@ -293,7 +497,7 @@ def _detach(
 
     def work() -> None:
         try:
-            _run_and_assemble(
+            result = _run_and_assemble(
                 question,
                 assurance=assurance,
                 substrates=substrates,
@@ -304,6 +508,14 @@ def _detach(
                 resume=resume,
                 on_event=note,
             )
+            if not identity:
+                collected.append(result)
+        except Exception as exc:
+            # Before the run names itself, a failure is the caller's answer:
+            # the seat check and argument validation run there.
+            if not identity:
+                refused.append(exc)
+            log.exception('detached run failed')
         except BaseException:  # the thread must never take the server down
             log.exception('detached run failed')
         finally:
@@ -315,13 +527,20 @@ def _detach(
     # the config to build — not for the research to happen.
     started.wait(timeout=_NAMING_TIMEOUT_S)
     if not identity:
+        if refused:
+            raise refused[0]
+        if collected:
+            return collected[0]
         msg = (
             'the detached run did not name itself within '
             f'{_NAMING_TIMEOUT_S:.0f}s — it failed before dispatch. Re-run '
-            'without detach to see the error.'
+            'with detach=false to see the error.'
         )
         raise RuntimeError(msg)
-    return {'state': 'running', **identity}
+    handle: dict[str, Any] = {'state': 'running', **identity}
+    if uses_local_seat(str(identity.get('assurance')), dry_run=bool(identity.get('dry_run'))):
+        handle['seat'] = seat_report(str(identity.get('batch_name')))
+    return handle
 
 
 async def research(
@@ -377,19 +596,26 @@ async def research(
         Field(description='Validate orchestration without spending any model calls.'),
     ] = False,
     detach: Annotated[
-        bool,
+        bool | None,
         Field(
             description=(
-                'Start the run and return its identity immediately instead of '
-                'waiting for it. A full run takes many minutes and can outlast '
-                'the time a client will hold one tool call open; with this, poll '
+                'Start the run and return its identity immediately ("state": '
+                '"running", "outputs_dir", "batch_name") instead of waiting for '
+                'it. A run with local-seat turns takes many minutes and outlasts '
+                'the time a client will hold one tool call open; poll '
                 '`research_status` with the returned "outputs_dir", then call '
                 '`research` again with `resume=<outputs_dir>` to collect the '
-                'finished result. Off by default: a plain call still blocks and '
-                'returns the answer.'
+                'finished result. Leave it unset to choose by tier: a run whose '
+                'tier uses the local Claude seat ("fast", "standard", "high") '
+                'detaches, and a "research"-tier run or a dry run blocks and '
+                'returns the result. Pass false to block on any tier, or true to '
+                'detach any run. A resume of a finished run is a collect: it '
+                'blocks and returns the result whatever this says. A resume of '
+                'a failed run re-runs it, and a resume of a run whose sidecar '
+                'failed retries the sidecar; both follow this setting.'
             )
         ),
-    ] = False,
+    ] = None,
     name: Annotated[
         str,
         Field(
@@ -409,7 +635,12 @@ async def research(
                 'its output directory (the "outputs_dir" of the run you lost, e.g. '
                 '"outputs/research-my-question-20260811T101500Z"). Stages that '
                 'already finished are skipped, and the question and settings come '
-                'from that run\'s own record, so "question" is ignored.'
+                'from that run\'s own record, so "question" is ignored. Pass a '
+                "finished run's directory to collect its result: that call "
+                'blocks whatever "detach" says. A failed run, or one with a stage '
+                'that exited non-zero, is re-run from that stage instead, and a '
+                'run whose sidecar failed has its sidecar retried; "detach" '
+                'applies to either as to a new run.'
             )
         ),
     ] = '',
@@ -422,7 +653,8 @@ async def research(
     sidecar's claims, cross-model divergences, and verification queue. The
     synthesis / falsification / evaluation / journal stages drive a local
     authenticated ``claude`` CLI (ADR-0009); research-only runs need only an
-    ``OPENROUTER_API_KEY``.
+    ``OPENROUTER_API_KEY``. A plain call to a tier that uses that seat returns a
+    handle first and the result on the collect call (see ``detach``).
 
     Parameters:
       - ``assurance`` (``fast`` | ``standard`` | ``high``) chooses depth. ``fast``
@@ -444,13 +676,32 @@ async def research(
       - ``dry_run`` validates orchestration without spending model calls.
       - ``resume`` re-enters an interrupted run by its output directory instead
         of starting a new one; completed stages are skipped and the question and
-        settings are read from that run's own record.
+        settings are read from that run's own record. On a finished run it is
+        the collect call, and returns the result.
+      - ``detach`` returns the run's identity at once (``state``,
+        ``outputs_dir``, ``batch_name``) instead of the result. Unset, it is
+        chosen by tier: a run that uses the local Claude seat detaches, and a
+        ``research``-tier run or a dry run blocks; pass ``false`` to block or
+        ``true`` to detach. Research takes 5 to 10 min. Each local-seat turn after
+        it takes about 7 min (median), and every run on the machine queues those
+        turns on one seat; the turns per tier are ``fast`` 2, ``standard`` 3,
+        ``high`` 5, plus 1 with ``journal``. A subagent, or any caller whose
+        tool call can be cut off, keeps the detached default: poll
+        ``research_status``, then collect with ``resume=<outputs_dir>``. A
+        resume of a finished run blocks and returns the result whatever
+        ``detach`` says. A resume of a failed or abandoned run, or of one with a
+        stage that exited non-zero, re-runs those stages and follows ``detach``
+        like a new run, and so does a resume of a run whose sidecar failed, which
+        retries the sidecar.
     """
     # dispatch_stage_config nests asyncio.run per stage, so the synchronous
     # pipeline must run OFF this event loop or it raises RuntimeError (FM-1).
     # The bridge is built here, on the loop, and closes over it: the worker
     # thread hands events back rather than touching the session directly.
-    if detach:
+    # Off the loop: on a resume the decision reads the run's record.
+    if await asyncio.to_thread(
+        _should_detach, detach, assurance=assurance, dry_run=dry_run, resume=resume
+    ):
         return _detach(
             question,
             assurance=assurance,
@@ -476,9 +727,9 @@ async def research(
     )
 
 
-def build_server() -> FastMCP:
+def build_server() -> MCPServer:
     """Construct the MCP server with the ``research`` tool registered."""
-    server = FastMCP(_SERVER_NAME)
+    server = MCPServer(_SERVER_NAME)
     server.tool()(research)
     server.tool()(research_status)
     return server

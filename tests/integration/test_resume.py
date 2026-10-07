@@ -15,20 +15,19 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
+from mantis_research.core.settings import settings
 from mantis_research.interface.research_service import (
     resolve_resume_dir,
     resume_research,
     run_research,
 )
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _exited_pid() -> int:
@@ -44,8 +43,10 @@ def rooted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     return tmp_path
 
 
-def _abandoned_run(rooted: Path, *, owner_pid: int, batch: str = 'b') -> Path:
-    run_dir = rooted / 'outputs_root' / batch
+def _abandoned_run(
+    rooted: Path, *, owner_pid: int, batch: str = 'b', outputs: str = 'outputs_root'
+) -> Path:
+    run_dir = rooted / outputs / batch
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / 'run.json').write_text(
         json.dumps(
@@ -92,6 +93,89 @@ class TestContainment:
         (rooted / 'outputs_root').mkdir(parents=True)
         with pytest.raises(ValueError, match='no run directory'):
             resolve_resume_dir(rooted / 'outputs_root' / 'never-ran')
+
+
+class TestContainmentUnderTheDataRoot:
+    """The outputs root follows the data root, and so does the resume check (T4e)."""
+
+    @pytest.fixture
+    def home(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+        monkeypatch.setattr(settings, 'MANTIS_HOME', str(tmp_path / 'mantis-home'))
+        return tmp_path / 'mantis-home'
+
+    def test_a_run_under_the_data_root_resolves(self, home: Path) -> None:
+        run_dir = home / 'outputs' / 'research-q-1'
+        run_dir.mkdir(parents=True)
+        assert resolve_resume_dir(run_dir) == run_dir.resolve()
+
+    def test_the_data_roots_outputs_dir_itself_is_refused(self, home: Path) -> None:
+        (home / 'outputs').mkdir(parents=True)
+        with pytest.raises(ValueError, match='not inside the outputs root'):
+            resolve_resume_dir(home / 'outputs')
+
+    def test_a_run_left_in_a_plugin_cache_is_refused_with_both_ways_out(
+        self, home: Path, tmp_path: Path
+    ) -> None:
+        # Runs written by 0.5.1 and earlier sit in that version's cache
+        # directory. The refusal has to say how to get them back: resume in
+        # place by pointing MANTIS_HOME at the old directory, or move the run.
+        old = tmp_path / '.claude' / 'plugins' / 'cache' / 'x' / 'mantis-research' / '0.5.1'
+        run_dir = old / 'outputs' / 'research-q-1'
+        run_dir.mkdir(parents=True)
+        with pytest.raises(ValueError, match='not inside the outputs root') as exc:
+            resolve_resume_dir(run_dir)
+        msg = str(exc.value)
+        assert f'MANTIS_HOME={old.resolve()}' in msg
+        for tree in ('outputs', 'state', 'transcripts'):
+            assert f'{tree}/research-q-1' in msg
+        assert str(home.resolve()) in msg
+
+    def test_a_run_moved_out_of_a_plugin_cache_resumes_under_the_data_root(
+        self, home: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The migration path, end to end: an abandoned run written by an old
+        # plugin version, moved by hand, resumes from its new place. Its
+        # run.json still names the old absolute paths; a resume must not use them.
+        old = tmp_path / '.claude' / 'plugins' / 'cache' / 'x' / 'mantis-research' / '0.5.1'
+        _abandoned_run(old, owner_pid=_exited_pid(), outputs='outputs')
+        (old / 'state' / 'b' / 'openrouter').mkdir(parents=True)
+        (old / 'transcripts' / 'b').mkdir(parents=True)
+        for tree in ('outputs', 'state', 'transcripts'):
+            (home / tree).mkdir(parents=True)
+            shutil.move(old / tree / 'b', home / tree / 'b')
+        seen: list[str] = []
+
+        def fake_dispatch(stage: str, cfg: object, **_: object) -> int:
+            seen.append(stage)
+            return 0
+
+        monkeypatch.setattr(
+            'mantis_research.interface.cli.dispatch.dispatch_stage_config', fake_dispatch
+        )
+        manifest = resume_research(home / 'outputs' / 'b', log_level='CRITICAL')
+        assert seen == ['openrouter', 'synthesis']
+        assert manifest['question'] == 'what changed in X?'
+        moved = (home / 'outputs' / 'b').resolve()
+        assert Path(manifest['outputs_dir']).resolve() == moved
+        for brief in manifest['outputs']['briefs']:
+            assert moved in Path(brief).resolve().parents
+
+    def test_a_run_left_in_a_plugin_cache_resumes_in_place_under_its_old_root(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        old = tmp_path / '.claude' / 'plugins' / 'cache' / 'x' / 'mantis-research' / '0.5.1'
+        run_dir = _abandoned_run(old, owner_pid=_exited_pid(), outputs='outputs')
+        monkeypatch.setattr(settings, 'MANTIS_HOME', str(old))
+        assert resolve_resume_dir(run_dir) == run_dir.resolve()
+
+    def test_a_refusal_outside_any_plugin_cache_carries_no_migration_hint(
+        self, home: Path, tmp_path: Path
+    ) -> None:
+        stray = tmp_path / 'elsewhere' / 'outputs' / 'research-q-1'
+        stray.mkdir(parents=True)
+        with pytest.raises(ValueError, match='not inside the outputs root') as exc:
+            resolve_resume_dir(stray)
+        assert 'MANTIS_HOME' not in str(exc.value)
 
 
 class TestResume:

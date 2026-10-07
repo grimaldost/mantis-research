@@ -74,7 +74,30 @@ Three design notes shape its structure:
 | `{secondary_count}` / `{secondary_block}` | The secondaries, one line each with label, path and size |
 | `{source_count}` | Total briefs being merged (primary + secondaries) |
 | `{substrate_list}` | Every label in the run, comma-joined — what the independence note names |
+| `{retrieval_overlap}` | The cited-URL overlap of every pair of briefs, one line — what the independence note weighs agreement against |
 | `{synthesis_path}` | Where to write the merged brief |
+
+`{retrieval_overlap}` is measured by the runner before the turn
+(`core/retrieval_overlap.py`). It reads the URLs each brief links (inline
+links, angle autolinks and reference definitions, not bare URLs in prose),
+drops the query string and fragment, and folds scheme, `www.` and a trailing
+slash, the same key the sidecar merges citations on. It then renders the
+Jaccard overlap of each pair, primary first, for example
+`openrouter:openai / openrouter:deepseek 0.00; openrouter:openai /
+openrouter:google 0.00; openrouter:deepseek / openrouter:google 1.00`. Two
+briefs that cite no URL score 0.00. The independence note used to speak
+only of shared training substrate. In one 2026-09-27 batch, two of three
+briefs cited the same five URLs and none of the third brief's ten, so "two of
+three agree" was one retrieval pool against another, and the synthesizer found
+that by counting links by hand.
+
+A brief's label is fixed once, when the briefs are resolved: `claude`,
+`gemini`, or `openrouter:<subslug>` for an OpenRouter subsession
+(`openrouter:single` for the one-file layout). The same label reaches this
+prompt, the sidecar prompt and the sidecar's `sources[].label`. Every
+OpenRouter secondary used to be labelled a bare `openrouter`, so a Path-B
+independence note read `openrouter:openai, openrouter, openrouter` while the
+sidecar named the same briefs by subslug.
 
 The legacy `{claude_path}` / `{claude_size_kb}` / `{gemini_count}` /
 `{gemini_block}` aliases are still bound to the resolved primary and the
@@ -102,7 +125,9 @@ truth and is short enough to read directly. Its shape:
   distribution, (b) notable biases, (c) prompt-signal quality, (d)
   hallucination flags, (e) cross-brief agreement worth verifying plus the
   unverifiable named artifacts, (f) an independence note naming
-  `{substrate_list}`.
+  `{substrate_list}` and printing `{retrieval_overlap}`: agreement between
+  briefs that cite the same URLs is shared retrieval, not independent
+  confirmation.
 
 ---
 
@@ -158,7 +183,7 @@ After Turn 1 completes, the synthesis at
 | All 6 meta-observation subsections (a–f) | Yes, all populated | Missing subsection — re-emphasize in prompt |
 | Hallucination flags concrete | Each flag names a specific claim, the more credible source, the verifiable fact | Handwavy ("one brief was off somewhere") — demand named claims |
 | Co-hallucination candidates listed | Every agreed-on named artifact the briefs do not establish appears in (e) | Missing — an invented repository can reach a recommendation on agreement alone |
-| Independence note | Names the substrate set actually used; acknowledges tertiary-only independence | Missing, or naming substrates the run did not use — risk of overclaiming validation |
+| Independence note | Names the substrate set actually used; acknowledges tertiary-only independence; treats agreement between briefs with high cited-URL overlap as shared retrieval | Missing, or naming substrates the run did not use, or counting two briefs that cite the same URLs as two confirmations — risk of overclaiming validation |
 
 No worked example is carried here. The one that used to be — a two-brief
 Claude+Gemini run with per-brief byte counts — described an input shape
@@ -202,14 +227,15 @@ compensate for briefs that had nothing to disagree about.
 ## Epistemic sidecar (ADR-0003, spec §14)
 
 After the synthesis brief is written, the stage runs a **dedicated sidecar
-turn**: the model reads the brief and writes `<stem>.sidecar.draft.json` — the
+turn**: the model reads the brief and the research briefs it merged, and writes
+`<stem>.sidecar.draft.json` — the
 machine-readable epistemic contract agent consumers load instead of parsing
 prose. The **runner** publishes it: it validates the draft, merges its own zone
 in, renames the merged document onto `<stem>.sidecar.json` and removes the
 draft. The model never writes the published path, so a reader keyed on that
 file's presence cannot meet a half-made sidecar with `sources: []` and
 `provenance: {}` — which is what it used to meet. The schema is
-`core/sidecar.py` (`ResearchSidecar`, `sidecar_version: 2`), with two authorship
+`core/sidecar.py` (`ResearchSidecar`, `sidecar_version: 3`), with two authorship
 zones:
 
 - **model-authored** — `claims`, `divergences`, `verification_queue`,
@@ -223,10 +249,21 @@ zones:
 Mechanics that matter:
 
 - The prompt template (`SYNTHESIS_SIDECAR` in `core/prompts.py`) brace-escapes
-  its JSON example so `str.format` binds only `{synthesis_path}` / `{sidecar_path}`.
-  The template is unchanged by the draft/publish split — the stage binds
-  `{sidecar_path}` to the draft, so the model is told where to write without the
-  prompt having to know why.
+  its JSON example so `str.format` binds only `{synthesis_path}`,
+  `{brief_block}` and `{sidecar_path}`. The template is unchanged by the
+  draft/publish split — the stage binds `{sidecar_path}` to the draft, so the
+  model is told where to write without the prompt having to know why.
+- **The turn is given the briefs it inventories.** `{brief_block}` lists every
+  resolved brief, primary first, one `- [label] path` line each, from the same
+  list the runner writes to `sources[]`. The prompt tells the turn to read each
+  brief for its `source_citations` entry and to use the listed label as
+  `substrate`, which is how an inventory joins back to its `sources[]` entry
+  and the model that wrote the brief. The turn may read the OpenRouter output
+  directory, and the Claude and Gemini output directories when a brief lives
+  there. Before this the prompt named only the synthesis, and the turn's
+  `--add-dir` grant was the synthesis directory alone: in the field it spent 4
+  of its 16 tool calls finding the briefs, and its labels matched `sources[]`
+  only because the synthesis had renamed the substrates itself.
 - A malformed sidecar does **not** re-run the expensive synthesis: the stage
   validates and re-asks on the same session up to `_SIDECAR_MAX_ATTEMPTS` times,
   and an orchestrator retry skips Turn 1 when the brief already exists (the
@@ -244,7 +281,24 @@ Mechanics that matter:
   citation inventory and, per overlapping source, whether the briefs read
   incompatible figures out of it. `derive_source_overlaps` then recomputes which
   substrates cited each source and which never did, and folds the model's
-  conflict judgement onto that. Membership is data; only the conflict is
-  judgement. This is what makes "two substrates cited the same URL and disagreed
-  about it" a computed fact rather than free text improvised into
+  judgements onto that. Membership is data; only the conflict and the source
+  check are judgement. This is what makes "two substrates cited the same URL and
+  disagreed about it" a computed fact rather than free text improvised into
   `Divergence.substrates` — a field documented for something else.
+- **`source_check` compares the briefs with the source, not with each other**
+  (ADR-0003 amendment). `figures_conflict` cannot say that two briefs agree on
+  something the source does not contain; `source_check` can, as
+  `shared_unsupported`, beside `confirmed` and `contradicted`. The prompt tells
+  the turn to carry over a verdict only where the synthesis records one for that
+  source, and otherwise to leave `not_checked`, which is also the schema default
+  and what an overlap with no model judgement reads. Neither turn can fetch a
+  page, so a verdict is never the sidecar turn's own inference.
+- **A verification item can name its check.** `check_kind` is one of
+  `repo_exists`, `metric`, `license` or `url_resolves`, and `target` is the
+  repository slug, URL or metric that check runs against, so a calling agent can
+  run the check without re-parsing `claim`. The prompt's `verification_queue`
+  example shows both keys, and one sentence tells the turn to set them only when
+  one of the four kinds fits and otherwise to omit both: the vocabulary is
+  closed, so any other value fails validation and costs a re-ask. Both default
+  to `null`, so items written before the fields existed still validate.
+  `sources_disagree` keeps its existing meaning.

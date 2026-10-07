@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from typing import get_args
 
 import pytest
 from pydantic import ValidationError
 
+from mantis_research.core.prompts import SYNTHESIS_SIDECAR
 from mantis_research.core.sidecar import (
     SIDECAR_VERSION,
     CitedSource,
@@ -16,9 +19,11 @@ from mantis_research.core.sidecar import (
     SourceCitations,
     SourceOverlap,
     SourceRef,
+    VerificationItem,
     derive_source_overlaps,
     missing_required_fields,
     project_for_agent,
+    run_root_of,
 )
 from mantis_research.core.state import SubsessionResult
 
@@ -106,15 +111,27 @@ class TestRequiredFieldsOnWrite:
 
 
 class TestValidation:
-    def test_current_version_is_two(self) -> None:
-        # Additive bump (I4): `question` plus the typed provenance fields.
-        assert SIDECAR_VERSION == 2
-        assert ResearchSidecar().sidecar_version == 2
+    def test_current_version_is_three(self) -> None:
+        # v2 was additive (I4): `question` plus the typed provenance fields. v3
+        # changes what `sources[].path` and `synthesis_path` mean — relative to
+        # the run root, no longer absolute (T4b) — so the version moves.
+        assert SIDECAR_VERSION == 3
+        assert ResearchSidecar().sidecar_version == 3
 
     def test_version_one_still_loads(self) -> None:
         # I6 — sidecars written before the bump stay readable.
         sc = ResearchSidecar.from_model_json(json.dumps(_FULL_MODEL_DOC))
         assert sc.sidecar_version == 1
+
+    def test_version_two_with_absolute_paths_still_loads(self) -> None:
+        doc = {
+            'sidecar_version': 2,
+            'synthesis_path': '/data/outputs/r/synthesis/01-t.md',
+            'sources': [{'label': 'openrouter:openai', 'path': '/data/outputs/r/o/openai.md'}],
+        }
+        sc = ResearchSidecar.from_model_json(json.dumps(doc))
+        assert sc.sidecar_version == 2
+        assert sc.sources[0].path == '/data/outputs/r/o/openai.md'
 
     def test_wrong_version_rejected(self) -> None:
         with pytest.raises(ValidationError):
@@ -130,6 +147,59 @@ class TestValidation:
         doc = {'sidecar_version': 1, 'claimz': []}
         with pytest.raises(ValidationError):
             ResearchSidecar.from_model_json(json.dumps(doc))
+
+
+class TestResolvedPaths:
+    """T4b — a sidecar's file paths resolve wherever its run directory now sits.
+
+    v1 and v2 recorded absolute machine paths, so a frozen sidecar copied to
+    another machine had to be normalised by hand before its sources opened. v3
+    records them relative to the run root; the resolver joins them back on.
+    """
+
+    def _v3(self) -> ResearchSidecar:
+        return ResearchSidecar(
+            synthesis_path='synthesis/01-t.md',
+            sources=[
+                SourceRef(label='openrouter:openai', path='openrouter/01-t/openai.md'),
+                SourceRef(label='gemini', path='gemini/01-t.md'),
+            ],
+        )
+
+    def test_run_root_is_two_levels_above_the_sidecar(self, tmp_path: Path) -> None:
+        sidecar = tmp_path / 'outputs' / 'run' / 'synthesis' / '01-t.sidecar.json'
+        assert run_root_of(sidecar) == tmp_path / 'outputs' / 'run'
+
+    def test_relative_paths_join_the_given_run_root(self, tmp_path: Path) -> None:
+        resolved = self._v3().resolved_paths(tmp_path)
+        assert resolved.synthesis == tmp_path / 'synthesis' / '01-t.md'
+        assert resolved.sources == (
+            ('openrouter:openai', tmp_path / 'openrouter' / '01-t' / 'openai.md'),
+            ('gemini', tmp_path / 'gemini' / '01-t.md'),
+        )
+
+    def test_an_absolute_v2_path_passes_through(self, tmp_path: Path) -> None:
+        written = tmp_path / 'old' / 'synthesis' / '01-t.md'
+        brief = tmp_path / 'old' / 'openrouter' / '01-t' / 'openai.md'
+        sc = ResearchSidecar(
+            sidecar_version=2,
+            synthesis_path=written.as_posix(),
+            sources=[SourceRef(label='openrouter:openai', path=brief.as_posix())],
+        )
+        resolved = sc.resolved_paths(tmp_path / 'elsewhere')
+        assert resolved.synthesis == written
+        assert resolved.sources == (('openrouter:openai', brief),)
+
+    def test_a_v2_path_is_never_joined_even_when_relative(self, tmp_path: Path) -> None:
+        # Before v3 a relative value was relative to the writer's working
+        # directory, not the run root, so joining it would invent a location.
+        sc = ResearchSidecar(
+            sidecar_version=2, sources=[SourceRef(label='claude', path='outputs/01-t.md')]
+        )
+        assert sc.resolved_paths(tmp_path).sources == (('claude', Path('outputs/01-t.md')),)
+
+    def test_an_absent_synthesis_path_stays_absent(self, tmp_path: Path) -> None:
+        assert ResearchSidecar().resolved_paths(tmp_path).synthesis is None
 
 
 class TestSourceProvenance:
@@ -208,6 +278,302 @@ class TestSourceProvenance:
         out = project_for_agent(sc)
         assert out['source_overlaps'][0]['reference'] == 'https://bcb.gov.br/report-2025'
         assert out['truncated']['source_overlaps'] == 0
+
+
+_SHARED_UNSUPPORTED_DOC = {
+    'sidecar_version': 2,
+    'source_citations': [
+        {
+            'substrate': 'openrouter:deepseek',
+            'cited': [{'reference': 'https://github.com/acme/waves', 'kind': 'repository'}],
+        },
+        {
+            'substrate': 'openrouter:google',
+            'cited': [{'reference': 'https://github.com/acme/waves', 'kind': 'repository'}],
+        },
+    ],
+    'source_overlaps': [
+        {
+            'id': 'o1',
+            'reference': 'https://github.com/acme/waves',
+            'substrates': ['openrouter:deepseek', 'openrouter:google'],
+            'figures_conflict': False,
+            'source_check': 'shared_unsupported',
+        }
+    ],
+}
+
+
+class TestSourceCheck:
+    """T32a — a brief-against-source judgement on each overlap.
+
+    ``figures_conflict`` records briefs disagreeing with each other about a source
+    they share. It cannot record two briefs agreeing on something the source does
+    not say: in the field, two briefs cited one repository and agreed on five named
+    items its README does not contain, and the overlap carried
+    ``figures_conflict: false``, which reads as clean. ``source_check`` is where
+    that verdict goes, defaulting to ``not_checked`` so every existing sidecar
+    still validates and says nothing it did not check.
+    """
+
+    _VERDICTS = ('confirmed', 'contradicted', 'shared_unsupported', 'not_checked')
+
+    def test_the_vocabulary_is_closed_to_the_four_verdicts(self) -> None:
+        annotation = SourceOverlap.model_fields['source_check'].annotation
+        assert get_args(annotation) == self._VERDICTS
+
+    def test_a_v2_overlap_without_the_field_reads_as_not_checked(self) -> None:
+        # I4/I6: every sidecar written before the field existed still validates.
+        doc = {
+            'sidecar_version': 2,
+            'source_overlaps': [
+                {'id': 'o1', 'reference': 'https://bcb.gov.br/x', 'figures_conflict': True}
+            ],
+        }
+        sc = ResearchSidecar.model_validate_json(json.dumps(doc))
+        assert sc.source_overlaps[0].source_check == 'not_checked'
+        assert sc.source_overlaps[0].figures_conflict is True
+
+    @pytest.mark.parametrize('verdict', _VERDICTS)
+    def test_every_verdict_validates(self, verdict: str) -> None:
+        overlap = SourceOverlap(id='o1', reference='https://bcb.gov.br/x', source_check=verdict)
+        assert overlap.source_check == verdict
+
+    def test_a_shared_unsupported_verdict_round_trips(self) -> None:
+        sc = ResearchSidecar.model_validate_json(json.dumps(_SHARED_UNSUPPORTED_DOC))
+        assert sc.source_overlaps[0].source_check == 'shared_unsupported'
+        written = sc.to_json()
+        assert json.loads(written)['source_overlaps'][0]['source_check'] == 'shared_unsupported'
+        assert ResearchSidecar.model_validate_json(written) == sc
+
+    def test_the_verdict_reaches_the_agent_projection(self) -> None:
+        sc = ResearchSidecar.model_validate_json(json.dumps(_SHARED_UNSUPPORTED_DOC))
+        out = project_for_agent(sc)
+        assert out['source_overlaps'][0]['source_check'] == 'shared_unsupported'
+        # The briefs agreeing is not a figures conflict; the two fields stay apart.
+        assert out['source_overlaps'][0]['figures_conflict'] is False
+
+    def test_the_merge_keeps_the_verdict_for_a_matched_reference(self) -> None:
+        judgement = SourceOverlap(
+            id='ignored', reference='https://github.com/acme/waves/', source_check='contradicted'
+        )
+        sc = ResearchSidecar.model_validate_json(json.dumps(_SHARED_UNSUPPORTED_DOC))
+        overlaps = derive_source_overlaps(sc.source_citations, judgements=[judgement])
+        assert overlaps[0].source_check == 'contradicted'
+        assert overlaps[0].figures_conflict is False
+
+    def test_the_merge_defaults_the_verdict_for_an_unmatched_reference(self) -> None:
+        inventory = [
+            SourceCitations(
+                substrate='openrouter:openai',
+                cited=[
+                    CitedSource(reference='https://bcb.gov.br/x', kind='url'),
+                    CitedSource(reference='https://github.com/acme/waves', kind='repository'),
+                ],
+            ),
+            SourceCitations(
+                substrate='openrouter:deepseek',
+                cited=[
+                    CitedSource(reference='https://bcb.gov.br/x', kind='url'),
+                    CitedSource(reference='https://github.com/acme/waves', kind='repository'),
+                ],
+            ),
+        ]
+        judgement = SourceOverlap(
+            id='o9', reference='https://bcb.gov.br/x', source_check='confirmed'
+        )
+        overlaps = derive_source_overlaps(inventory, judgements=[judgement])
+        by_reference = {o.reference: o.source_check for o in overlaps}
+        assert by_reference == {
+            'https://bcb.gov.br/x': 'confirmed',
+            'https://github.com/acme/waves': 'not_checked',
+        }
+
+    @pytest.mark.parametrize('verdict', ['verified', 'CONFIRMED', 'unsupported', ''])
+    def test_an_unknown_verdict_is_rejected_by_the_vocabulary(self, verdict: str) -> None:
+        doc = {
+            'sidecar_version': 2,
+            'source_overlaps': [{'id': 'o1', 'reference': 'x', 'source_check': verdict}],
+        }
+        with pytest.raises(ValidationError) as exc:
+            ResearchSidecar.model_validate_json(json.dumps(doc))
+        # Rejected as a value outside the closed vocabulary, not as an unknown key.
+        (error,) = exc.value.errors()
+        assert error['type'] == 'literal_error'
+        assert error['loc'] == ('source_overlaps', 0, 'source_check')
+
+    def test_a_misspelled_key_is_still_rejected(self) -> None:
+        doc = {
+            'sidecar_version': 2,
+            'source_overlaps': [{'id': 'o1', 'reference': 'x', 'sourcecheck': 'confirmed'}],
+        }
+        with pytest.raises(ValidationError):
+            ResearchSidecar.model_validate_json(json.dumps(doc))
+
+
+class TestSidecarPromptCarriesTheVerdict:
+    """The sidecar turn is told the field exists and when to fill it (T32a)."""
+
+    def _prompt(self) -> str:
+        return SYNTHESIS_SIDECAR.format(
+            synthesis_path='/x/01-t.md',
+            sidecar_path='/x/01-t.sidecar.draft.json',
+            brief_block='- [openrouter:openai] /x/openrouter/01-t/openai.md',
+        )
+
+    def test_the_overlap_example_validates_and_shows_the_default(self) -> None:
+        (line,) = [ln for ln in self._prompt().splitlines() if '"id": "o1"' in ln]
+        SourceOverlap.model_validate_json(line.strip())  # the example obeys the schema
+        # The key is written out, not left to the default, so the turn sees it.
+        assert json.loads(line)['source_check'] == 'not_checked'
+
+    def test_the_model_owned_fields_include_the_verdict(self) -> None:
+        (sentence,) = [
+            s for s in self._prompt().split('. ') if 'are yours' in s and 'reference' in s
+        ]
+        for field in ('reference', 'figures_conflict', 'conflict', 'source_check'):
+            assert f'`{field}`' in sentence
+
+    def test_the_turn_is_told_to_carry_over_spot_checks_and_otherwise_leave_the_default(
+        self,
+    ) -> None:
+        (line,) = [ln for ln in self._prompt().splitlines() if ln.startswith('`source_check`')]
+        for verdict in ('confirmed', 'contradicted', 'shared_unsupported', 'not_checked'):
+            assert f'`{verdict}`' in line
+
+
+_CHECK_KINDS = ('repo_exists', 'metric', 'license', 'url_resolves')
+
+# A verification item as every sidecar before T4d wrote it.
+_OLD_ITEM = {
+    'id': 'v1',
+    'claim': 'acme/waves ships a Rust core',
+    'reason': 'single-source',
+    'sources_disagree': ['openrouter:deepseek'],
+}
+
+_REPO_CHECK_DOC = {
+    'sidecar_version': 2,
+    'verification_queue': [
+        {
+            'id': 'v1',
+            'claim': 'acme/waves ships a Rust core',
+            'reason': 'single-source',
+            'sources_disagree': [],
+            'check_kind': 'repo_exists',
+            'target': 'acme/waves',
+        }
+    ],
+}
+
+
+class TestVerificationCheckKind:
+    """T4d — a verification item can say which check resolves it, and on what.
+
+    The items were free text, so every consumer re-parsed ``claim`` to decide
+    what to check. One scripted pass over a queue resolved 5 of 7 items and caught
+    a repository that does not exist. ``check_kind`` (a closed vocabulary) and
+    ``target`` carry that structure; both default to ``None`` so every sidecar
+    already on disk still validates.
+    """
+
+    def test_the_vocabulary_is_closed_to_the_four_kinds(self) -> None:
+        annotation = VerificationItem.model_fields['check_kind'].annotation
+        literal, none = get_args(annotation)
+        assert none is type(None)
+        assert get_args(literal) == _CHECK_KINDS
+
+    def test_an_item_written_before_the_fields_validates_with_both_none(self) -> None:
+        # I4/I6: the four-key item every existing sidecar carries.
+        doc = {'sidecar_version': 2, 'verification_queue': [_OLD_ITEM]}
+        item = ResearchSidecar.model_validate_json(json.dumps(doc)).verification_queue[0]
+        assert item.check_kind is None
+        assert item.target is None
+        assert item.sources_disagree == ['openrouter:deepseek']
+
+    def test_an_old_item_rewritten_carries_both_keys_as_null_and_reloads(self) -> None:
+        doc = {'sidecar_version': 2, 'verification_queue': [_OLD_ITEM]}
+        sc = ResearchSidecar.model_validate_json(json.dumps(doc))
+        written = json.loads(sc.to_json())['verification_queue'][0]
+        assert written['check_kind'] is None
+        assert written['target'] is None
+        assert ResearchSidecar.model_validate_json(sc.to_json()) == sc
+
+    @pytest.mark.parametrize('kind', _CHECK_KINDS)
+    def test_every_kind_validates(self, kind: str) -> None:
+        item = VerificationItem(id='v1', claim='c', reason='single-source', check_kind=kind)
+        assert item.check_kind == kind
+
+    def test_a_repo_exists_item_round_trips(self) -> None:
+        sc = ResearchSidecar.model_validate_json(json.dumps(_REPO_CHECK_DOC))
+        item = sc.verification_queue[0]
+        assert (item.check_kind, item.target) == ('repo_exists', 'acme/waves')
+        written = json.loads(sc.to_json())['verification_queue'][0]
+        assert (written['check_kind'], written['target']) == ('repo_exists', 'acme/waves')
+        assert ResearchSidecar.model_validate_json(sc.to_json()) == sc
+
+    def test_the_fields_reach_the_agent_projection(self) -> None:
+        sc = ResearchSidecar.model_validate_json(json.dumps(_REPO_CHECK_DOC))
+        (projected,) = project_for_agent(sc)['verification_queue']
+        assert projected['check_kind'] == 'repo_exists'
+        assert projected['target'] == 'acme/waves'
+
+    def test_an_old_item_projects_both_fields_as_none(self) -> None:
+        doc = {'sidecar_version': 2, 'verification_queue': [_OLD_ITEM]}
+        sc = ResearchSidecar.model_validate_json(json.dumps(doc))
+        (projected,) = project_for_agent(sc)['verification_queue']
+        assert projected['check_kind'] is None
+        assert projected['target'] is None
+
+    @pytest.mark.parametrize('kind', ['repo', 'REPO_EXISTS', 'doi_resolves', ''])
+    def test_an_unknown_kind_is_rejected_by_the_vocabulary(self, kind: str) -> None:
+        item = {**_OLD_ITEM, 'check_kind': kind, 'target': 'acme/waves'}
+        doc = {'sidecar_version': 2, 'verification_queue': [item]}
+        with pytest.raises(ValidationError) as exc:
+            ResearchSidecar.model_validate_json(json.dumps(doc))
+        # Rejected as a value outside the closed vocabulary, not as an unknown key.
+        (error,) = exc.value.errors()
+        assert error['type'] == 'literal_error'
+        assert error['loc'] == ('verification_queue', 0, 'check_kind')
+
+
+class TestSidecarPromptAsksForTheCheckKind:
+    """The sidecar turn is shown both fields and told when to leave them out (T4d)."""
+
+    def _prompt(self) -> str:
+        return SYNTHESIS_SIDECAR.format(
+            synthesis_path='/x/01-t.md',
+            sidecar_path='/x/01-t.sidecar.draft.json',
+            brief_block='- [openrouter:openai] /x/openrouter/01-t/openai.md',
+        )
+
+    def _example(self) -> dict[str, object]:
+        (line,) = [ln for ln in self._prompt().splitlines() if '"id": "v1"' in ln]
+        return json.loads(line)
+
+    def test_the_example_shows_both_keys(self) -> None:
+        example = self._example()
+        assert 'check_kind' in example
+        assert 'target' in example
+
+    def test_the_example_names_exactly_the_schema_vocabulary(self) -> None:
+        # The prompt's list and the Literal cannot drift apart unnoticed.
+        placeholder = str(self._example()['check_kind'])
+        named = placeholder.strip('<>').split(',')[0].split(' | ')
+        assert tuple(named) == _CHECK_KINDS
+
+    def test_the_example_keeps_the_existing_keys(self) -> None:
+        example = self._example()
+        old = {k: v for k, v in example.items() if k not in ('check_kind', 'target')}
+        VerificationItem.model_validate(old)  # the pre-T4d part still obeys the schema
+
+    def test_the_turn_is_told_to_omit_both_when_no_kind_fits(self) -> None:
+        (line,) = [
+            ln
+            for ln in self._prompt().splitlines()
+            if '`check_kind`' in ln and '`target`' in ln and 'omit' in ln
+        ]
+        assert 'rejected' in line
 
 
 class TestProvenanceAggregation:

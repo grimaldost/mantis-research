@@ -65,7 +65,17 @@ Arguments:
   `outputs/research-my-question-20260811T101500Z`). Stages that already finished
   are skipped, and the question and settings come from that run's own record, so
   `question` is ignored. Cheaper and more faithful than re-asking: the per-model
-  briefs a lost run already paid for are reused rather than bought again.
+  briefs a lost run already paid for are reused rather than bought again. Passed
+  a finished run, it is the **collect** call: it returns that run's result in
+  the same call, whatever `detach` says. A failed run is re-run instead, and a
+  run whose sidecar failed has its sidecar retried.
+- `detach` — whether the call returns the run's identity at once instead of the
+  result. Leave it unset and the tier decides: a `fast`, `standard` or `high`
+  run detaches, because its local-seat turns outlast what a client will hold one
+  call open for, and a `research`-tier run or a dry run blocks and returns the
+  result. Pass `detach: false` to block on any tier (the call then lasts the
+  whole run), or `detach: true` to detach any run. Collecting a detached run is
+  described under [Cost & latency](#cost--latency).
 
 ## What comes back
 
@@ -88,6 +98,9 @@ the sidecar's epistemic content merged in at the top level.
 - `outputs` — file **paths**: `briefs` (one per substrate), `synthesis`,
   `sidecar`, plus `falsification` / `evaluation` when those ran. The synthesis and
   briefs are referenced by path, never inlined — read those files for full text.
+- `outputs_dir`, `batch_name` — the run's directory and name, so a call that
+  returned a result can be polled or resumed (`resume=<outputs_dir>`) without a
+  second lookup. Also present on a resumed result.
 - `dry_run` (bool) — whether this was a dry run. When true, every path under
   `outputs` is a destination and none of the files exist.
 - `sidecar_available` (bool) — if `false`, none of the sidecar keys below are
@@ -107,15 +120,25 @@ and long free-text is clipped:
   positions; `substrates` = which took which side; `assessment` = which side
   holds, when determinable).
 - `verification_queue` — claims worth checking externally; each `{ id, claim,
-  reason, sources_disagree }`.
+  reason, sources_disagree, check_kind, target }`. When the claim maps onto a
+  mechanical check, `check_kind` names it (`repo_exists`, `metric`, `license` or
+  `url_resolves`) and `target` is the repository slug, URL or metric to check,
+  so you can run the check without parsing `claim`. Both are `null` otherwise,
+  and on every item written before the fields existed; then read `claim`.
 - `source_overlaps` — the sources **more than one substrate cited**; each
-  `{ id, reference, kind, substrates, not_cited_by, figures_conflict, conflict }`.
+  `{ id, reference, kind, substrates, not_cited_by, figures_conflict, conflict,
+  source_check }`.
   This is the pipeline's sharpest signal: when two substrates cite the same URL
   and read incompatible figures out of it (`figures_conflict: true`) while a
   third never cites it at all (`not_cited_by`), the *source* is suspect — a
   hallucination class no single-provider run can surface. `substrates` and
   `not_cited_by` are computed from the per-substrate citation inventory, not
-  asserted by the model.
+  asserted by the model. `source_check` compares the briefs with the source
+  rather than with each other: `confirmed`, `contradicted`, `shared_unsupported`
+  (the briefs agree on something the source does not contain, which
+  `figures_conflict: false` cannot show) or `not_checked`, the default. It is
+  set only where the synthesis recorded a check, so read `not_checked` as
+  unknown, not as clean.
 - `agreements_worth_verifying`, `coverage_notes` — lists of strings.
 - `truncated` — `{ any, claims, divergences, verification_queue, source_overlaps }`:
   how many items each list dropped by the cap. If `any` is true, read the full
@@ -125,7 +148,10 @@ The **complete** sidecar is always on disk at `outputs.sidecar` — including fi
 not projected inline: `question` (the question this sidecar answers, verbatim —
 so a sidecar you froze months ago is still citable on its own), `sources[]`
 (`{ label, path, model_id, bytes }` per brief, so you can see which model
-produced which brief), `source_citations[]` (the full per-substrate citation
+produced which brief; from `sidecar_version` 3, `path` and the top-level
+`synthesis_path` are relative to the run's `outputs_dir`, the directory two
+levels above the sidecar file, so join them onto it before opening; version 2
+sidecars hold absolute paths), `source_citations[]` (the full per-substrate citation
 inventory `source_overlaps` is computed from) and `provenance` (durations,
 token/cost totals). Read it when you need the full lists or per-source
 attribution.
@@ -138,9 +164,14 @@ OpenRouter research spend — the local-seat stages add time, not metered dollar
 - **Cost:** **$0.15–0.50** on the default three substrates for a focused
   technical question; $1–6 for broad or real-time ones. Measured over 20 runs.
 - **Latency:** research is 5–10 min (substrates run concurrently, so it tracks
-  the slowest). Each local-seat stage after it is a full Claude turn — 131 s to
-  2601 s observed, median about 7 min. `research` stops after the briefs, `fast`
-  adds one such turn, `standard` two, `high` four.
+  the slowest). Each local-seat turn after it is a full Claude turn — 131 s to
+  2601 s observed, median about 7 min. Counting the sidecar turn inside
+  synthesis, the turns are `research` 0, `fast` 2, `standard` 3, `high` 5, plus 1
+  when journal is on. Every run on the machine queues its local-seat turns on one
+  seat lock, so after research N questions take about N times the synthesis time
+  (observed 2026-09-27: 27 to 85 min from research done to sidecar). The
+  synthesis, journal, falsification, claude-prior and evaluation turns take the
+  lock; the sidecar turn currently does not.
 
 **A local-seat stage is silent while the model thinks, and that is normal.** It
 reports every **20 s of silence** while its child works; a run also reports when
@@ -148,12 +179,66 @@ it is named, at each stage boundary, per substrate, every 5 s while queued for
 the seat, and through any backoff. The one genuinely quiet stretch is a single
 research substrate, which says nothing between starting and finishing.
 
-**A single tool call may not outlive your client's ceiling, and a full run
-usually does.** Pass `detach: true`, poll `research_status` with the returned
-`outputs_dir`, then call `research` again with `resume=<outputs_dir>` to collect
-it — finished stages are not re-run or re-bought. Separately, no internal wait
-exceeds half `runner.caller_idle_budget_seconds` (default 1500 s), so a
-rate-limited substrate cannot sit past your window.
+**A plain call to a seat tier returns a handle; collect the answer with
+`resume`.** A single tool call may not outlive your client's ceiling, and a run
+with local-seat turns usually does, so a `fast`, `standard` or `high` call
+detaches unless you pass `detach: false`. It returns at once with `state:
+"running"`, `outputs_dir`, `batch_name`, the run's `question`, `assurance` and
+`substrates`, and the `seat` block described below, but no epistemic payload.
+Poll `research_status` with the `outputs_dir` until `state` is `finished`, then
+call `research` with `resume=<outputs_dir>`: a resume of a finished run returns
+the full result in that call whatever `detach` says, and finished stages are not
+re-run or re-bought. Only a run that succeeded, with `ok` true and a sidecar
+delivered (or none owed), is collected: a resume of a run whose `ok` is false
+(`failed`, or a stage that exited non-zero) re-runs the stages left, a resume of
+a run whose `sidecar.status` is `failed` re-enters the synthesis stage for the
+sidecar alone, and both follow `detach` like a new run, so read `ok` and
+`sidecar.status` before collecting. A run left `abandoned` by a server that went
+away is re-entered by the same call, which detaches or blocks by that run's own
+tier. A subagent
+calling this tool keeps the detached default and collects this way; pass
+`detach: true` to detach a `research`-tier run as well.
+
+`research_status` also returns `data_root`, the directory runs are written under
+(`<data_root>/outputs/<run>`): `~/.mantis` when the plugin runs from Claude
+Code's plugin cache, the repository root from a clone, or whatever `MANTIS_HOME`
+names. Runs written by 0.5.1 and earlier stayed in that version's cache
+directory; `resume` refuses one there and says how to get it back. Separately,
+no internal wait exceeds half `runner.caller_idle_budget_seconds` (default
+1500 s), so a rate-limited substrate cannot sit past your window.
+
+**Reading a poll.** While a run is in flight, `research_status` answers `state:
+"running"` and its `stages` map fills in as the run goes. Each entry carries
+`state` — `running`, `waiting` (queued for the local Claude seat, or backing off
+after a rate limit; the run is alive) or `done` — plus `started_at`, and
+`exit_code`, which stays `null` until that stage is done (`finished_at` is added
+then; `seat_acquired_at` once the stage has taken the local seat). The research
+stage also lists `substrates_done`, and `current_stage` names the stage most
+recently started. **A stage listed in `stages` is not necessarily finished: read
+its `state`.** `artifacts` lists the `briefs`, `synthesis` and `sidecar` files
+already on disk, read from the run directory rather than the record, so a record
+that lags still shows them. Once `state` is `finished`, each `stages` entry
+carries its `exit_code` with `started_at`, `finished_at` and, for a stage that
+took the seat, `seat_acquired_at`; `ok` says how the run went.
+
+**Finding a run you lost track of.** `research_status` with no argument lists the
+runs under `data_root`, newest first, as `runs`: each entry is described as a
+poll describes a run, plus `age_s` (seconds since it started), `question_slug` and
+`batch_name`. At most 50 are listed; `truncated` counts the older ones left out. A
+run whose record cannot be read is listed with `state: "unknown"` and a `detail`.
+Take the `outputs_dir` of the entry you want and poll it or pass it as `resume`.
+
+**How long a queued run will wait.** While a run is queued for the local seat,
+`research_status` also returns `seat`: `waiting` (how many runs are queued now,
+this one included), `holder` (the run holding the seat) and `expected_start_s`,
+a range `[early, late]` in seconds — early if this run is taken next, late if
+every other queued run goes first. It is worked out from the median seat turn
+over the 20 most recent finished runs that took the seat, and is `null`, with a
+`reason`, when there is none to go on. There is no queue position: the seat goes
+to whichever queued run polls first once it frees. The handle a detached call
+returns carries the same `seat` block when the tier uses the seat, with the
+range worked out as if the run queued now; it actually queues once its research
+stage is done.
 
 Use `dry_run: true` first — it validates the pipeline offline and for free, and
 records itself as `validated` rather than as a completed run.
@@ -214,6 +299,9 @@ Ask for a default (`fast`) run:
 
 > Use the research tool with question "What changed in ISO 20022 migration for
 > Brazilian banks in 2025?".
+
+It returns a handle at once; poll `research_status` and collect the result with
+`resume=<outputs_dir>` as described under [Cost & latency](#cost--latency).
 
 Escalate only when the extra checking earns its Claude-seat time:
 

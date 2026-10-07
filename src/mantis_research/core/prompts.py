@@ -25,7 +25,7 @@ A domain expert researching the question below for an autonomous agent that need
 </question>
 
 <method>
-Produce a dense, well-sourced markdown brief that answers the question. Lead with a direct answer, then the evidence and mechanism, then boundary conditions and open questions. Ground every non-obvious claim in a real, named source; where sources disagree, surface the disagreement rather than smoothing it. Mark anything you cannot verify "Not found" instead of inventing it.
+Produce a dense, well-sourced markdown brief that answers the question. Lead with a direct answer, then the evidence and mechanism, then boundary conditions and open questions. Ground every non-obvious claim in a real, named source; where sources disagree, surface the disagreement rather than smoothing it. For every named repository, paper, product or benchmark, state whether you retrieved it this turn or recall it from training, and attach no specific numbers (stars, versions, scores, latencies) to one you only recall; mark anything you cannot verify either way "Not found" instead of inventing it.
 </method>
 
 <guardrails>
@@ -85,26 +85,33 @@ d) **Hallucination flags.** Cross-brief disagreement on a factual claim is the s
 
 e) **Cross-brief agreement worth verifying.** List 2-3 non-trivial claims the briefs AGREE on that name a specific fact (number, date, name, version, regulation paragraph): agreement on training-data-uniform claims is weak signal, and all of them could be wrong. Then, with no count limit, every agreed-on named artifact whose existence the briefs do not establish — the co-hallucination candidates.
 
-f) **Independence note.** This synthesis merges briefs from: {substrate_list}. Frontier models share substrate (Common Crawl, Wikipedia, GitHub, ArXiv), so this is "tertiary independence" in the MRM/IEEE 1012 sense — not the judge-level independence a programmatic verifier or a domain expert would provide. Treat the synthesis as comprehensive cross-check, not as validation.
+f) **Independence note.** This synthesis merges briefs from: {substrate_list}. The briefs share training substrate (Common Crawl, Wikipedia, GitHub, ArXiv) and, where they cite the same URLs, retrieval as well; the cited-URL overlap of each pair, measured before this turn (Jaccard: 1.00 the same URLs, 0.00 none in common or none cited), is: {retrieval_overlap}. Agreement between briefs that cite the same URLs is shared retrieval, not independent confirmation, and the whole is "tertiary independence" in the MRM/IEEE 1012 sense — not the judge-level independence a programmatic verifier or a domain expert would provide. Treat the synthesis as comprehensive cross-check, not as validation.
 
 The synthesis is the canonical reference document going forward; the individual research briefs are working notes."""
 
 
 # Synthesis sidecar prompt — see prompts/playbooks/synthesis-prompt.md (ADR-0003).
 # Runs as its own turn after the synthesis brief exists: the model Reads the
-# brief and Writes the machine-readable epistemic sidecar. Only the two format
-# keys ({synthesis_path}, {sidecar_path}) are single braces; every literal JSON
-# brace is doubled so ``str.format`` leaves the example intact (FM-6).
+# brief and the research briefs it merged, and Writes the machine-readable
+# epistemic sidecar. Only the three format keys ({synthesis_path},
+# {brief_block}, {sidecar_path}) are single braces; every literal JSON brace is
+# doubled so ``str.format`` leaves the example intact (FM-6).
 SYNTHESIS_SIDECAR = """You are producing the machine-readable epistemic sidecar for a research synthesis — the structured signal downstream agents consume instead of parsing prose.
 
-## Source
+## Sources
 Read the synthesis brief at {synthesis_path} with the Read tool.
+
+It merged these research briefs, one per line as `[label] path`:
+
+{brief_block}
+
+Read each of them with the Read tool as well: `source_citations` is an inventory of what each brief itself cited, which the synthesis only retells.
 
 ## Output
 Write ONLY valid JSON to {sidecar_path} with the Write tool — no prose, no markdown fences, no code block. Emit exactly this shape (these are the model-authored fields; the runner fills run identity and provenance separately, so do NOT include them):
 
 {{
-  "sidecar_version": 2,
+  "sidecar_version": 3,
   "claims": [
     {{"id": "c1", "text": "<a load-bearing claim, verbatim from the synthesis>", "section": "<section/paragraph ref, or null>", "support": "direct|indirect|none"}}
   ],
@@ -112,25 +119,29 @@ Write ONLY valid JSON to {sidecar_path} with the Write tool — no prose, no mar
     {{"id": "d1", "description": "<the cross-substrate disagreement>", "sides": ["<steelmanned position A>", "<position B>"], "substrates": ["<which sources took which side>"], "assessment": "<which is right, or under what conditions each holds>"}}
   ],
   "verification_queue": [
-    {{"id": "v1", "claim": "<a claim to verify externally>", "reason": "<disagreement | single-source | training-uniform>", "sources_disagree": ["<sources>"]}}
+    {{"id": "v1", "claim": "<a claim to verify externally>", "reason": "<disagreement | single-source | training-uniform>", "sources_disagree": ["<sources>"], "check_kind": "<repo_exists | metric | license | url_resolves, or omit>", "target": "<the repo slug, URL or metric to check, or omit>"}}
   ],
   "agreements_worth_verifying": ["<a non-trivial claim all substrates agree on — weak signal, flag before downstream reliance>"],
   "coverage_notes": ["<what the synthesis could not cover, or marked Not-found>"],
   "source_citations": [
-    {{"substrate": "<the source label exactly as the synthesis names it, e.g. openrouter:openai>", "cited": [
+    {{"substrate": "<the brief's label exactly as listed above, e.g. openrouter:openai>", "cited": [
       {{"reference": "<the URL, repository slug, package name or paper title that brief cited>", "kind": "url|repository|package|paper|other"}}
     ]}}
   ],
   "source_overlaps": [
-    {{"id": "o1", "reference": "<a source cited by more than one brief>", "figures_conflict": true, "conflict": "<what each brief read out of it, when they are incompatible>"}}
+    {{"id": "o1", "reference": "<a source cited by more than one brief>", "figures_conflict": true, "conflict": "<what each brief read out of it, when they are incompatible>", "source_check": "not_checked"}}
   ]
 }}
 
 Draw the content faithfully from the synthesis's in-line divergence blocks and its `## Synthesis Meta-Observations` section (hallucination flags → verification_queue; cross-model agreement → agreements_worth_verifying). Give every claim, divergence, and verification item a unique id.
 
-`source_citations` is an inventory, one entry per research brief: what that brief actually cited, listed once each, verbatim as cited. Be exhaustive rather than selective — this is the substrate for the comparison below, so a source you omit is a comparison that cannot happen.
+Set a verification item's `check_kind` and `target` only when one of the four check kinds shown in the example fits its claim, and otherwise omit both keys, because `check_kind` is validated against exactly those four values and any other value is rejected.
 
-`source_overlaps` is where this pipeline earns its cost. Two briefs citing the SAME source and reading incompatible figures out of it indicts the source, which no single-provider run can surface — set `figures_conflict` and say in `conflict` what each brief read. Only `reference`, `figures_conflict` and `conflict` are yours: which briefs cited a source is recomputed from `source_citations`, so do not list substrates here, and list an overlap only for a source that appears in the inventory.
+`source_citations` is an inventory, one entry per research brief listed above, with that brief's label as `substrate`: what the brief actually cited, listed once each, verbatim as cited. Be exhaustive rather than selective — this is the substrate for the comparison below, so a source you omit is a comparison that cannot happen.
+
+`source_overlaps` is where this pipeline earns its cost. Two briefs citing the SAME source and reading incompatible figures out of it indicts the source, which no single-provider run can surface — set `figures_conflict` and say in `conflict` what each brief read. Only `reference`, `figures_conflict`, `conflict` and `source_check` are yours: which briefs cited a source is recomputed from `source_citations`, so do not list substrates here, and list an overlap only for a source that appears in the inventory.
+
+`source_check` compares the briefs with the source itself, not with each other. Carry over a verdict only where the synthesis records one for that source — `confirmed` (the source says what the briefs read out of it), `contradicted` (it says something else) or `shared_unsupported` (the briefs agree on something the source does not contain) — and otherwise leave `not_checked`; never infer a verdict from the briefs agreeing.
 
 The file is parsed and validated directly: emit ONLY the JSON object, and do not add keys beyond those shown (unknown keys are rejected)."""
 

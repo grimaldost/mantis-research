@@ -74,6 +74,12 @@ def _write_sidecar(tmp_path: Path) -> None:
 
 
 def _patch_run(monkeypatch: pytest.MonkeyPatch, manifest: dict[str, Any]) -> None:
+    """Make the run return ``manifest`` at once.
+
+    The fake never emits ``run_named``, so the calls below pass
+    ``detach=False``: a seat-tier call would otherwise detach (T20a) and wait
+    for a name that never comes.
+    """
     monkeypatch.setattr(
         'mantis_research.interface.mcp.server.run_research',
         lambda question, **_: manifest,
@@ -95,7 +101,7 @@ class TestABriefsOnlyRunIsRefused:
             ),
         )
         with pytest.raises(IncompleteRunError):
-            await research('q')
+            await research('q', detach=False)
 
     async def test_the_refusal_names_the_product_the_stage_and_the_way_back(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -110,7 +116,7 @@ class TestABriefsOnlyRunIsRefused:
             ),
         )
         with pytest.raises(IncompleteRunError) as caught:
-            await research('q')
+            await research('q', detach=False)
         message = str(caught.value)
         assert 'sidecar' in message  # what is missing
         assert 'synthesis' in message  # which stage did not deliver it
@@ -132,7 +138,7 @@ class TestABriefsOnlyRunIsRefused:
             ),
         )
         with pytest.raises(IncompleteRunError):
-            await research('q')
+            await research('q', detach=False)
 
 
 class TestWhatIsStillReturned:
@@ -149,7 +155,7 @@ class TestWhatIsStillReturned:
                 stages={'openrouter': {'exit_code': 0}, 'synthesis': {'exit_code': 0}},
             ),
         )
-        result = await research('q')
+        result = await research('q', detach=False)
         assert result['sidecar_available'] is True
         assert [c['id'] for c in result['claims']] == ['c1']
 
@@ -173,7 +179,7 @@ class TestWhatIsStillReturned:
                 },
             ),
         )
-        result = await research('q')
+        result = await research('q', detach=False)
         assert result['ok'] is False
         assert result['stages']['falsification']['exit_code'] == 1
 
@@ -290,3 +296,30 @@ class TestAResearchOnlyRunIsNotIncomplete:
         }
         with pytest.raises(IncompleteRunError):
             _agent_result(manifest)
+
+
+@pytest.fixture
+def rooted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    for fn in ('state_root', 'outputs_root', 'transcripts_root', 'logs_root'):
+        monkeypatch.setattr(f'mantis_research.core.paths.{fn}', lambda fn=fn: tmp_path / fn)
+    return tmp_path
+
+
+class TestTheResultNamesTheRunDirectory:
+    """A caller that wants to resume or poll needs the run's directory and name
+    from the result it already holds, not from a second lookup (T9c)."""
+
+    async def test_a_blocking_result_carries_outputs_dir_and_batch_name(self, rooted: Path) -> None:
+        result = await research('where does a dry run land?', assurance='research', dry_run=True)
+
+        (run_dir,) = (rooted / 'outputs_root').iterdir()
+        assert result['outputs_dir'] == str(run_dir)
+        assert result['batch_name'] == run_dir.name
+
+    async def test_a_resumed_result_carries_both_as_well(self, rooted: Path) -> None:
+        first = await research('where does a resumed run land?', assurance='research', dry_run=True)
+
+        resumed = await research('', resume=first['outputs_dir'], dry_run=True)
+
+        assert resumed['outputs_dir'] == first['outputs_dir']
+        assert resumed['batch_name'] == first['batch_name']

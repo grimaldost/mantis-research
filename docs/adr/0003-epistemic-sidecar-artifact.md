@@ -48,3 +48,68 @@ instruction and the stage grows a validate-merge-rewrite step. Downstream
 stages (falsification, evaluation) can later consume the sidecar instead of
 re-extracting claims — out of scope for this series. Cost persistence
 (spec §12) becomes a prerequisite for the runner-filled fields.
+
+## Amendment (2026-10-07): a source check on each source overlap
+
+This amendment applies the decision above; it does not change it. The field is
+additive with a default, so it needs no version bump of its own (I4) and every
+sidecar already on disk still validates (I6). The release that ships it also
+ships the v3 paths change below, so the sidecar it writes is version 3.
+
+`source_overlaps[]` (added with v2) recorded one model judgement per shared
+source: `figures_conflict` / `conflict`, whether the briefs read incompatible
+figures out of it. That compares the briefs with each other. It has no place
+for briefs that agree with each other on something the source does not say. In
+the field, two briefs cited one repository and agreed on five named items its
+README does not contain, and the overlap carried `figures_conflict: false`,
+which reads as clean.
+
+`SourceOverlap` gains `source_check`, a closed vocabulary:
+
+- `confirmed` — the source says what the briefs read out of it;
+- `contradicted` — the source says something else;
+- `shared_unsupported` — the briefs agree on something the source does not
+  contain;
+- `not_checked` — the default; nobody compared the briefs with the source.
+
+It is model-authored, like `figures_conflict`, and `derive_source_overlaps`
+carries it onto the recomputed overlap by normalized reference; an overlap with
+no model judgement reads `not_checked`. The sidecar turn is told to carry over a
+verdict only where the synthesis records one and never to infer one from the
+briefs agreeing. Neither the synthesis turn nor the sidecar turn can fetch a
+page (both run with `Read` and `Write` only), so a verdict can exist only where
+the synthesis settled it from what the briefs quote; how often that happens is
+checked on the next paid run. A consumer that filters on `figures_conflict`
+sees no change; one that wants the brief-against-source verdict reads
+`source_check` and treats `not_checked` as "unknown", never as "fine".
+
+## Amendment (2026-10-07): paths relative to the run root (v3)
+
+This amendment applies the decision above, including its rule that an
+incompatible change bumps `sidecar_version`. It is that case, so the runner now
+writes `sidecar_version: 3`. Versions 1 and 2 still validate (I6).
+
+`sources[].path` and `synthesis_path` held absolute machine paths. A frozen
+sidecar copied to another directory or machine named files that were not there,
+and a consumer had to rewrite the paths by hand before the sources opened. From
+v3 the runner records both relative to the run root, with `/` separators: for
+example `openrouter/01-slug/openai.md` and `synthesis/01-slug.md`. The run root
+is the directory two levels above the sidecar file in both layouts: the run's
+`outputs_dir` (`outputs/<batch>/`) under `batch`, and the data root under
+`legacy`.
+
+The field names and types stay the same, but their meaning changes. A consumer
+that opened the value directly would resolve a v3 path against its own working
+directory, without an error. That is why the version moves rather than staying
+at 2 under I4. The alternative was to add `rel_path` fields beside the absolute
+ones with no bump. It was rejected because a copied sidecar would still carry
+absolute paths that point nowhere, and every reader would have to know which
+field to trust.
+
+`core/sidecar.py` adds `run_root_of(sidecar_path)` and
+`ResearchSidecar.resolved_paths(run_root)`. They are pure. The second joins v3
+paths onto the given run root and returns v1 and v2 paths unchanged, because a
+relative value in those versions was relative to the writer's working directory
+and not to the run root. A consumer either branches on `sidecar_version` or
+calls the resolver. A consumer that validates with the 0.5.1 schema, which
+accepts only versions 1 and 2, rejects a v3 sidecar with a validation error.

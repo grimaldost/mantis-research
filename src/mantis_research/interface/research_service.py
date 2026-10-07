@@ -20,29 +20,45 @@ import json
 import os
 import re
 import secrets
+import statistics
+import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+import structlog
 
 from mantis_research.core import paths
 from mantis_research.core.config import load_batch_config
 from mantis_research.core.logging import configure_logging
 from mantis_research.core.paths import RunDirs, topic_stem
-from mantis_research.core.progress import RunEvent, emit
+from mantis_research.core.progress import RunEvent, emit, seat_start_range
 from mantis_research.core.prompts import RESEARCH_REQUEST
 from mantis_research.core.sidecar import SidecarOutcome
 from mantis_research.core.state import OpenRouterResearchState, SynthesisState
-from mantis_research.interface.seat import process_is_alive
+from mantis_research.interface.seat import process_is_alive, seat_queue
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from mantis_research.core.progress import ProgressCallback
     from mantis_research.core.stage import SeatProbe
+    from mantis_research.interface.seat import SeatQueue
 
-#: The run-level record, written before dispatch and rewritten at the end. Its
-#: presence is what turns an abandoned call into an identified run.
+log = structlog.get_logger(__name__)
+
+#: Longest ``error`` string a failed record carries.
+_ERROR_CHARS = 500
+
+#: The run-level record, written before dispatch, rewritten at each stage
+#: transition and again at the end. Its presence is what turns an abandoned call
+#: into an identified run.
 RUN_RECORD_NAME = 'run.json'
+
+#: Serialises every write of a run record in this process, so the stage loop's
+#: writes and the progress writes never interleave their read-merge-replace.
+_RECORD_LOCK = threading.Lock()
 
 #: Stages driven by the machine's single authenticated ``claude`` CLI, and so by
 #: the local seat this deployment is built around (ADR-0009, local-first). Any
@@ -51,6 +67,16 @@ RUN_RECORD_NAME = 'run.json'
 LOCAL_SEAT_STAGES = frozenset(
     {'claude', 'synthesis', 'journal-passes', 'falsification', 'evaluation', 'claude-prior'}
 )
+
+
+#: Observed wall-clock of the research stage, in minutes (low, high): the
+#: substrates run concurrently, so it tracks the slowest. ``skills/research``
+#: states these figures and a doc-consistency test holds the prose to them.
+RESEARCH_STAGE_MINUTES = (5, 10)
+
+#: Median length of one local-seat Claude turn, in minutes (observed range 131 s
+#: to 2601 s). Cited by the skill's latency bullet and by the detach docs.
+LOCAL_SEAT_TURN_MEDIAN_MINUTES = 7
 
 
 class LocalSeatUnavailableError(RuntimeError):
@@ -409,17 +435,306 @@ def _write_run_record(dirs: RunDirs, record: dict[str, Any]) -> Path:
     root = dirs.root()
     root.mkdir(parents=True, exist_ok=True)
     path = root / RUN_RECORD_NAME
-    prior: list[Any] = []
-    if path.exists():
+    with _RECORD_LOCK:
+        prior: list[Any] = []
+        if path.exists():
+            try:
+                prior = json.loads(path.read_text(encoding='utf-8')).get('history') or []
+            except (OSError, ValueError):
+                prior = []
+        merged = {**record, 'history': [*prior, *record.get('history', [])]}
+        # A name per writer, not a fixed one: a second writer (a resume racing a
+        # dying worker) would otherwise truncate the file the first is replacing.
+        tmp = path.with_name(f'{RUN_RECORD_NAME}.{os.getpid()}.{secrets.token_hex(4)}.tmp')
+        tmp.write_text(json.dumps(merged, indent=2), encoding='utf-8')
         try:
-            prior = json.loads(path.read_text(encoding='utf-8')).get('history') or []
-        except (OSError, ValueError):
-            prior = []
-    merged = {**record, 'history': [*prior, *record.get('history', [])]}
-    tmp = path.with_name(f'{RUN_RECORD_NAME}.tmp')
-    tmp.write_text(json.dumps(merged, indent=2), encoding='utf-8')
-    tmp.replace(path)
+            _replace_with_retry(tmp, path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
     return path
+
+
+class _StageRecorder:
+    """Keep ``run.json`` in step with a run while it is in flight (T1e).
+
+    The record used to be written before the first stage and after the last,
+    so a poller saw ``stages={}`` for the whole life of a healthy run: on
+    2026-09-27, 10 of 11 collectors gave up on runs whose briefs, syntheses
+    and sidecars were already on disk. This wraps the caller's ``on_event`` and
+    rewrites the record on each event that changes what a poller should see —
+    a stage starting or finishing, a substrate brief landing, a wait starting
+    or ending — before passing the event on.
+
+    Each ``stages`` entry carries ``state`` (``running``, ``waiting`` or
+    ``done``), ``started_at`` and ``exit_code`` (``None`` until the stage is
+    done), plus ``finished_at`` once it is; the research stage also lists
+    ``substrates_done``, and a stage that took the local seat records the first
+    time it did as ``seat_acquired_at`` (T1f). The seat reports its wait every
+    few seconds, so only the move into ``waiting`` is written, and the next sign
+    of work (the seat taken, a child's output, a substrate starting) moves it
+    back to ``running``.
+
+    These writes are best-effort: on Windows ``replace`` fails while a poller
+    holds the record open, and the next transition writes the whole state
+    again. :meth:`close` stops them before the terminal write, so a late event
+    cannot turn a finished record back into a running one.
+    """
+
+    def __init__(
+        self,
+        dirs: RunDirs,
+        base: Mapping[str, Any],
+        forward: ProgressCallback | None,
+    ) -> None:
+        self._dirs = dirs
+        # `base` carries no `history`: `_write_run_record` carries the record's
+        # history forward on every write, so passing it again would duplicate it.
+        self._base = dict(base)
+        self._forward = forward
+        self._stages: dict[str, dict[str, Any]] = {}
+        self._current: str | None = None
+        self._closed = False
+        self._lock = threading.Lock()
+
+    def __call__(self, event: RunEvent) -> None:
+        try:
+            with self._lock:
+                if not self._closed and self._apply(event):
+                    self._write()
+        finally:
+            emit(self._forward, event)
+
+    def close(self) -> None:
+        """Stop writing; any write already under way finishes first."""
+        with self._lock:
+            self._closed = True
+
+    def finished_stages(self, results: Mapping[str, int]) -> dict[str, dict[str, Any]]:
+        """The terminal record's ``stages``: each exit code, with when the stage ran.
+
+        The timings outlive the run so a later queued run can estimate how long
+        a seat turn takes (:func:`seat_turn_durations`).
+        """
+        with self._lock:
+            return {
+                stage: {
+                    'exit_code': rc,
+                    **{
+                        key: self._stages[stage][key]
+                        for key in _STAGE_TIMINGS
+                        if key in self._stages.get(stage, {})
+                    },
+                }
+                for stage, rc in results.items()
+            }
+
+    def _apply(self, event: RunEvent) -> bool:
+        """Fold one event into the stage map; True when the record should change."""
+        if event.kind == 'stage_start':
+            stage = str(event.data.get('stage'))
+            self._stages[stage] = {'state': 'running', 'started_at': _now_iso(), 'exit_code': None}
+            self._current = stage
+            return True
+        if event.kind == 'stage_done':
+            entry = self._stages.get(str(event.data.get('stage')))
+            if entry is None:
+                return False
+            entry.update(
+                state='done', exit_code=event.data.get('exit_code'), finished_at=_now_iso()
+            )
+            return True
+        entry = self._stages.get(self._current) if self._current is not None else None
+        if entry is None or entry['state'] == 'done':
+            return False
+        if event.kind == 'waiting':
+            if entry['state'] == 'waiting':
+                return False
+            entry['state'] = 'waiting'
+            return True
+        if event.kind == 'seat_acquired':
+            # The first acquisition is the one kept: a journal turn takes the
+            # seat again inside the same stage.
+            changed = entry['state'] == 'waiting' or 'seat_acquired_at' not in entry
+            entry.setdefault('seat_acquired_at', _now_iso())
+            entry['state'] = 'running'
+            return changed
+        if event.kind not in ('substrate_start', 'substrate_done', 'thinking'):
+            return False
+        changed = entry['state'] == 'waiting'
+        entry['state'] = 'running'
+        if event.kind == 'substrate_done' and event.data.get('status', 'done') == 'done':
+            done: list[Any] = entry.setdefault('substrates_done', [])
+            substrate = event.data.get('substrate')
+            if substrate not in done:
+                done.append(substrate)
+                changed = True
+        return changed
+
+    def _write(self) -> None:
+        record = {**self._base, 'current_stage': self._current, 'stages': self._stages}
+        try:
+            _write_run_record(self._dirs, record)
+        except OSError as exc:
+            log.debug('run record progress write skipped', error=str(exc))
+
+
+#: The timing fields a stage entry keeps in the terminal record.
+_STAGE_TIMINGS = ('started_at', 'seat_acquired_at', 'finished_at')
+
+#: How many recent seat turns the expected-start estimate takes its median over.
+SEAT_SAMPLE_RUNS = 20
+
+
+def seat_turn_durations(outputs_root: Path, *, limit: int = SEAT_SAMPLE_RUNS) -> list[float]:
+    """Seconds from taking the seat to finishing synthesis, newest run first.
+
+    Read from the finished run records under ``outputs_root``, up to ``limit``
+    of them. Only a complete run whose synthesis exited 0 and took the seat
+    counts: a dry run never takes it, a failed one stopped early, and a stage
+    skipped on a resume finished in an instant without it. The span runs to the
+    end of the stage, so it includes the sidecar turn, which runs after the
+    seat is released; the estimate errs late by that much.
+    """
+
+    def modified(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    samples: list[float] = []
+    for path in sorted(outputs_root.glob(f'*/{RUN_RECORD_NAME}'), key=modified, reverse=True):
+        if len(samples) >= limit:
+            break
+        try:
+            record = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        seconds = _seat_turn_s(record)
+        if seconds is not None:
+            samples.append(seconds)
+    return samples
+
+
+def _seat_turn_s(record: Any) -> float | None:
+    if not isinstance(record, dict) or record.get('status') != 'complete':
+        return None
+    stage = (record.get('stages') or {}).get('synthesis')
+    if not isinstance(stage, dict) or stage.get('exit_code') != 0:
+        return None
+    try:
+        took = datetime.fromisoformat(str(stage['seat_acquired_at']))
+        done = datetime.fromisoformat(str(stage['finished_at']))
+        seconds = (done - took).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        return None
+    return seconds if seconds >= 0 else None
+
+
+def uses_local_seat(assurance: str, *, dry_run: bool) -> bool:
+    """True when a run of this tier will queue for the local seat."""
+    return not dry_run and any(s in LOCAL_SEAT_STAGES for s in _TIER_STAGES.get(assurance, ()))
+
+
+def seat_report(batch_name: str) -> dict[str, Any]:
+    """The seat as run ``batch_name`` sees it: the queue, and when it can expect a turn.
+
+    ``waiting`` counts every run queued on the seat now, and ``holder`` names the
+    one holding it. ``expected_start_s`` is ``[early, late]`` in seconds from
+    now, for this run as one of the waiters (counted in if it is not queued
+    yet): early if it is taken next, late if every other waiter goes first.
+    There is no position, because the lock grants the seat to whichever waiter
+    polls first. With no measured seat turn to go on, the range is ``None`` and
+    ``reason`` says why.
+    """
+    return _seat_block(seat_queue(paths.seat_lock_path()), batch_name)
+
+
+def seat_report_if_queued(batch_name: str) -> dict[str, Any] | None:
+    """:func:`seat_report`, or None when run ``batch_name`` holds no waiter ticket.
+
+    A stage's ``waiting`` also covers a rate-limit backoff, so the ticket is
+    what says the run is queued for the seat.
+    """
+    queue = seat_queue(paths.seat_lock_path())
+    if not _is_queued(queue, batch_name):
+        return None
+    return _seat_block(queue, batch_name)
+
+
+def _is_queued(queue: SeatQueue, batch_name: str) -> bool:
+    # Seat owners are named `<batch>/<stage>:<topic>` (StageContext.seat_owner).
+    return any(owner.startswith(f'{batch_name}/') for owner in queue.owners)
+
+
+def _seat_block(queue: SeatQueue, batch_name: str) -> dict[str, Any]:
+    samples = seat_turn_durations(paths.outputs_root())
+    median = statistics.median(samples) if samples else None
+    elapsed = _seconds_since(queue.holder_since) if queue.holder is not None else None
+    waiting = queue.waiting + (0 if _is_queued(queue, batch_name) else 1)
+    span = seat_start_range(waiting, elapsed, median)
+    reason = None if span else 'no finished run on record has a measured seat turn to go on'
+    return {
+        'waiting': queue.waiting,
+        'holder': queue.holder,
+        'expected_start_s': [round(span[0]), round(span[1])] if span else None,
+        'reason': reason,
+    }
+
+
+def _seconds_since(iso: str | None) -> float:
+    """Seconds since ``iso``; 0 when it cannot be read, which errs late."""
+    try:
+        since = datetime.fromisoformat(str(iso))
+        return max(0.0, (datetime.now(UTC) - since).total_seconds())
+    except (TypeError, ValueError):
+        return 0.0
+
+
+#: How many times a blocked ``replace`` is tried, and the pause between tries. On
+#: Windows ``replace`` raises ``PermissionError`` while another process (the
+#: status tool, a monitor) has the destination open for reading; the hold lasts
+#: milliseconds, and the terminal record is the one write that must not be lost
+#: to it.
+_RECORD_REPLACE_ATTEMPTS = 5
+_RECORD_RETRY_PAUSE_S = 0.1
+
+
+def _replace_with_retry(tmp: Path, path: Path) -> None:
+    for attempt in range(1, _RECORD_REPLACE_ATTEMPTS + 1):
+        try:
+            tmp.replace(path)
+        except PermissionError:
+            if attempt == _RECORD_REPLACE_ATTEMPTS:
+                raise
+            time.sleep(_RECORD_RETRY_PAUSE_S)
+        else:
+            return
+
+
+def _plugin_cache_hint(run_dir: Path) -> str:
+    """Say how to get back a run written inside a plugin version's cache directory.
+
+    Up to 0.5.1 a plugin install kept its runs in its own versioned cache
+    directory; they now live under the data root, so the containment check
+    refuses the old ones. Both ways out work because a resume recomputes every
+    path from the run's batch name: the absolute paths in its ``run.json`` are
+    for display only.
+    """
+    batch = run_dir.name
+    old_root = run_dir.parent.parent if run_dir.parent.name == 'outputs' else None
+    if old_root is None:
+        where, source = 'MANTIS_HOME=<that version directory>', ''
+    else:
+        where, source = f'MANTIS_HOME={old_root}', f' from {old_root}'
+    return (
+        f". It sits in a plugin version's cache directory, where runs were kept "
+        f'before they moved to the data root ({paths.data_root().resolve()}). Either '
+        f'set {where} and resume again to resume it in place, or move outputs/{batch}, '
+        f'state/{batch} and transcripts/{batch}{source} under the data root and '
+        f'resume it there. Copy them out before that cache directory is pruned.'
+    )
 
 
 def resolve_resume_dir(candidate: Path) -> Path:
@@ -439,11 +754,98 @@ def resolve_resume_dir(candidate: Path) -> Path:
     resolved = candidate.expanduser().resolve()
     if resolved == root or root not in resolved.parents:
         msg = f'{candidate} is not inside the outputs root ({root}) — refusing to resume it'
+        if paths.in_plugin_cache(resolved):
+            msg += _plugin_cache_hint(resolved)
         raise ValueError(msg)
     if not resolved.is_dir():
         msg = f'no run directory at {resolved}'
         raise ValueError(msg)
     return resolved
+
+
+def is_finished_record(record: Mapping[str, Any]) -> bool:
+    """True when a run record is a successful, real run with nothing left to run.
+
+    The one judgement behind "a resume collects": a ``complete`` record whose
+    stages all exited 0 and whose sidecar did not fail. A ``failed`` record, a
+    ``complete`` one with a stage that exited non-zero, a dry run's
+    ``validated`` one and an abandoned ``dispatching`` one each still have
+    stages to run, so resuming them is a resume and not a collect.
+
+    So does a run whose sidecar failed, although its stages all exited 0
+    (ADR-0011): its synthesis state is not settled, so a resume re-enters that
+    stage for the sidecar alone. A sidecar removed after it was published does
+    not make a run unfinished: its synthesis is recorded as done with the
+    sidecar delivered, so a resume would re-run nothing and end at the same
+    refusal, and reading it as a collect returns that refusal at once rather
+    than a handle to a run that cannot change.
+    """
+    sidecar = record.get('sidecar')
+    sidecar_failed = (
+        isinstance(sidecar, dict) and sidecar.get('status') == SidecarOutcome.FAILED.value
+    )
+    return (
+        record.get('status') == 'complete'
+        and record.get('ok') is True
+        and not record.get('dry_run', False)
+        and not sidecar_failed
+    )
+
+
+def _collect_finished(
+    record: Mapping[str, Any], on_event: ProgressCallback | None
+) -> dict[str, Any] | None:
+    """Rebuild the manifest of a finished run from its record, writing nothing.
+
+    A resume of a finished run used to run every stage again, each skipping, and
+    then rewrite ``run.json`` with only that call's timings. That dropped the
+    seat turn the expected-start estimate reads, and the rewrite moved the run
+    up the newest-first listing, so collecting a run erased it from the one and
+    misplaced it in the other. The record already holds what the manifest needs
+    and the artifacts are on disk, so collecting reads them and leaves the
+    record as it is. ``None`` when the record lacks a field the manifest needs,
+    and the caller then falls back to a full resume.
+    """
+    try:
+        stages = {str(stage): int(entry['exit_code']) for stage, entry in record['stages'].items()}
+        manifest = _manifest(
+            question=str(record['question']),
+            batch_name=str(record['batch_name']),
+            assurance=str(record['assurance']),
+            slug=str(record['question_slug']),
+            substrates=_recorded_substrates(record),
+            results=stages,
+            dry_run=False,
+        )
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+    emit(
+        on_event,
+        RunEvent(
+            kind='run_done',
+            message=f'run {manifest["batch_name"]} was already complete (ok=True)',
+            step=len(stages),
+            total=len(stages),
+            data={
+                'batch_name': manifest['batch_name'],
+                'ok': True,
+                'outputs_dir': manifest['outputs_dir'],
+            },
+        ),
+    )
+    return manifest
+
+
+def _recorded_substrates(record: Mapping[str, Any]) -> list[str]:
+    """The substrates a finished run asked for.
+
+    A terminal record written before it carried ``substrates`` still names
+    them, as the brief files the manifest lists, one ``<substrate>.md`` each.
+    """
+    recorded = record.get('substrates')
+    if recorded:
+        return [str(sub) for sub in recorded]
+    return [Path(str(brief)).name.removesuffix('.md') for brief in record['outputs']['briefs']]
 
 
 def resume_research(
@@ -469,6 +871,11 @@ def resume_research(
     except KeyError as exc:
         msg = f'run record at {resolved} is missing {exc.args[0]!r}'
         raise ValueError(msg) from exc
+
+    if not dry_run and is_finished_record(record):
+        collected = _collect_finished(record, on_event)
+        if collected is not None:
+            return collected
 
     history: list[dict[str, Any]] = []
     if record.get('status') == 'dispatching':
@@ -570,7 +977,9 @@ def run_research(
     about. The first is always ``run_named``, emitted after the config is built
     and *before* any stage is dispatched, alongside a run record on disk — so a
     call the caller abandons still leaves a run it can name, rather than an
-    orphan directory it cannot match to a question.
+    orphan directory it cannot match to a question. Each later transition is
+    written into that record before ``on_event`` hears of it
+    (:class:`_StageRecorder`).
     """
     # Lazy import: importing cli.dispatch runs cli/__init__, which imports
     # research_cmd -> cli.research -> back to this module. Deferring dispatch to
@@ -622,20 +1031,22 @@ def run_research(
         'outputs_dir': str(dirs.root()),
         'dry_run': dry_run,
     }
-    _write_run_record(
-        dirs,
-        {
-            **identity,
-            'status': 'dispatching',
-            'started_at': _now_iso(),
-            # Written in so a later run can read it back and tell an owner that
-            # is still working from one that is gone (MANT-B08).
-            'owner_pid': os.getpid(),
-            'history': _resume_history or [],
-        },
-    )
+    started_at = _now_iso()
+    dispatching = {
+        **identity,
+        'status': 'dispatching',
+        'started_at': started_at,
+        # Written in so a later run can read it back and tell an owner that
+        # is still working from one that is gone (MANT-B08).
+        'owner_pid': os.getpid(),
+    }
+    # The resume history goes in once; later writes carry it forward.
+    _write_run_record(dirs, {**dispatching, 'history': _resume_history or []})
+    # From here every event goes through the recorder, which rewrites the
+    # record at each transition before the caller hears of it (T1e).
+    recorder = _StageRecorder(dirs, dispatching, on_event)
     emit(
-        on_event,
+        recorder,
         RunEvent(
             kind='run_named',
             message=f'run {name} dispatching {len(stages)} stage(s) into {dirs.root()}',
@@ -646,52 +1057,83 @@ def run_research(
     )
 
     results: dict[str, int] = {}
-    for index, stage in enumerate(stages, start=1):
-        emit(
-            on_event,
-            RunEvent(
-                kind='stage_start',
-                message=f'{stage} starting',
-                step=index - 1,
-                total=len(stages),
-                data={'stage': stage, 'batch_name': name},
-            ),
-        )
-        rc = dispatch_stage_config(
-            stage, cfg, dry_run=dry_run, log_level=log_level, on_event=on_event
-        )
-        results[stage] = rc
-        emit(
-            on_event,
-            RunEvent(
-                kind='stage_done',
-                message=f'{stage} finished (exit {rc})',
-                step=index,
-                total=len(stages),
-                data={'stage': stage, 'exit_code': rc, 'batch_name': name},
-            ),
-        )
-        # Research and synthesis are load-bearing — stop the pipeline if either
-        # fails (later stages depend on their outputs).
-        if rc != 0 and stage in ('openrouter', 'synthesis'):
-            break
+    # Whatever ends this function other than a `return` — a stage that raises, a
+    # manifest that cannot be built, an interrupt — must leave the record
+    # terminal. Left at `dispatching`, a dead worker inside a live server reads
+    # as `running` for as long as the server's pid lives (T1d).
+    try:
+        for index, stage in enumerate(stages, start=1):
+            emit(
+                recorder,
+                RunEvent(
+                    kind='stage_start',
+                    message=f'{stage} starting',
+                    step=index - 1,
+                    total=len(stages),
+                    data={'stage': stage, 'batch_name': name},
+                ),
+            )
+            rc = dispatch_stage_config(
+                stage, cfg, dry_run=dry_run, log_level=log_level, on_event=recorder
+            )
+            results[stage] = rc
+            emit(
+                recorder,
+                RunEvent(
+                    kind='stage_done',
+                    message=f'{stage} finished (exit {rc})',
+                    step=index,
+                    total=len(stages),
+                    data={'stage': stage, 'exit_code': rc, 'batch_name': name},
+                ),
+            )
+            # Research and synthesis are load-bearing — stop the pipeline if either
+            # fails (later stages depend on their outputs).
+            if rc != 0 and stage in ('openrouter', 'synthesis'):
+                break
 
-    manifest = _manifest(
-        question=question,
-        batch_name=name,
-        assurance=assurance,
-        slug=slug,
-        substrates=subs,
-        results=results,
-        dry_run=dry_run,
-    )
-    # `complete` means the artifacts under `outputs` are on disk. A dry run
-    # wrote none of them, so it says what it actually did: every path in the
-    # record is a destination, and only a real run turns them into evidence.
-    status = 'validated' if dry_run else 'complete'
-    _write_run_record(dirs, {**manifest, 'status': status, 'finished_at': _now_iso()})
+        manifest = _manifest(
+            question=question,
+            batch_name=name,
+            assurance=assurance,
+            slug=slug,
+            substrates=subs,
+            results=results,
+            dry_run=dry_run,
+        )
+        # `complete` means the artifacts under `outputs` are on disk. A dry run
+        # wrote none of them, so it says what it actually did: every path in the
+        # record is a destination, and only a real run turns them into evidence.
+        status = 'validated' if dry_run else 'complete'
+        recorder.close()
+        # The record keeps each stage's timings beside its exit code, and what
+        # the run started with: `started_at` orders the run listing, and a
+        # resume asks the research stage for `substrates` again. The manifest
+        # returned to the caller keeps its shape.
+        _write_run_record(
+            dirs,
+            {
+                **manifest,
+                'substrates': subs,
+                'started_at': started_at,
+                'stages': recorder.finished_stages(results),
+                'status': status,
+                'finished_at': _now_iso(),
+            },
+        )
+    except BaseException as exc:
+        recorder.close()
+        _write_failed_record(
+            dirs,
+            identity,
+            stages=recorder.finished_stages(results),
+            started_at=started_at,
+            error=exc,
+        )
+        raise
+
     emit(
-        on_event,
+        recorder,
         RunEvent(
             kind='run_done',
             message=f'run {name} complete (ok={manifest["ok"]})',
@@ -701,6 +1143,37 @@ def run_research(
         ),
     )
     return manifest
+
+
+def _write_failed_record(
+    dirs: RunDirs,
+    identity: Mapping[str, Any],
+    *,
+    stages: Mapping[str, Mapping[str, Any]],
+    started_at: str,
+    error: BaseException,
+) -> None:
+    """Make an exception's end of the run a terminal record, never a new failure.
+
+    The original exception is the one the caller must see, so a write that itself
+    fails is logged and dropped rather than raised over it.
+    """
+    try:
+        _write_run_record(
+            dirs,
+            {
+                **identity,
+                'status': 'failed',
+                'ok': False,
+                'stages': dict(stages),
+                'error': repr(error)[:_ERROR_CHARS],
+                'owner_pid': os.getpid(),
+                'started_at': started_at,
+                'finished_at': _now_iso(),
+            },
+        )
+    except OSError:
+        log.exception('could not write the failed run record')
 
 
 def _now_iso() -> str:
