@@ -25,7 +25,12 @@ import pytest
 
 from mantis_research.core import prompts as default_prompts
 from mantis_research.core.config import load_batch_config
-from mantis_research.core.sidecar import SIDECAR_VERSION, ResearchSidecar, SidecarOutcome
+from mantis_research.core.sidecar import (
+    SIDECAR_VERSION,
+    ResearchSidecar,
+    SidecarOutcome,
+    project_for_agent,
+)
 from mantis_research.core.stage import RunContext
 from mantis_research.core.state import SynthesisState
 from mantis_research.interface.adapters.claude_cli import ClaudeCliOptions, ClaudeCliResult
@@ -286,6 +291,37 @@ class TestSidecarEmission:
             'https://github.com/acme/waves': 'shared_unsupported',
             'https://bcb.gov.br/x': 'not_checked',
         }
+
+    async def test_check_kind_and_target_reach_the_published_sidecar_and_the_agent(
+        self, paths, tmp_path: Path
+    ) -> None:
+        # T4d end to end: the draft's structured check survives the stage's merge
+        # onto the published path and the projection the MCP server returns; an
+        # item without one reads null rather than failing the draft.
+        written = json.dumps(
+            {
+                'sidecar_version': 2,
+                'verification_queue': [
+                    {
+                        'id': 'v1',
+                        'claim': 'acme/waves ships a Rust core',
+                        'reason': 'single-source',
+                        'check_kind': 'repo_exists',
+                        'target': 'acme/waves',
+                    },
+                    {'id': 'v2', 'claim': 'adoption is broad', 'reason': 'training-uniform'},
+                ],
+            }
+        )
+        adapter = ScriptedAdapter(paths['synthesis'], paths['sidecar'], paths['journal'], [written])
+        result = await _run(adapter, _config(), tmp_path, SynthesisState(id='1', slug='t'))
+        assert result.success
+        text = paths['sidecar'].read_text(encoding='utf-8')
+        checks = [(v['check_kind'], v['target']) for v in json.loads(text)['verification_queue']]
+        assert checks == [('repo_exists', 'acme/waves'), (None, None)]
+        projected = project_for_agent(ResearchSidecar.from_model_json(text))
+        assert projected['verification_queue'][0]['check_kind'] == 'repo_exists'
+        assert projected['verification_queue'][0]['target'] == 'acme/waves'
 
     async def test_provenance_filled_from_openrouter_state(
         self, paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

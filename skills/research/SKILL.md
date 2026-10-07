@@ -119,7 +119,11 @@ and long free-text is clipped:
   positions; `substrates` = which took which side; `assessment` = which side
   holds, when determinable).
 - `verification_queue` — claims worth checking externally; each `{ id, claim,
-  reason, sources_disagree }`.
+  reason, sources_disagree, check_kind, target }`. When the claim maps onto a
+  mechanical check, `check_kind` names it (`repo_exists`, `metric`, `license` or
+  `url_resolves`) and `target` is the repository slug, URL or metric to check,
+  so you can run the check without parsing `claim`. Both are `null` otherwise,
+  and on every item written before the fields existed; then read `claim`.
 - `source_overlaps` — the sources **more than one substrate cited**; each
   `{ id, reference, kind, substrates, not_cited_by, figures_conflict, conflict,
   source_check }`.

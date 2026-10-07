@@ -119,7 +119,7 @@ Write ONLY valid JSON to {sidecar_path} with the Write tool — no prose, no mar
     {{"id": "d1", "description": "<the cross-substrate disagreement>", "sides": ["<steelmanned position A>", "<position B>"], "substrates": ["<which sources took which side>"], "assessment": "<which is right, or under what conditions each holds>"}}
   ],
   "verification_queue": [
-    {{"id": "v1", "claim": "<a claim to verify externally>", "reason": "<disagreement | single-source | training-uniform>", "sources_disagree": ["<sources>"]}}
+    {{"id": "v1", "claim": "<a claim to verify externally>", "reason": "<disagreement | single-source | training-uniform>", "sources_disagree": ["<sources>"], "check_kind": "<repo_exists | metric | license | url_resolves, or omit>", "target": "<the repo slug, URL or metric to check, or omit>"}}
   ],
   "agreements_worth_verifying": ["<a non-trivial claim all substrates agree on — weak signal, flag before downstream reliance>"],
   "coverage_notes": ["<what the synthesis could not cover, or marked Not-found>"],
@@ -134,6 +134,8 @@ Write ONLY valid JSON to {sidecar_path} with the Write tool — no prose, no mar
 }}
 
 Draw the content faithfully from the synthesis's in-line divergence blocks and its `## Synthesis Meta-Observations` section (hallucination flags → verification_queue; cross-model agreement → agreements_worth_verifying). Give every claim, divergence, and verification item a unique id.
+
+Set a verification item's `check_kind` and `target` only when one of the four check kinds shown in the example fits its claim, and otherwise omit both keys, because `check_kind` is validated against exactly those four values and any other value is rejected.
 
 `source_citations` is an inventory, one entry per research brief listed above, with that brief's label as `substrate`: what the brief actually cited, listed once each, verbatim as cited. Be exhaustive rather than selective — this is the substrate for the comparison below, so a source you omit is a comparison that cannot happen.
 

@@ -46,6 +46,9 @@ CITATION_KIND = Literal['url', 'repository', 'package', 'paper', 'other']
 #: source itself says against what the briefs read out of it. ``not_checked`` is
 #: the default and the honest answer when nobody read the source.
 SOURCE_CHECK = Literal['confirmed', 'contradicted', 'shared_unsupported', 'not_checked']
+#: The check that resolves a verification item (T4d). Closed, so a consumer can
+#: dispatch on it; an item no kind fits carries ``None``.
+CHECK_KIND = Literal['repo_exists', 'metric', 'license', 'url_resolves']
 
 #: The schema version the runner writes today. Older versions still validate.
 SIDECAR_VERSION = 2
@@ -114,12 +117,27 @@ class Divergence(SidecarModel):
 
 class VerificationItem(SidecarModel):
     """One claim flagged for external verification (hallucination candidate or
-    weak cross-model agreement)."""
+    weak cross-model agreement).
+
+    Two optional fields let a consumer run the check without re-parsing
+    ``claim`` (T4d):
+
+    - ``check_kind`` — which check resolves the item: ``repo_exists`` (the
+      repository exists), ``metric`` (the figure holds), ``license`` (the license
+      is as claimed) or ``url_resolves`` (the URL resolves). ``None`` when no
+      kind fits, which is also how every item written before the field reads.
+    - ``target`` — what that check runs against: the repository slug, the URL,
+      or the metric. ``None`` by default.
+
+    The prompt asks for both or neither; the schema does not enforce the pair.
+    """
 
     id: str
     claim: str
     reason: str  # why it is flagged (disagreement, single-source, training-uniform)
     sources_disagree: list[str] = Field(default_factory=list)
+    check_kind: CHECK_KIND | None = None
+    target: str | None = None
 
 
 class CitedSource(SidecarModel):

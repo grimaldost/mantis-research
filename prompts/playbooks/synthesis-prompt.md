@@ -293,3 +293,12 @@ Mechanics that matter:
   source, and otherwise to leave `not_checked`, which is also the schema default
   and what an overlap with no model judgement reads. Neither turn can fetch a
   page, so a verdict is never the sidecar turn's own inference.
+- **A verification item can name its check.** `check_kind` is one of
+  `repo_exists`, `metric`, `license` or `url_resolves`, and `target` is the
+  repository slug, URL or metric that check runs against, so a calling agent can
+  run the check without re-parsing `claim`. The prompt's `verification_queue`
+  example shows both keys, and one sentence tells the turn to set them only when
+  one of the four kinds fits and otherwise to omit both: the vocabulary is
+  closed, so any other value fails validation and costs a re-ask. Both default
+  to `null`, so items written before the fields existed still validate.
+  `sources_disagree` keeps its existing meaning.

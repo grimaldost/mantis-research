@@ -86,6 +86,24 @@ releases (starting with 0.1.0).
   not as clean. Every overlap a new sidecar writes carries the key, default
   included, so a consumer that rejects unknown keys must learn it: the 0.5.1
   schema itself forbids unknown keys and rejects such a sidecar.
+- **A sidecar verification item can name the check that resolves it.**
+  `verification_queue` items were free text, so every consumer re-parsed `claim`
+  to decide what to check; one scripted pass over a queue resolved 5 of 7 items
+  and caught a repository that does not exist (MANT-B19). `VerificationItem`
+  gains two optional, model-authored fields: `check_kind`, one of `repo_exists`,
+  `metric`, `license` or `url_resolves`, and `target`, the repository slug, URL
+  or metric that check runs against. Both reach the MCP result's
+  `verification_queue`. The sidecar prompt's example shows both keys, and one
+  added sentence tells the sidecar turn to set them only when one of the four
+  kinds fits and otherwise to omit both, because any other `check_kind` fails
+  validation and costs a re-ask. `sources_disagree` keeps its meaning. The
+  synthesis playbook and the skill document the fields.
+  **For callers:** both fields default to `null`, so `sidecar_version` stays 2
+  and every sidecar already on disk still validates, its items reading `null`
+  for both. Dispatch on `check_kind` when it is set and fall back to `claim`
+  when it is `null`. Every verification item a new sidecar writes carries both
+  keys, `null` included, and the 0.5.1 schema, which forbids unknown keys,
+  rejects such a sidecar.
 
 ### Changed
 

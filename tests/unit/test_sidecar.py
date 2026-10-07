@@ -18,6 +18,7 @@ from mantis_research.core.sidecar import (
     SourceCitations,
     SourceOverlap,
     SourceRef,
+    VerificationItem,
     derive_source_overlaps,
     missing_required_fields,
     project_for_agent,
@@ -372,6 +373,140 @@ class TestSidecarPromptCarriesTheVerdict:
         (line,) = [ln for ln in self._prompt().splitlines() if ln.startswith('`source_check`')]
         for verdict in ('confirmed', 'contradicted', 'shared_unsupported', 'not_checked'):
             assert f'`{verdict}`' in line
+
+
+_CHECK_KINDS = ('repo_exists', 'metric', 'license', 'url_resolves')
+
+# A verification item as every sidecar before T4d wrote it.
+_OLD_ITEM = {
+    'id': 'v1',
+    'claim': 'acme/waves ships a Rust core',
+    'reason': 'single-source',
+    'sources_disagree': ['openrouter:deepseek'],
+}
+
+_REPO_CHECK_DOC = {
+    'sidecar_version': 2,
+    'verification_queue': [
+        {
+            'id': 'v1',
+            'claim': 'acme/waves ships a Rust core',
+            'reason': 'single-source',
+            'sources_disagree': [],
+            'check_kind': 'repo_exists',
+            'target': 'acme/waves',
+        }
+    ],
+}
+
+
+class TestVerificationCheckKind:
+    """T4d — a verification item can say which check resolves it, and on what.
+
+    The items were free text, so every consumer re-parsed ``claim`` to decide
+    what to check. One scripted pass over a queue resolved 5 of 7 items and caught
+    a repository that does not exist. ``check_kind`` (a closed vocabulary) and
+    ``target`` carry that structure; both default to ``None`` so every sidecar
+    already on disk still validates.
+    """
+
+    def test_the_vocabulary_is_closed_to_the_four_kinds(self) -> None:
+        annotation = VerificationItem.model_fields['check_kind'].annotation
+        literal, none = get_args(annotation)
+        assert none is type(None)
+        assert get_args(literal) == _CHECK_KINDS
+
+    def test_an_item_written_before_the_fields_validates_with_both_none(self) -> None:
+        # I4/I6: the four-key item every existing sidecar carries.
+        doc = {'sidecar_version': 2, 'verification_queue': [_OLD_ITEM]}
+        item = ResearchSidecar.model_validate_json(json.dumps(doc)).verification_queue[0]
+        assert item.check_kind is None
+        assert item.target is None
+        assert item.sources_disagree == ['openrouter:deepseek']
+
+    def test_an_old_item_rewritten_carries_both_keys_as_null_and_reloads(self) -> None:
+        doc = {'sidecar_version': 2, 'verification_queue': [_OLD_ITEM]}
+        sc = ResearchSidecar.model_validate_json(json.dumps(doc))
+        written = json.loads(sc.to_json())['verification_queue'][0]
+        assert written['check_kind'] is None
+        assert written['target'] is None
+        assert ResearchSidecar.model_validate_json(sc.to_json()) == sc
+
+    @pytest.mark.parametrize('kind', _CHECK_KINDS)
+    def test_every_kind_validates(self, kind: str) -> None:
+        item = VerificationItem(id='v1', claim='c', reason='single-source', check_kind=kind)
+        assert item.check_kind == kind
+
+    def test_a_repo_exists_item_round_trips(self) -> None:
+        sc = ResearchSidecar.model_validate_json(json.dumps(_REPO_CHECK_DOC))
+        item = sc.verification_queue[0]
+        assert (item.check_kind, item.target) == ('repo_exists', 'acme/waves')
+        written = json.loads(sc.to_json())['verification_queue'][0]
+        assert (written['check_kind'], written['target']) == ('repo_exists', 'acme/waves')
+        assert ResearchSidecar.model_validate_json(sc.to_json()) == sc
+
+    def test_the_fields_reach_the_agent_projection(self) -> None:
+        sc = ResearchSidecar.model_validate_json(json.dumps(_REPO_CHECK_DOC))
+        (projected,) = project_for_agent(sc)['verification_queue']
+        assert projected['check_kind'] == 'repo_exists'
+        assert projected['target'] == 'acme/waves'
+
+    def test_an_old_item_projects_both_fields_as_none(self) -> None:
+        doc = {'sidecar_version': 2, 'verification_queue': [_OLD_ITEM]}
+        sc = ResearchSidecar.model_validate_json(json.dumps(doc))
+        (projected,) = project_for_agent(sc)['verification_queue']
+        assert projected['check_kind'] is None
+        assert projected['target'] is None
+
+    @pytest.mark.parametrize('kind', ['repo', 'REPO_EXISTS', 'doi_resolves', ''])
+    def test_an_unknown_kind_is_rejected_by_the_vocabulary(self, kind: str) -> None:
+        item = {**_OLD_ITEM, 'check_kind': kind, 'target': 'acme/waves'}
+        doc = {'sidecar_version': 2, 'verification_queue': [item]}
+        with pytest.raises(ValidationError) as exc:
+            ResearchSidecar.model_validate_json(json.dumps(doc))
+        # Rejected as a value outside the closed vocabulary, not as an unknown key.
+        (error,) = exc.value.errors()
+        assert error['type'] == 'literal_error'
+        assert error['loc'] == ('verification_queue', 0, 'check_kind')
+
+
+class TestSidecarPromptAsksForTheCheckKind:
+    """The sidecar turn is shown both fields and told when to leave them out (T4d)."""
+
+    def _prompt(self) -> str:
+        return SYNTHESIS_SIDECAR.format(
+            synthesis_path='/x/01-t.md',
+            sidecar_path='/x/01-t.sidecar.draft.json',
+            brief_block='- [openrouter:openai] /x/openrouter/01-t/openai.md',
+        )
+
+    def _example(self) -> dict[str, object]:
+        (line,) = [ln for ln in self._prompt().splitlines() if '"id": "v1"' in ln]
+        return json.loads(line)
+
+    def test_the_example_shows_both_keys(self) -> None:
+        example = self._example()
+        assert 'check_kind' in example
+        assert 'target' in example
+
+    def test_the_example_names_exactly_the_schema_vocabulary(self) -> None:
+        # The prompt's list and the Literal cannot drift apart unnoticed.
+        placeholder = str(self._example()['check_kind'])
+        named = placeholder.strip('<>').split(',')[0].split(' | ')
+        assert tuple(named) == _CHECK_KINDS
+
+    def test_the_example_keeps_the_existing_keys(self) -> None:
+        example = self._example()
+        old = {k: v for k, v in example.items() if k not in ('check_kind', 'target')}
+        VerificationItem.model_validate(old)  # the pre-T4d part still obeys the schema
+
+    def test_the_turn_is_told_to_omit_both_when_no_kind_fits(self) -> None:
+        (line,) = [
+            ln
+            for ln in self._prompt().splitlines()
+            if '`check_kind`' in ln and '`target`' in ln and 'omit' in ln
+        ]
+        assert 'rejected' in line
 
 
 class TestProvenanceAggregation:
