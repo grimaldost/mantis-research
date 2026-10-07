@@ -8,8 +8,8 @@ Two drifts a review found on 2026-10-07, one test class each:
   in the typer app itself.
 - 0.6.0 shipped MANT-B16 and MANT-B19 and cited both in ``CHANGELOG.md``, while
   ``docs/backlog.md`` still listed them as open. Every item a released section
-  names now needs a **Landed** row, and an item landed in full leaves the open
-  sections.
+  names now needs a **Landed** row, an item landed in full leaves the open
+  sections, and every row names the release that carries it.
 """
 
 from __future__ import annotations
@@ -163,3 +163,15 @@ class TestTheBacklogMatchesTheReleases:
         backlog = _read(_BACKLOG)
         landed = {item for item, full in _closed(backlog).items() if full}
         assert sorted(landed & _open_items(backlog)) == []
+
+    def test_every_landed_row_names_a_release(self) -> None:
+        # Two rows labelled "Unreleased (2026-07-31)" shipped that label in six
+        # releases, 0.2.0 (the one that carried them) to 0.6.0. A row names the
+        # release that carries it.
+        released = set(_released_sections(_read(_ROOT / 'CHANGELOG.md')))
+        unnamed = [
+            row[1]
+            for row in _landed_rows(_read(_BACKLOG))
+            if row[1].split(' ', 1)[0] not in released
+        ]
+        assert unnamed == []

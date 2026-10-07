@@ -758,8 +758,8 @@ covers half of MANT-B23.
 | The watchdog's trip path is tested where a stage reads it — the translation into `ClaudeCliResult`, not just `run_streaming` | 0.3.0 | The gap MANT-B08 left open in 0.2.0 |
 | Per-parameter descriptions on every `research` tool argument, and the full agent-facing surface in `skills/research/SKILL.md`, guarded by a schema test | 0.1.1 (2026-07-04) | The undescribed-parameter finding as a class — the test holds it, not prose |
 | Six documentation falsehoods fixed as instances: the env var named correctly in the runtime error, the stage table and `--only` syntax, mypy guidance, invariant I6 restored, the playbooks README rewritten to the shipped pipeline, and a docs information architecture | 0.1.2 (2026-07-09) | Every instance in `2026-07-09-docs-overhaul`. The *gate* that would have caught them is MANT-B10, still open |
-| `__version__` derived from installed distribution metadata (three copies became two) and a `mantis version` subcommand | Unreleased (2026-07-31) | Partially — the `--version` flag alias and the cwd-relative artifact root remain (MANT-B23), as does the equality assertion between the two survivors (MANT-B26) |
-| `config/example-batch.json` no longer pins a sentinel the code's own note reports as resolving to a model that 404s | Unreleased (2026-07-31) | The example-config contradiction. Its substrate set updates with MANT-B09 |
+| `__version__` derived from installed distribution metadata (three copies became two) and a `mantis version` subcommand | 0.2.0 (`45ce0ba`) | Partially — the `--version` flag alias and the cwd-relative artifact root remain (MANT-B23), as does the equality assertion between the two survivors (MANT-B26) |
+| `config/example-batch.json` no longer pins a sentinel the code's own note reports as resolving to a model that 404s | 0.2.0 (`45ce0ba`) | The example-config contradiction. Its substrate set updates with MANT-B09 |
 
 Deliberately kept, with no action: the ADR practice (ids appear in the
 docstrings of the modules they govern), the execution specs (failure-mode
