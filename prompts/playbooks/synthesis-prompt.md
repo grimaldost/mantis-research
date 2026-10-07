@@ -76,6 +76,14 @@ Three design notes shape its structure:
 | `{substrate_list}` | Every label in the run, comma-joined — what the independence note names |
 | `{synthesis_path}` | Where to write the merged brief |
 
+A brief's label is fixed once, when the briefs are resolved: `claude`,
+`gemini`, or `openrouter:<subslug>` for an OpenRouter subsession
+(`openrouter:single` for the one-file layout). The same label reaches this
+prompt, the sidecar prompt and the sidecar's `sources[].label`. Every
+OpenRouter secondary used to be labelled a bare `openrouter`, so a Path-B
+independence note read `openrouter:openai, openrouter, openrouter` while the
+sidecar named the same briefs by subslug.
+
 The legacy `{claude_path}` / `{claude_size_kb}` / `{gemini_count}` /
 `{gemini_block}` aliases are still bound to the resolved primary and the
 secondary block, so a config carrying an old custom prompt keeps working.
@@ -202,7 +210,8 @@ compensate for briefs that had nothing to disagree about.
 ## Epistemic sidecar (ADR-0003, spec §14)
 
 After the synthesis brief is written, the stage runs a **dedicated sidecar
-turn**: the model reads the brief and writes `<stem>.sidecar.draft.json` — the
+turn**: the model reads the brief and the research briefs it merged, and writes
+`<stem>.sidecar.draft.json` — the
 machine-readable epistemic contract agent consumers load instead of parsing
 prose. The **runner** publishes it: it validates the draft, merges its own zone
 in, renames the merged document onto `<stem>.sidecar.json` and removes the
@@ -223,10 +232,21 @@ zones:
 Mechanics that matter:
 
 - The prompt template (`SYNTHESIS_SIDECAR` in `core/prompts.py`) brace-escapes
-  its JSON example so `str.format` binds only `{synthesis_path}` / `{sidecar_path}`.
-  The template is unchanged by the draft/publish split — the stage binds
-  `{sidecar_path}` to the draft, so the model is told where to write without the
-  prompt having to know why.
+  its JSON example so `str.format` binds only `{synthesis_path}`,
+  `{brief_block}` and `{sidecar_path}`. The template is unchanged by the
+  draft/publish split — the stage binds `{sidecar_path}` to the draft, so the
+  model is told where to write without the prompt having to know why.
+- **The turn is given the briefs it inventories.** `{brief_block}` lists every
+  resolved brief, primary first, one `- [label] path` line each, from the same
+  list the runner writes to `sources[]`. The prompt tells the turn to read each
+  brief for its `source_citations` entry and to use the listed label as
+  `substrate`, which is how an inventory joins back to its `sources[]` entry
+  and the model that wrote the brief. The turn may read the OpenRouter output
+  directory, and the Claude and Gemini output directories when a brief lives
+  there. Before this the prompt named only the synthesis, and the turn's
+  `--add-dir` grant was the synthesis directory alone: in the field it spent 4
+  of its 16 tool calls finding the briefs, and its labels matched `sources[]`
+  only because the synthesis had renamed the substrates itself.
 - A malformed sidecar does **not** re-run the expensive synthesis: the stage
   validates and re-asks on the same session up to `_SIDECAR_MAX_ATTEMPTS` times,
   and an orchestrator retry skips Turn 1 when the brief already exists (the

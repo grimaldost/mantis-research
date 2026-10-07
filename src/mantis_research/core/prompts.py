@@ -92,13 +92,20 @@ The synthesis is the canonical reference document going forward; the individual 
 
 # Synthesis sidecar prompt — see prompts/playbooks/synthesis-prompt.md (ADR-0003).
 # Runs as its own turn after the synthesis brief exists: the model Reads the
-# brief and Writes the machine-readable epistemic sidecar. Only the two format
-# keys ({synthesis_path}, {sidecar_path}) are single braces; every literal JSON
-# brace is doubled so ``str.format`` leaves the example intact (FM-6).
+# brief and the research briefs it merged, and Writes the machine-readable
+# epistemic sidecar. Only the three format keys ({synthesis_path},
+# {brief_block}, {sidecar_path}) are single braces; every literal JSON brace is
+# doubled so ``str.format`` leaves the example intact (FM-6).
 SYNTHESIS_SIDECAR = """You are producing the machine-readable epistemic sidecar for a research synthesis — the structured signal downstream agents consume instead of parsing prose.
 
-## Source
+## Sources
 Read the synthesis brief at {synthesis_path} with the Read tool.
+
+It merged these research briefs, one per line as `[label] path`:
+
+{brief_block}
+
+Read each of them with the Read tool as well: `source_citations` is an inventory of what each brief itself cited, which the synthesis only retells.
 
 ## Output
 Write ONLY valid JSON to {sidecar_path} with the Write tool — no prose, no markdown fences, no code block. Emit exactly this shape (these are the model-authored fields; the runner fills run identity and provenance separately, so do NOT include them):
@@ -117,7 +124,7 @@ Write ONLY valid JSON to {sidecar_path} with the Write tool — no prose, no mar
   "agreements_worth_verifying": ["<a non-trivial claim all substrates agree on — weak signal, flag before downstream reliance>"],
   "coverage_notes": ["<what the synthesis could not cover, or marked Not-found>"],
   "source_citations": [
-    {{"substrate": "<the source label exactly as the synthesis names it, e.g. openrouter:openai>", "cited": [
+    {{"substrate": "<the brief's label exactly as listed above, e.g. openrouter:openai>", "cited": [
       {{"reference": "<the URL, repository slug, package name or paper title that brief cited>", "kind": "url|repository|package|paper|other"}}
     ]}}
   ],
@@ -128,7 +135,7 @@ Write ONLY valid JSON to {sidecar_path} with the Write tool — no prose, no mar
 
 Draw the content faithfully from the synthesis's in-line divergence blocks and its `## Synthesis Meta-Observations` section (hallucination flags → verification_queue; cross-model agreement → agreements_worth_verifying). Give every claim, divergence, and verification item a unique id.
 
-`source_citations` is an inventory, one entry per research brief: what that brief actually cited, listed once each, verbatim as cited. Be exhaustive rather than selective — this is the substrate for the comparison below, so a source you omit is a comparison that cannot happen.
+`source_citations` is an inventory, one entry per research brief listed above, with that brief's label as `substrate`: what the brief actually cited, listed once each, verbatim as cited. Be exhaustive rather than selective — this is the substrate for the comparison below, so a source you omit is a comparison that cannot happen.
 
 `source_overlaps` is where this pipeline earns its cost. Two briefs citing the SAME source and reading incompatible figures out of it indicts the source, which no single-provider run can surface — set `figures_conflict` and say in `conflict` what each brief read. Only `reference`, `figures_conflict` and `conflict` are yours: which briefs cited a source is recomputed from `source_citations`, so do not list substrates here, and list an overlap only for a source that appears in the inventory.
 

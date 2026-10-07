@@ -187,6 +187,26 @@ releases (starting with 0.1.0).
   `LOCAL_SEAT_TURN_MEDIAN_MINUTES` in `research_service`. No behaviour change.
   Known gap, not changed here: the sidecar turn does not take the seat lock and
   reports no progress.
+- **The synthesis and sidecar turns name each brief the same way, and the
+  sidecar turn is told where the briefs are.** Resolving the briefs labelled
+  every OpenRouter secondary a bare `openrouter`, so on a Path-B run the
+  synthesis prompt's secondary block and its independence note read
+  `openrouter:openai, openrouter, openrouter`, while the sidecar's `sources[]`
+  named the same briefs `openrouter:<subslug>`. The sidecar turn, which builds
+  `source_citations` from the briefs, was given only the synthesis path, and its
+  `--add-dir` grant was the synthesis directory alone: in the field on
+  2026-09-27 it spent 4 of its 16 tool calls finding the briefs, and its
+  `substrate` labels matched `sources[]` only because the synthesis had renamed
+  the substrates itself. An OpenRouter brief is now labelled
+  `openrouter:<subslug>` when the briefs are resolved (`openrouter:single` for
+  the one-file layout), and that one list feeds the synthesis prompt, the
+  sidecar prompt and `sources[]`. `SYNTHESIS_SIDECAR` gains a `{brief_block}`
+  placeholder, one `- [label] path` line per brief with the primary first, and
+  tells the turn to read each brief for its inventory and to use the listed
+  label as `substrate`. The turn may now read the OpenRouter output directory,
+  and the Claude and Gemini output directories when a brief lives there. A batch
+  whose own synthesis prompt reads `{secondary_block}`, `{gemini_block}` or
+  `{substrate_list}` now sees the subslug labels there too.
 
 ## [0.5.1] - 2026-09-13
 

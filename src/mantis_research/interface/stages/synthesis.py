@@ -124,12 +124,19 @@ def _briefs_in_stage_dir(dirs: RunDirs, stage_name: str, topic_id: str, slug: st
 def _secondary_briefs(dirs: RunDirs, topic_id: str, slug: str) -> list[tuple[str, Path]]:
     """Return (model_label, path) for every non-Claude brief on disk.
 
-    Order: gemini first, then openrouter. The model_label is the source
-    stage name; downstream prompts can use it to attribute claims back
-    to the right substrate.
+    Order: gemini first, then openrouter. A Gemini brief is labelled
+    ``'gemini'``; an OpenRouter brief ``'openrouter:<subslug>'``, the label the
+    sidecar's ``sources[]`` records for it. Both turns read this one label, so
+    the synthesis prompt, its independence note and the sidecar name a brief
+    the same way (T30a; was a bare ``'openrouter'`` for every subsession).
     """
+    or_dir = dirs.output('openrouter')
+    stem = _stem_for(topic_id, slug)
     out: list[tuple[str, Path]] = [('gemini', p) for p in _gemini_paths(dirs, topic_id, slug)]
-    out.extend(('openrouter', p) for p in _openrouter_paths(dirs, topic_id, slug))
+    out.extend(
+        (f'openrouter:{_openrouter_subslug(p, or_dir, stem)}', p)
+        for p in _openrouter_paths(dirs, topic_id, slug)
+    )
     return out
 
 
@@ -170,6 +177,15 @@ class _Briefs:
     primary_path: Path | None
     secondaries: list[tuple[str, Path]]
 
+    def labelled(self) -> list[tuple[str, Path]]:
+        """Every resolved brief as ``(label, path)``, primary first.
+
+        The one list both turns read: the sidecar prompt's brief block and the
+        runner's ``sources[]`` are built from it, so they cannot disagree.
+        """
+        head = [] if self.primary_path is None else [(self.primary_label, self.primary_path)]
+        return [*head, *self.secondaries]
+
 
 def _resolve_briefs(dirs: RunDirs, topic_id: str, slug: str, primary_spec: str | None) -> _Briefs:
     """Resolve which brief is primary and which are secondaries.
@@ -195,6 +211,38 @@ def _resolve_briefs(dirs: RunDirs, topic_id: str, slug: str, primary_spec: str |
         return _Briefs(spec, primary_path, secondaries)
     # Unknown spec — no resolvable primary; upstream_ready will block clearly.
     return _Briefs(spec, None, all_secondary)
+
+
+def _synthesis_prompt(
+    template: str, briefs: _Briefs, primary_path: Path, synthesis_path: Path
+) -> str:
+    """Render the Turn-1 (synthesis) prompt from the resolved briefs."""
+    secondaries = briefs.secondaries
+    secondary_block = '\n'.join(
+        f'- [{label}] {p.as_posix()} ({p.stat().st_size / 1024:.1f} KB)' for label, p in secondaries
+    )
+    primary_size_kb = primary_path.stat().st_size / 1024
+    return template.format(
+        # New primary/secondary vocabulary (ADR-0005).
+        primary_path=primary_path.as_posix(),
+        primary_size_kb=primary_size_kb,
+        primary_label=briefs.primary_label,
+        secondary_count=len(secondaries),
+        secondary_block=secondary_block,
+        # Substrate-neutral facts about THIS run, so the prompt can describe
+        # its own inputs instead of asserting a two-model shape the pipeline
+        # stopped producing (MANT-B05).
+        source_count=len(secondaries) + 1,
+        substrate_list=', '.join([briefs.primary_label, *(label for label, _ in secondaries)]),
+        # Prompt-variable aliases: legacy prompts use {claude_*} / {gemini_*},
+        # bound here to the resolved primary and the secondary block so every
+        # existing template keeps working.
+        claude_path=primary_path.as_posix(),
+        claude_size_kb=primary_size_kb,
+        gemini_count=len(secondaries),
+        gemini_block=secondary_block,
+        synthesis_path=synthesis_path.as_posix(),
+    )
 
 
 class SynthesisStage:
@@ -263,44 +311,13 @@ class SynthesisStage:
             return AttemptResult.fail(
                 error=f'primary brief unresolved ({briefs.primary_label})',
             )
-        secondaries = briefs.secondaries
-        secondary_block = '\n'.join(
-            f'- [{label}] {p.as_posix()} ({p.stat().st_size / 1024:.1f} KB)'
-            for label, p in secondaries
-        )
-        primary_size_kb = primary_path.stat().st_size / 1024
-        # Prompt-variable aliases: new prompts use {primary_*} / {secondary_*};
-        # legacy prompts use {claude_*} / {gemini_*}, bound here to the resolved
-        # primary and the secondary block so every existing template keeps working.
-        claude_path = primary_path
-        gemini_block = secondary_block
-        gemini_count = len(secondaries)
-
         # Build Turn-1 (synthesis) prompt
         synth_template = (
             topic.stages.synthesis.prompt
             or ctx.batch.default_prompts.synthesis
             or default_prompts.SYNTHESIS
         )
-        synth_prompt = synth_template.format(
-            # New primary/secondary vocabulary (ADR-0005).
-            primary_path=primary_path.as_posix(),
-            primary_size_kb=primary_size_kb,
-            primary_label=briefs.primary_label,
-            secondary_count=gemini_count,
-            secondary_block=secondary_block,
-            # Substrate-neutral facts about THIS run, so the prompt can describe
-            # its own inputs instead of asserting a two-model shape the pipeline
-            # stopped producing (MANT-B05).
-            source_count=gemini_count + 1,
-            substrate_list=', '.join([briefs.primary_label, *(label for label, _ in secondaries)]),
-            # Legacy aliases bound to the resolved primary — old templates work.
-            claude_path=claude_path.as_posix(),
-            claude_size_kb=primary_size_kb,
-            gemini_count=gemini_count,
-            gemini_block=gemini_block,
-            synthesis_path=synthesis_path.as_posix(),
-        )
+        synth_prompt = _synthesis_prompt(synth_template, briefs, primary_path, synthesis_path)
 
         synth_model_cfg = ctx.batch.models.synthesis or ctx.batch.models.claude
         # Synthesis/journal run on the Claude CLI → resolve the auto sentinel to
@@ -496,10 +513,21 @@ class SynthesisStage:
         attempt's (ADR-0011). The synthesis document is left intact either way.
         """
         sidecar_session = str(uuid.uuid4())
+        # The turn inventories each brief's citations, so it is told which
+        # briefs exist and under which label `sources[]` will record them, and
+        # may read the stage dirs they live in (T30a). Without this it hunted
+        # for them and guessed the labels.
+        labelled = briefs.labelled()
         base_prompt = default_prompts.SYNTHESIS_SIDECAR.format(
             synthesis_path=synthesis_path.as_posix(),
+            brief_block='\n'.join(f'- [{label}] {p.as_posix()}' for label, p in labelled),
             sidecar_path=draft_path.as_posix(),
         )
+        brief_dirs = [dirs.output('openrouter')]
+        for stage in ('claude', 'gemini'):
+            stage_dir = dirs.output(stage)
+            if any(stage_dir in p.parents for _, p in labelled):
+                brief_dirs.append(stage_dir)
         last_error = 'sidecar not written'
         for attempt in range(_SIDECAR_MAX_ATTEMPTS):
             first = attempt == 0
@@ -518,7 +546,7 @@ class SynthesisStage:
                 session_id=sidecar_session if first else None,
                 resume_session_id=None if first else sidecar_session,
                 name=f'sidecar-topic-{topic.id}',
-                add_dirs=(dirs.output('synthesis'),),
+                add_dirs=(dirs.output('synthesis'), *brief_dirs),
                 allowed_tools=('Read', 'Write'),
             )
             transcript = dirs.transcripts() / f'{stem}-{ts}-sidecar-{attempt + 1}.log'
@@ -594,30 +622,24 @@ class SynthesisStage:
         or_state = OpenRouterResearchState.load_or_create(
             dirs.state('openrouter'), topic.id, topic.slug
         )
-        or_dir = dirs.output('openrouter')
-        stem = topic_stem(topic.id, topic.slug)
         model_by_subslug = {s.subslug: s.model for s in or_state.subsessions}
 
         def _source_ref(label: str, path: Path) -> SourceRef:
-            # An OpenRouter brief carries an `openrouter:<subslug>` label and the
-            # resolved model id, so an agent can attribute the brief to the model
-            # that produced it (was: label collapsed to a bare 'openrouter',
-            # model_id null). Claude/Gemini briefs keep their stage label; their
-            # model is not tracked in state, so model_id stays None.
-            subslug = _openrouter_subslug(path, or_dir, stem)
-            if subslug is not None:
-                return SourceRef(
-                    label=f'openrouter:{subslug}',
-                    path=path.as_posix(),
-                    model_id=model_by_subslug.get(subslug),
-                    bytes=path.stat().st_size,
-                )
-            return SourceRef(label=label, path=path.as_posix(), bytes=path.stat().st_size)
+            # The label is the resolved list's, the one the sidecar prompt
+            # listed (T30a). An OpenRouter brief is `openrouter:<subslug>` and
+            # carries its resolved model id, so an agent can attribute the brief
+            # to the model that produced it. Claude/Gemini briefs keep their
+            # stage label; their model is not tracked in state, so model_id
+            # stays None.
+            stage, _, subslug = label.partition(':')
+            return SourceRef(
+                label=label,
+                path=path.as_posix(),
+                model_id=model_by_subslug.get(subslug) if stage == 'openrouter' else None,
+                bytes=path.stat().st_size,
+            )
 
-        sources: list[SourceRef] = []
-        if briefs.primary_path is not None:
-            sources.append(_source_ref(briefs.primary_label, briefs.primary_path))
-        sources.extend(_source_ref(label, p) for label, p in briefs.secondaries)
+        sources = [_source_ref(label, p) for label, p in briefs.labelled()]
 
         provenance = Provenance.from_subsessions(
             or_state.subsessions, synthesis_duration_s=state.turn_1_duration_s

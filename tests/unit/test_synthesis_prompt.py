@@ -14,10 +14,19 @@ corrected the label mismatch.
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
 
+import pytest
+
+from mantis_research.core.paths import RunDirs
 from mantis_research.core.prompts import SYNTHESIS
+from mantis_research.interface.stages import synthesis as syn
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _PLACEHOLDERS = frozenset(re.findall(r'{(\w+)[^}]*}', SYNTHESIS))
+_DIRS = RunDirs(layout='batch', batch_name='b')
 
 
 class TestSubstrateNeutral:
@@ -62,6 +71,45 @@ class TestCoHallucinationRule:
     def test_the_rule_covers_named_artifacts_not_only_citations(self) -> None:
         for artifact in ('repository slugs', 'package names', 'URLs'):
             assert artifact in SYNTHESIS
+
+
+class TestRenderedLabels:
+    """The rendered prompt names each brief by the label the sidecar records (T30a)."""
+
+    @pytest.fixture
+    def path_b(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> syn._Briefs:
+        monkeypatch.setattr('mantis_research.core.paths.outputs_root', lambda: tmp_path)
+        for subslug in ('openai', 'deepseek', 'google'):
+            brief = tmp_path / 'b' / 'openrouter' / '01-t' / f'{subslug}.md'
+            brief.parent.mkdir(parents=True, exist_ok=True)
+            brief.write_text(f'{subslug} brief', encoding='utf-8')
+        return syn._resolve_briefs(_DIRS, '1', 't', 'openrouter:openai')
+
+    def _render(self, briefs: syn._Briefs, tmp_path: Path) -> str:
+        assert briefs.primary_path is not None
+        return syn._synthesis_prompt(
+            SYNTHESIS, briefs, briefs.primary_path, tmp_path / 'synthesis.md'
+        )
+
+    def test_the_secondary_block_names_each_subslug(
+        self, path_b: syn._Briefs, tmp_path: Path
+    ) -> None:
+        rendered = self._render(path_b, tmp_path)
+        secondary = rendered.split('<source role="secondary"', 1)[1].split('</source>', 1)[0]
+        labels = re.findall(r'^- \[([^\]]+)\]', secondary, flags=re.MULTILINE)
+        assert sorted(labels) == ['openrouter:deepseek', 'openrouter:google']
+
+    def test_the_independence_note_names_each_subslug(
+        self, path_b: syn._Briefs, tmp_path: Path
+    ) -> None:
+        rendered = self._render(path_b, tmp_path)
+        note = rendered.split('**Independence note.**', 1)[1].split('\n', 1)[0]
+        merged_from = note.split('merges briefs from: ', 1)[1].split('. ', 1)[0]
+        assert merged_from.split(', ') == [
+            'openrouter:openai',
+            'openrouter:deepseek',
+            'openrouter:google',
+        ]
 
 
 class TestPreserved:

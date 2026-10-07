@@ -68,6 +68,9 @@ class ScriptedAdapter:
     journal_calls: int = 0
     #: Script the journal turn to fail, to exercise re-entry into the attempt.
     journal_fails: bool = False
+    #: What each sidecar turn was sent, in call order.
+    sidecar_prompts: list[str] = field(default_factory=list)
+    sidecar_options: list[ClaudeCliOptions] = field(default_factory=list)
 
     def preflight(self) -> None:
         return None
@@ -84,6 +87,8 @@ class ScriptedAdapter:
         if 'sidecar-topic' in name:
             i = self.sidecar_calls
             self.sidecar_calls += 1
+            self.sidecar_prompts.append(prompt)
+            self.sidecar_options.append(options)
             content = self.sidecar_contents[i] if i < len(self.sidecar_contents) else None
             match = _TARGET.search(prompt)
             assert match is not None, 'the sidecar prompt must name a path to write'
@@ -342,6 +347,66 @@ class TestSidecarEmission:
         assert by_label['openrouter:openai'].model_id == 'openai/gpt-5.5-pro'
         assert by_label['openrouter:deepseek'].model_id == 'deepseek/deepseek-v4-pro'
 
+    async def test_sidecar_turn_is_given_every_brief_under_its_source_label(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # T30a: the sidecar turn builds `source_citations` from the briefs, but
+        # its prompt named only the synthesis and its add_dirs held only the
+        # synthesis dir, so it spent tool calls hunting for the briefs and had
+        # to guess the labels. It now gets the same resolved list the runner
+        # writes to sources[], and read access to where those briefs live.
+        monkeypatch.setattr('mantis_research.core.paths.outputs_root', lambda: tmp_path)
+        or_out = tmp_path / 'sc' / 'openrouter' / '01-t'
+        or_out.mkdir(parents=True, exist_ok=True)
+        for subslug in ('openai', 'deepseek', 'google'):
+            (or_out / f'{subslug}.md').write_text(f'{subslug} brief', encoding='utf-8')
+        cfg = load_batch_config(
+            {
+                'schema_version': 2,
+                'batch_name': 'sc',
+                'runner': {'layout': 'batch'},
+                'models': {
+                    'claude': {'model': 'claude-opus-4-7', 'effort': 'max'},
+                    'primary': 'openrouter:openai',
+                },
+                'topics': [
+                    {'id': '1', 'slug': 't', 'title': 'T', 'stages': {'claude': {'prompt': ''}}}
+                ],
+            }
+        )
+        sidecar_path = tmp_path / 'sc' / 'synthesis' / '01-t.sidecar.json'
+        adapter = ScriptedAdapter(
+            tmp_path / 'sc' / 'synthesis' / '01-t.md',
+            sidecar_path,
+            tmp_path / 'sc' / 'journals' / '01-t-journal.md',
+            [_VALID],
+        )
+        result = await _run(adapter, cfg, tmp_path, SynthesisState(id='1', slug='t'))
+        assert result.success
+        sources = ResearchSidecar.from_model_json(sidecar_path.read_text(encoding='utf-8')).sources
+        listed = re.findall(r'^- \[([^\]]+)\] (\S+)$', adapter.sidecar_prompts[0], re.MULTILINE)
+        assert sorted(listed) == sorted((s.label, s.path) for s in sources)
+        assert {label for label, _ in listed} == {
+            'openrouter:openai',
+            'openrouter:deepseek',
+            'openrouter:google',
+        }
+        assert tmp_path / 'sc' / 'openrouter' in adapter.sidecar_options[0].add_dirs
+
+    async def test_sidecar_turn_can_read_claude_and_gemini_briefs(
+        self, paths, tmp_path: Path
+    ) -> None:
+        # The default fixture's briefs live under the claude and gemini output
+        # dirs; the sidecar turn is told about them, so it may read them too.
+        adapter = ScriptedAdapter(paths['synthesis'], paths['sidecar'], paths['journal'], [_VALID])
+        result = await _run(adapter, _config(), tmp_path, SynthesisState(id='1', slug='t'))
+        assert result.success
+        add_dirs = adapter.sidecar_options[0].add_dirs
+        assert tmp_path / 'sc' / 'claude' in add_dirs
+        assert tmp_path / 'sc' / 'gemini' in add_dirs
+        assert '- [claude] ' in adapter.sidecar_prompts[0]
+        assert '- [gemini] ' in adapter.sidecar_prompts[0]
+
     async def test_invalid_then_valid_reasks_without_second_brief(
         self, paths, tmp_path: Path
     ) -> None:
@@ -388,9 +453,12 @@ class TestSidecarEmission:
 
 def test_sidecar_prompt_formats_without_brace_error() -> None:
     # FM-6: the JSON example must be brace-escaped so str.format only binds the
-    # two real keys. A bare brace would raise here (and break every synthesis).
+    # three real keys. A bare brace would raise here (and break every synthesis).
     out = default_prompts.SYNTHESIS_SIDECAR.format(
-        synthesis_path='/x/01-t.md', sidecar_path='/x/01-t.sidecar.json'
+        synthesis_path='/x/01-t.md',
+        sidecar_path='/x/01-t.sidecar.json',
+        brief_block='- [openrouter:openai] /x/openrouter/01-t/openai.md',
     )
     assert '/x/01-t.sidecar.json' in out
+    assert '- [openrouter:openai] /x/openrouter/01-t/openai.md' in out
     assert f'"sidecar_version": {SIDECAR_VERSION}' in out  # the literal JSON survived intact
