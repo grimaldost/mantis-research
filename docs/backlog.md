@@ -217,15 +217,6 @@ to MANT-B65 below.
 - **Effort.** M
 - **Source.** review
 
-### MANT-B16 — Record sidecar paths relative to the run root
-
-- **Cause / evidence.** Absolute machine paths had to be hand-normalised when a
-  frozen sidecar moved machines (`2026-08-11-t7-scenarios-consumption`).
-- **Change.** Write `sources[].path` and `synthesis_path` relative to the run
-  root, in the same write path MANT-B06 edits.
-- **Effort.** S
-- **Source.** triage (T4b)
-
 ### MANT-B17 — Flip the run-layout default to `batch` and say so
 
 - **Cause / evidence.** `legacy` is documented as the default in both `CLAUDE.md`
@@ -253,20 +244,6 @@ to MANT-B65 below.
   narrower and better-evidenced requirement that a release claiming a liveness
   or timing property ships an offline adversarial repro for it. 0.2.0 claimed one
   and deferred the proof to a paid external run that never happened.
-
-### MANT-B19 — Structured fields on verification-queue items
-
-- **Cause / evidence.** One scripted pass over a verification queue resolved 5 of
-  7 items and caught a repository that does not exist — the strongest measured
-  payoff of any item still unbuilt. The items are free text, so every consumer
-  re-parses them.
-- **Change.** Optional `check_kind` (`repo_exists | metric | license |
-  url_resolves`) and `target` on `VerificationItem`, with the sidecar prompt
-  populating them. Additive under invariant I4; natural to ship alongside
-  MANT-B07.
-- **Effort.** S
-- **Source.** triage (T4d, held at watch pending a second report — promoted here
-  on the strength of the measured payoff and its shared edit site with B07)
 
 ### MANT-B20 — A batch entry point for `mantis research`
 
@@ -359,6 +336,13 @@ loudly with `status: failed` instead. **S** · *triage (T3b)*
 git work tree litters it (`2026-08-10 six-topic-batch report`). Default to a data
 root, or warn once when the root resolves inside a work tree. **S** ·
 *triage (T4e)*
+
+**Half of this landed in 0.6.0** (`d65705e`). Runtime data now sits under a data
+root: `MANTIS_HOME` when set, and `~/.mantis` when the package runs from Claude
+Code's plugin cache, so a plugin install no longer writes inside its own
+versioned directory. An installed CLI with no `MANTIS_HOME` still writes in its
+working directory, so a run it launches inside a git work tree still litters
+it. That case, or the warn-once, is what remains.
 
 ### MANT-B24 — Make "Not found" comparable across briefs
 
@@ -715,15 +699,35 @@ conflict with MANT-B48 in any case. *triage*
 
 # Landed
 
-Reconciled against `CHANGELOG.md` (0.1.0 → 0.2.0) and history through
-`b4050b2`. Recorded here so the same findings are not re-proposed.
+Reconciled against `CHANGELOG.md` through 0.6.0 and history through `1063ba5`,
+the 0.6.0 release merge: each 0.6.0 entry was checked against the open items,
+and every MANT-B id a released section names has a row here, which
+`tests/unit/test_doc_claims.py` holds. Recorded here so the same findings are
+not re-proposed.
 
-The 0.5.0 rows carry the 2026-09-13 delta-2 triage's own ids (`T14a` onward)
-rather than `MANT-Bnn`: those rows never had an item on this list, and minting
-one at the point they land would be bookkeeping for its own sake.
+The 0.5.0 and 0.6.0 rows carry the triage's own row ids rather than `MANT-Bnn`
+wherever the finding never had an item on this list — the 2026-09-13 delta-2
+triage's for 0.5.0 (`T14a` onward), the 2026-10-06 delta-4 triage's for 0.6.0.
+Minting an item at the point a finding lands would be bookkeeping for its own
+sake. Three 0.6.0 rows did have one: T4b is MANT-B16, T4d is MANT-B19, and T4e
+covers half of MANT-B23.
 
 | What | Release | Closes |
 |---|---|---|
+| `sources[].path` and `synthesis_path` recorded relative to the run root, with `sidecar_version` 3 and two pure helpers, `run_root_of` and `ResearchSidecar.resolved_paths`, to join them back; versions 1 and 2 still validate | 0.6.0 (`04f2a14`) | **MANT-B16** (triage row T4b). Not additive: the field names stayed and their meaning changed, so the version moved, as an ADR-0003 amendment records |
+| Optional `check_kind` (`repo_exists`, `metric`, `license`, `url_resolves`) and `target` on `VerificationItem`, set by the sidecar turn only when one of the four kinds fits and carried into the MCP result's `verification_queue` | 0.6.0 (`a5aac40`) | **MANT-B19** (triage row T4d). Additive: both default to `null` |
+| Runtime data under a data root: `MANTIS_HOME` when set, `~/.mantis` when the package runs from Claude Code's plugin cache, the project root otherwise, so every installed plugin version queues on one seat lock | 0.6.0 (`d65705e`) | **MANT-B23, partially** (triage row T4e). An installed CLI with no `MANTIS_HOME` still writes in its working directory |
+| `detach` unset chooses by tier: a run that uses the local seat detaches, a `research`-tier run or a dry run blocks. A resume of a run that succeeded is a collect, which blocks, writes nothing and returns the result (ADR-0009 amendment) | 0.6.0 (`0d50347`) | Triage rows **T20a, T20b** (2026-10-06 delta-4). A blocking seat-tier call outlasted what an MCP client holds one tool call open for |
+| Each run waiting for the local seat keeps a ticket beside the lock, and `research_status` and the detach handle carry `seat: { waiting, holder, expected_start_s, reason }`, the range taken from the median seat turn of the 20 most recent complete runs whose synthesis took the seat | 0.6.0 (`1298d82`) | Triage row **T1f**. A caller could not tell a long queue from a stuck run |
+| `research_status` with no argument lists the runs under the data root, newest first and at most 50; a blocking or resumed `research` result names its `outputs_dir` and `batch_name` | 0.6.0 (`0cb927a`) | Triage rows **T21, T9c**. A caller that had lost a run's `outputs_dir` could not find it from the server |
+| `run_research` writes a terminal `run.json` (`status: "failed"`, `ok: false`, an `error` string) on every exit from the stage loop and the manifest build | 0.6.0 (`9074fd2`) | Triage row **T1d**. A run that raised stayed `dispatching`, and `research_status` answered `running` for as long as the server's pid lived |
+| `run.json` is rewritten as the run moves (stage start and finish, each brief, each change into a wait), with per-stage `state` and timings and a `current_stage`; while the record says `dispatching`, `research_status` adds an `artifacts` block read from disk | 0.6.0 (`f849863`) | Triage row **T1e**. 10 of 11 collectors polling detached runs saw nothing change for 45 minutes and gave up |
+| The skill's latency bullet counts local-seat turns per tier, derived by test from the tier registry, and names the one seat queue every run on the machine shares | 0.6.0 (`56c5724`) | Triage rows **T26a, T26b**. Docs only |
+| The research prompt asks, for every named repository, paper, product or benchmark, whether the brief retrieved it this turn or recalled it from training, and attaches no specific numbers to one it only recalls | 0.6.0 (`2461f36`) | Triage row **T25a**. Whether briefs carry fewer wrong figures is checked on the next paid run |
+| One resolved brief list, with each OpenRouter brief labelled `openrouter:<subslug>`, feeds the synthesis prompt, the sidecar prompt and `sources[]`, and the sidecar turn is told where the briefs are | 0.6.0 (`152cb56`) | Triage row **T30a**. The sidecar turn had spent 4 of its 16 tool calls finding the briefs |
+| The synthesis prompt's independence note prints the pairwise Jaccard overlap of the URLs each brief cites (`core/retrieval_overlap.py`, `{retrieval_overlap}`) | 0.6.0 (`dbe4ca6`) | Triage row **T5e**. Two of three briefs had cited an identical set of five URLs, so their agreement was one retrieval pool |
+| `source_check` (`confirmed`, `contradicted`, `shared_unsupported`, `not_checked`) on each sidecar source overlap, model-authored and carried into the MCP result | 0.6.0 (`17323e8`) | Triage row **T32a**. Two briefs had agreed on five named items that the README of the repository they cited does not contain, and the overlap read `figures_conflict: false` |
+| The MCP server ported to SDK 2.x (`mcp>=2.2,<3`), with both tools' names and input schemas held by a snapshot taken before the port | 0.6.0 (`b3becf0`) | Triage row **T34a**. The Dependabot bump to 2.2.0 had failed `ty check src` |
 | The local-seat stream reader declares its own line ceiling (`STREAM_LINE_LIMIT_BYTES`, 16 MiB) instead of inheriting asyncio's 64 KiB, with a contract test driving a real spawn and a 200 KB line | 0.5.0 | Triage row **T14a** (2026-09-13 delta-2). Reproduced 2/2 in one report and 7/7 in a later wave, always after the briefs and synthesis were paid for |
 | A deterministic stream overrun classifies as `PRECONDITION` — one attempt, no backoff — and a crashing attempt carries its exception text into the field the classifier reads | 0.5.0 | Triage row **T15a**. The three blind retries were about 50 minutes per run for an error no attempt could change |
 | Turn 1's product is recorded from disk in a `finally`, against a fingerprint taken before the turn | 0.5.0 | Triage row **T15b**, which the triage could not diagnose from source. The assignment sat after a call that raises, so the guard never learned the document existed; the "only when it changed" clause is what keeps `--force` from adopting a stale synthesis |

@@ -1,9 +1,15 @@
-"""Claims the docs make about the code, held by test.
+"""Claims the docs make about the code and the release record, held by test.
 
-Six releases (0.2.0 to 0.6.0) shipped a README that taught ``mantis status``,
-which ADR-0010 folded into ``mantis monitor --snapshot`` in 0.2.0, and two
-entry-point lists still named it (review, 2026-10-07). Every command a doc names
-is now looked up in the typer app itself.
+Two drifts a review found on 2026-10-07, one test class each:
+
+- Six releases (0.2.0 to 0.6.0) shipped a README that taught ``mantis status``,
+  which ADR-0010 folded into ``mantis monitor --snapshot`` in 0.2.0, and two
+  entry-point lists still named it. Every command a doc names is now looked up
+  in the typer app itself.
+- 0.6.0 shipped MANT-B16 and MANT-B19 and cited both in ``CHANGELOG.md``, while
+  ``docs/backlog.md`` still listed them as open. Every item a released section
+  names now needs a **Landed** row, and an item landed in full leaves the open
+  sections.
 """
 
 from __future__ import annotations
@@ -91,3 +97,69 @@ class TestTheCommandsTheDocsNameExist:
         for doc in (_README, _ROOT / 'docs' / 'architecture.md'):
             listed = _entry_point_list(_read(doc))
             assert [name for name in listed if name not in cli] == [], doc.name
+
+
+# ── the backlog's Landed table against the CHANGELOG ──────────────────
+
+_BACKLOG = _ROOT / 'docs' / 'backlog.md'
+
+
+def _released_sections(changelog: str) -> dict[str, str]:
+    """``{version: body}`` for every ``## [X.Y.Z]`` section, Unreleased excluded."""
+    sections: dict[str, str] = {}
+    for match in re.finditer(
+        r'^## \[(\d+\.\d+\.\d+)\][^\n]*\n(.*?)(?=^## |\Z)', changelog, flags=re.M | re.S
+    ):
+        sections[match.group(1)] = match.group(2)
+    return sections
+
+
+def _landed_rows(backlog: str) -> list[list[str]]:
+    landed = backlog.split('\n# Landed\n', 1)[1]
+    lines = [line for line in landed.splitlines() if line.startswith('|')]
+    # The first line is the header; the separator is all dashes and pipes.
+    rows = [line for line in lines[1:] if not re.fullmatch(r'\|[-| ]+\|', line)]
+    return [[cell.strip() for cell in row.strip('|').split(' | ')] for row in rows]
+
+
+def _closed(backlog: str) -> dict[str, bool]:
+    """``{item id: closed in full}`` for every row whose Closes cell leads with an id."""
+    closed: dict[str, bool] = {}
+    for row in _landed_rows(backlog):
+        match = re.match(r'\*\*(MANT-B\d+)(, partially)?', row[-1])
+        if match:
+            closed[match.group(1)] = closed.get(match.group(1), False) or not match.group(2)
+    return closed
+
+
+def _open_items(backlog: str) -> set[str]:
+    before_landed = backlog.split('\n# Landed\n', 1)[0]
+    return set(re.findall(r'^### (MANT-B\d+) ', before_landed, flags=re.M))
+
+
+class TestTheBacklogMatchesTheReleases:
+    def test_the_parsers_see_the_record(self) -> None:
+        backlog = _read(_BACKLOG)
+        assert '0.6.0' in _released_sections(_read(_ROOT / 'CHANGELOG.md'))
+        rows = _landed_rows(backlog)
+        assert [row[0][:40] for row in rows if len(row) != 3] == []
+        assert 'MANT-B43' in [item for row in rows for item in re.findall(r'MANT-B\d+', row[2])]
+        assert _closed(backlog)['MANT-B01'] is True
+        assert _closed(backlog)['MANT-B14'] is False
+        assert 'MANT-B09' in _open_items(backlog)
+
+    def test_every_item_a_release_names_has_a_landed_row(self) -> None:
+        closed = _closed(_read(_BACKLOG))
+        sections = _released_sections(_read(_ROOT / 'CHANGELOG.md'))
+        unrecorded = sorted(
+            f'{item} ({version})'
+            for version, body in sections.items()
+            for item in set(re.findall(r'MANT-B\d+', body))
+            if item not in closed
+        )
+        assert unrecorded == []
+
+    def test_an_item_landed_in_full_is_no_longer_open(self) -> None:
+        backlog = _read(_BACKLOG)
+        landed = {item for item, full in _closed(backlog).items() if full}
+        assert sorted(landed & _open_items(backlog)) == []
