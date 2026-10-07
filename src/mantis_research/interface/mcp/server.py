@@ -657,10 +657,13 @@ async def research(
     handle first and the result on the collect call (see ``detach``).
 
     Parameters:
-      - ``assurance`` (``fast`` | ``standard`` | ``high``) chooses depth. ``fast``
-        — research + synthesis — is the default and what most calls want;
-        ``standard`` adds a falsification pass and ``high`` adds a Claude-prior
-        baseline and an evaluation pass, as explicit escalations.
+      - ``assurance`` (``research`` | ``fast`` | ``standard`` | ``high``) chooses
+        depth. ``fast`` — research + synthesis — is the default and what most
+        calls want; ``standard`` adds a falsification pass and ``high`` adds a
+        Claude-prior baseline and an evaluation pass, as explicit escalations.
+        ``research`` stops after the cross-model briefs and returns their paths
+        and cost, with no synthesis and no sidecar: the tier for a caller with no
+        local Claude seat, or one that wants to read the briefs itself.
       - ``substrates`` overrides the OpenRouter research vendors (slugs such as
         ``openai``, ``deepseek``, ``google``, ``anthropic``, ``qwen``, ``x-ai``,
         ``meta-llama``, ``mistralai``, ``perplexity``); each runs as its newest

@@ -7,6 +7,24 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The README names only commands that exist (docs).** Its batch section taught
+  `mantis status <config>`, which ADR-0010 folded into
+  `mantis monitor --snapshot <config>` in 0.2.0, and the layout trees in the
+  README and `docs/architecture.md` still listed `status` among the CLI's
+  commands. Both now name `monitor --snapshot` and the commands the app
+  registers. A new test, `tests/unit/test_doc_claims.py`, looks up every
+  `mantis <command>` and `run <stage>` the README names, and both layout lists,
+  in the typer app. No behaviour change.
+- **The `research` tool's description names the `research` assurance tier.** Its
+  `Parameters:` entry for `assurance` listed `fast | standard | high`, while the
+  input schema, the skill and the README all offer `research`, which stops after
+  the cross-model briefs and returns their paths and cost, with no synthesis and
+  no sidecar. The entry now names all four tiers and says when `research` is the
+  one to use (no local Claude seat), and a test holds it to the tier registry.
+  The input schema is unchanged.
+
 ## [0.6.0] - 2026-10-07
 
 ### Added

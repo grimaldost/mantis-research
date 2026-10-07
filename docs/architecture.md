@@ -69,7 +69,7 @@ src/mantis_research/
     ├── orchestrator.py    #   generic asyncio.TaskGroup runner
     ├── research_service.py#   run_research() — shared by CLI and MCP
     ├── transcripts.py     #   transcript persistence
-    ├── cli/               #   typer commands: run / research / status / monitor
+    ├── cli/               #   typer commands: run / research / monitor / version
     └── mcp/               #   stdio MCP server exposing the `research` tool
 ```
 
