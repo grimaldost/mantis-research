@@ -226,7 +226,10 @@ A request-level run (`mantis research`, the MCP `research` tool) also writes
 `outputs/<batch_name>/run.json` **before it dispatches anything**: the question
 and its slug, the batch name, the assurance tier, the substrate set and
 `status: "dispatching"`. When the run finishes it is rewritten with the final
-manifest and `status: "complete"`. A run whose caller walked away is therefore
+manifest and `status: "complete"` (or `"validated"` for a dry run). A run that ends on an
+exception is rewritten too, with `status: "failed"`, `ok: false`, the stages that
+finished and an `error` string, and the status tool reports it as finished with
+`ok` false. A run whose caller walked away is therefore
 still identifiable on disk — which question it was answering and whether it got
 past dispatch — rather than an orphan directory nothing can be matched to.
 

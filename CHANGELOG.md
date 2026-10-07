@@ -47,6 +47,26 @@ releases (starting with 0.1.0).
   name, so the absolute paths in the moved `run.json` do not matter).
   `research_status` still reads an old run directory wherever it is.
 
+### Fixed
+
+- **A run that ended on an exception no longer reads as `running` forever.**
+  `run_research` wrote `run.json` as `dispatching` and rewrote it only on the
+  success path, so a stage that raised (rather than returning a non-zero exit
+  code) left the record at `dispatching`. A detached run's worker thread died
+  while the server's pid lived on, and `research_status` kept answering
+  `running` for as long as that pid did. Every exit from the stage loop and the
+  manifest build now writes a terminal record before re-raising: `status:
+  "failed"`, `ok: false`, `finished_at`, the stages that completed, and an
+  `error` string (the exception's `repr`, cut to 500 characters). The write is
+  retried when Windows refuses the `replace` because a reader has the record
+  open, and uses a temporary file per writer instead of the fixed `run.json.tmp`.
+  **For callers:** `research_status` reports such a run as `state: "finished"`
+  with `ok: false` and an additive `error` field, so the state vocabulary
+  (`running` / `finished` / `abandoned` / `unknown`) is unchanged; read `ok`
+  before collecting. `resume` re-enters a failed run like any record that is not
+  `dispatching`. A record can now carry `status: "failed"` beside `complete` and
+  `validated`.
+
 ## [0.5.1] - 2026-09-13
 
 ### Changed

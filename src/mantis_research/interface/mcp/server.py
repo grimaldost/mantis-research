@@ -231,8 +231,10 @@ def _project(record: dict[str, Any]) -> dict[str, Any]:
         alive = isinstance(owner, int) and process_is_alive(owner)
         state = 'running' if alive else 'abandoned'
     else:
+        # `failed` — a run that ended on an exception — is a finished run that
+        # did not succeed, not a fifth state: the vocabulary stays closed.
         state = 'finished'
-    return {
+    projection: dict[str, Any] = {
         'state': state,
         'batch_name': record.get('batch_name'),
         'outputs_dir': record.get('outputs_dir'),
@@ -244,6 +246,9 @@ def _project(record: dict[str, Any]) -> dict[str, Any]:
         'cost': record.get('cost') or {},
         'outputs': record.get('outputs') or {},
     }
+    if record.get('error'):
+        projection['error'] = record['error']
+    return projection
 
 
 async def research_status(
@@ -260,8 +265,9 @@ async def research_status(
 ) -> dict[str, Any]:
     """Report how a run is going, without waiting for it.
 
-    Returns its state (``running`` / ``finished`` / ``abandoned`` / ``unknown``),
-    per-stage exit codes, cost so far and output paths, plus ``data_root``: the
+    Returns its state (``running`` / ``finished`` / ``abandoned`` / ``unknown``;
+    a run that ended on an exception is ``finished`` with ``ok`` false and an
+    ``error`` string), per-stage exit codes, cost so far and output paths, plus ``data_root``: the
     directory this server writes runs under (``<data_root>/outputs/<run>``). A
     finished run's full epistemic result is fetched by calling ``research`` again
     with ``resume=<outputs_dir>``, which skips the stages already done.

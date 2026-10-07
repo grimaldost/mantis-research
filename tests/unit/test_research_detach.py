@@ -15,16 +15,17 @@ the session doing the polling; a run lost with the session is re-entered with
 
 from __future__ import annotations
 
+import asyncio
 import json
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
 import pytest
 
+from mantis_research.core.paths import RunDirs
 from mantis_research.core.settings import settings
 from mantis_research.interface.mcp.server import build_server, research, research_status
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from mantis_research.interface.research_service import resume_research, run_research
 
 
 @pytest.fixture
@@ -197,3 +198,130 @@ class TestTheBlockingDefaultIsUnchanged:
         result = await research('q', dry_run=True)
         assert seen.get('blocked') is True
         assert result['question'] == 'q'
+
+
+class _StageBoomError(RuntimeError):
+    """The failure the fake synthesis stage dies with."""
+
+
+@pytest.fixture
+def dying_synthesis(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A fast-tier run whose research stage succeeds and whose synthesis dies.
+
+    The openrouter stage writes one brief under the run's output directory and
+    returns 0; the synthesis stage raises, as a stage does when its adapter
+    throws rather than returning a non-zero exit code.
+    """
+    monkeypatch.setattr(
+        'mantis_research.interface.research_service.require_local_claude_seat',
+        lambda **_: None,
+    )
+
+    def fake(stage: str, cfg: Any, **_: Any) -> int:
+        if stage == 'openrouter':
+            brief_dir = RunDirs('batch', cfg.batch_name).output('openrouter') / 'topic'
+            brief_dir.mkdir(parents=True, exist_ok=True)
+            (brief_dir / 'openai.md').write_text('a brief', encoding='utf-8')
+            return 0
+        msg = 'the synthesis adapter blew up'
+        raise _StageBoomError(msg)
+
+    monkeypatch.setattr('mantis_research.interface.cli.dispatch.dispatch_stage_config', fake)
+
+
+class TestAnExceptionLeavesATerminalRecord:
+    """A stage that raises used to leave `run.json` at `dispatching` for good.
+
+    The status tool then read it as `running` for as long as the server's pid
+    lived: a dead worker thread inside a live server, forever (T1d).
+    """
+
+    def test_the_run_re_raises_and_the_record_says_failed(
+        self, rooted: Path, dying_synthesis: None
+    ) -> None:
+        with pytest.raises(_StageBoomError):
+            run_research('q', assurance='fast', batch_name='dies-run')
+        record = json.loads(
+            (rooted / 'outputs_root' / 'dies-run' / 'run.json').read_text(encoding='utf-8')
+        )
+        assert record['status'] == 'failed'
+        assert record['ok'] is False
+        assert record['finished_at']
+        assert 'the synthesis adapter blew up' in record['error']
+        assert record['stages'] == {'openrouter': {'exit_code': 0}}
+        assert record['question'] == 'q'
+        assert record['batch_name'] == 'dies-run'
+
+    def test_a_clean_run_keeps_its_complete_record(
+        self, rooted: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            'mantis_research.interface.research_service.require_local_claude_seat',
+            lambda **_: None,
+        )
+        monkeypatch.setattr(
+            'mantis_research.interface.cli.dispatch.dispatch_stage_config', lambda *a, **k: 0
+        )
+        run_research('q', assurance='research', batch_name='clean-run')
+        record = json.loads(
+            (rooted / 'outputs_root' / 'clean-run' / 'run.json').read_text(encoding='utf-8')
+        )
+        assert record['status'] == 'complete'
+        assert 'error' not in record
+
+    def test_a_blocked_replace_is_retried(
+        self, rooted: Path, dying_synthesis: None, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # On Windows a concurrent reader (the status tool) can hold the record
+        # open, and `replace` then raises PermissionError. The terminal write is
+        # the one that must not be lost to that.
+        real = Path.replace
+        seen = {'run_record_replaces': 0}
+
+        def flaky(self: Path, target: Any) -> Any:
+            if self.parent.name == 'terminal-retry':
+                seen['run_record_replaces'] += 1
+                # The first replace is the `dispatching` write; the next two
+                # are the terminal write being refused.
+                if seen['run_record_replaces'] in (2, 3):
+                    raise PermissionError(13, 'in use')
+            return real(self, target)
+
+        monkeypatch.setattr(Path, 'replace', flaky)
+        monkeypatch.setattr('mantis_research.interface.research_service._RECORD_RETRY_PAUSE_S', 0.0)
+        with pytest.raises(_StageBoomError):
+            run_research('q', assurance='fast', batch_name='terminal-retry')
+        record = json.loads(
+            (rooted / 'outputs_root' / 'terminal-retry' / 'run.json').read_text(encoding='utf-8')
+        )
+        assert record['status'] == 'failed'
+
+
+class TestADetachedRunThatDiesIsNotRunningForever:
+    async def test_the_status_reaches_finished_with_the_error(
+        self, rooted: Path, dying_synthesis: None
+    ) -> None:
+        handle = await research('q', assurance='fast', detach=True)
+        status: dict[str, Any] = {}
+        for _ in range(100):
+            status = await research_status(handle['outputs_dir'])
+            if status['state'] != 'running':
+                break
+            await asyncio.sleep(0.05)
+        assert status['state'] == 'finished'
+        assert status['ok'] is False
+        assert 'the synthesis adapter blew up' in status['error']
+        assert status['stages'] == {'openrouter': {'exit_code': 0}}
+
+    async def test_a_polled_failure_can_be_resumed(
+        self, rooted: Path, dying_synthesis: None
+    ) -> None:
+        # `resume_research` treats any record that is not `dispatching` as
+        # re-enterable; a `failed` one must therefore be.
+        handle = await research('q', assurance='fast', detach=True)
+        for _ in range(100):
+            if (await research_status(handle['outputs_dir']))['state'] != 'running':
+                break
+            await asyncio.sleep(0.05)
+        with pytest.raises(_StageBoomError):
+            resume_research(Path(handle['outputs_dir']))

@@ -20,9 +20,12 @@ import json
 import os
 import re
 import secrets
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+import structlog
 
 from mantis_research.core import paths
 from mantis_research.core.config import load_batch_config
@@ -39,6 +42,11 @@ if TYPE_CHECKING:
 
     from mantis_research.core.progress import ProgressCallback
     from mantis_research.core.stage import SeatProbe
+
+log = structlog.get_logger(__name__)
+
+#: Longest ``error`` string a failed record carries.
+_ERROR_CHARS = 500
 
 #: The run-level record, written before dispatch and rewritten at the end. Its
 #: presence is what turns an abandoned call into an identified run.
@@ -416,10 +424,37 @@ def _write_run_record(dirs: RunDirs, record: dict[str, Any]) -> Path:
         except (OSError, ValueError):
             prior = []
     merged = {**record, 'history': [*prior, *record.get('history', [])]}
-    tmp = path.with_name(f'{RUN_RECORD_NAME}.tmp')
+    # A name per writer, not a fixed one: a second writer (a resume racing a
+    # dying worker) would otherwise truncate the file the first is replacing.
+    tmp = path.with_name(f'{RUN_RECORD_NAME}.{os.getpid()}.{secrets.token_hex(4)}.tmp')
     tmp.write_text(json.dumps(merged, indent=2), encoding='utf-8')
-    tmp.replace(path)
+    try:
+        _replace_with_retry(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     return path
+
+
+#: How many times a blocked ``replace`` is tried, and the pause between tries. On
+#: Windows ``replace`` raises ``PermissionError`` while another process (the
+#: status tool, a monitor) has the destination open for reading; the hold lasts
+#: milliseconds, and the terminal record is the one write that must not be lost
+#: to it.
+_RECORD_REPLACE_ATTEMPTS = 5
+_RECORD_RETRY_PAUSE_S = 0.1
+
+
+def _replace_with_retry(tmp: Path, path: Path) -> None:
+    for attempt in range(1, _RECORD_REPLACE_ATTEMPTS + 1):
+        try:
+            tmp.replace(path)
+        except PermissionError:
+            if attempt == _RECORD_REPLACE_ATTEMPTS:
+                raise
+            time.sleep(_RECORD_RETRY_PAUSE_S)
+        else:
+            return
 
 
 def _plugin_cache_hint(run_dir: Path) -> str:
@@ -648,12 +683,13 @@ def run_research(
         'outputs_dir': str(dirs.root()),
         'dry_run': dry_run,
     }
+    started_at = _now_iso()
     _write_run_record(
         dirs,
         {
             **identity,
             'status': 'dispatching',
-            'started_at': _now_iso(),
+            'started_at': started_at,
             # Written in so a later run can read it back and tell an owner that
             # is still working from one that is gone (MANT-B08).
             'owner_pid': os.getpid(),
@@ -672,50 +708,65 @@ def run_research(
     )
 
     results: dict[str, int] = {}
-    for index, stage in enumerate(stages, start=1):
-        emit(
-            on_event,
-            RunEvent(
-                kind='stage_start',
-                message=f'{stage} starting',
-                step=index - 1,
-                total=len(stages),
-                data={'stage': stage, 'batch_name': name},
-            ),
-        )
-        rc = dispatch_stage_config(
-            stage, cfg, dry_run=dry_run, log_level=log_level, on_event=on_event
-        )
-        results[stage] = rc
-        emit(
-            on_event,
-            RunEvent(
-                kind='stage_done',
-                message=f'{stage} finished (exit {rc})',
-                step=index,
-                total=len(stages),
-                data={'stage': stage, 'exit_code': rc, 'batch_name': name},
-            ),
-        )
-        # Research and synthesis are load-bearing — stop the pipeline if either
-        # fails (later stages depend on their outputs).
-        if rc != 0 and stage in ('openrouter', 'synthesis'):
-            break
+    # Whatever ends this function other than a `return` — a stage that raises, a
+    # manifest that cannot be built, an interrupt — must leave the record
+    # terminal. Left at `dispatching`, a dead worker inside a live server reads
+    # as `running` for as long as the server's pid lives (T1d).
+    try:
+        for index, stage in enumerate(stages, start=1):
+            emit(
+                on_event,
+                RunEvent(
+                    kind='stage_start',
+                    message=f'{stage} starting',
+                    step=index - 1,
+                    total=len(stages),
+                    data={'stage': stage, 'batch_name': name},
+                ),
+            )
+            rc = dispatch_stage_config(
+                stage, cfg, dry_run=dry_run, log_level=log_level, on_event=on_event
+            )
+            results[stage] = rc
+            emit(
+                on_event,
+                RunEvent(
+                    kind='stage_done',
+                    message=f'{stage} finished (exit {rc})',
+                    step=index,
+                    total=len(stages),
+                    data={'stage': stage, 'exit_code': rc, 'batch_name': name},
+                ),
+            )
+            # Research and synthesis are load-bearing — stop the pipeline if either
+            # fails (later stages depend on their outputs).
+            if rc != 0 and stage in ('openrouter', 'synthesis'):
+                break
 
-    manifest = _manifest(
-        question=question,
-        batch_name=name,
-        assurance=assurance,
-        slug=slug,
-        substrates=subs,
-        results=results,
-        dry_run=dry_run,
-    )
-    # `complete` means the artifacts under `outputs` are on disk. A dry run
-    # wrote none of them, so it says what it actually did: every path in the
-    # record is a destination, and only a real run turns them into evidence.
-    status = 'validated' if dry_run else 'complete'
-    _write_run_record(dirs, {**manifest, 'status': status, 'finished_at': _now_iso()})
+        manifest = _manifest(
+            question=question,
+            batch_name=name,
+            assurance=assurance,
+            slug=slug,
+            substrates=subs,
+            results=results,
+            dry_run=dry_run,
+        )
+        # `complete` means the artifacts under `outputs` are on disk. A dry run
+        # wrote none of them, so it says what it actually did: every path in the
+        # record is a destination, and only a real run turns them into evidence.
+        status = 'validated' if dry_run else 'complete'
+        _write_run_record(dirs, {**manifest, 'status': status, 'finished_at': _now_iso()})
+    except BaseException as exc:
+        _write_failed_record(
+            dirs,
+            identity,
+            results=results,
+            started_at=started_at,
+            error=exc,
+        )
+        raise
+
     emit(
         on_event,
         RunEvent(
@@ -727,6 +778,37 @@ def run_research(
         ),
     )
     return manifest
+
+
+def _write_failed_record(
+    dirs: RunDirs,
+    identity: Mapping[str, Any],
+    *,
+    results: Mapping[str, int],
+    started_at: str,
+    error: BaseException,
+) -> None:
+    """Make an exception's end of the run a terminal record, never a new failure.
+
+    The original exception is the one the caller must see, so a write that itself
+    fails is logged and dropped rather than raised over it.
+    """
+    try:
+        _write_run_record(
+            dirs,
+            {
+                **identity,
+                'status': 'failed',
+                'ok': False,
+                'stages': {stage: {'exit_code': rc} for stage, rc in results.items()},
+                'error': repr(error)[:_ERROR_CHARS],
+                'owner_pid': os.getpid(),
+                'started_at': started_at,
+                'finished_at': _now_iso(),
+            },
+        )
+    except OSError:
+        log.exception('could not write the failed run record')
 
 
 def _now_iso() -> str:
