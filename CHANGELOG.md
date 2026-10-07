@@ -17,6 +17,13 @@ releases (starting with 0.1.0).
   registers. A new test, `tests/unit/test_doc_claims.py`, looks up every
   `mantis <command>` and `run <stage>` the README names, and both layout lists,
   in the typer app. No behaviour change.
+- **The `research` tool's description names the `research` assurance tier.** Its
+  `Parameters:` entry for `assurance` listed `fast | standard | high`, while the
+  input schema, the skill and the README all offer `research`, which stops after
+  the cross-model briefs and returns their paths and cost, with no synthesis and
+  no sidecar. The entry now names all four tiers and says when `research` is the
+  one to use (no local Claude seat), and a test holds it to the tier registry.
+  The input schema is unchanged.
 
 ## [0.6.0] - 2026-10-07
 

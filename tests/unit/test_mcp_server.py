@@ -211,6 +211,25 @@ async def test_the_tool_description_gives_the_durations_the_skill_cites() -> Non
     assert 'resume=<outputs_dir>' in entry
 
 
+async def test_the_tool_description_lists_every_assurance_tier() -> None:
+    """The Parameters entry for ``assurance`` names every tier the pipeline runs.
+
+    It listed ``fast | standard | high`` and left out ``research``, the tier the
+    schema offers for a caller with no local Claude seat (review, 2026-10-07).
+    """
+    from mantis_research.interface.research_service import _TIER_STAGES
+
+    tool = next(t for t in await build_server().list_tools() if t.name == 'research')
+    description = ' '.join((tool.description or '').split())
+    start = description.index('- ``assurance``')
+    end = description.find(' - ``', start + 1)
+    entry = description[start:end]
+    assert [tier for tier in _TIER_STAGES if f'``{tier}``' not in entry] == []
+    # The research tier's meaning, in the words the schema uses for it.
+    assert 'no local Claude seat' in entry
+    assert 'no local Claude seat' in tool.input_schema['properties']['assurance']['description']
+
+
 class _RecordingContext:
     """Records what the bridge sends, in place of the SDK's request context."""
 
