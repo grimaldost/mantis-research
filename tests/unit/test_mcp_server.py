@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from mantis_research.interface.mcp.server import build_server, research
+from mantis_research.core.progress import RunEvent
+from mantis_research.interface.mcp.server import _progress_bridge, build_server, research
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     import pytest
+
+#: The input schemas both tools published before the SDK major port. The port is
+#: meant to change how the server is built, not what an agent is shown.
+SCHEMA_SNAPSHOT = Path(__file__).resolve().parents[1] / 'data' / 'mcp_tool_schemas.json'
 
 
 async def test_build_server_registers_research_tool() -> None:
@@ -20,15 +25,24 @@ async def test_build_server_registers_research_tool() -> None:
     assert 'research' in [t.name for t in tools]
 
 
+async def test_tool_input_schemas_match_the_snapshot() -> None:
+    # Compatibility oracle for SDK major upgrades: an agent's first-glance surface
+    # (parameter names, types, defaults, descriptions) must not move unnoticed.
+    # Regenerate the snapshot deliberately when a schema is meant to change.
+    tools = await build_server().list_tools()
+    live = {t.name: t.input_schema for t in tools}
+    assert live == json.loads(SCHEMA_SNAPSHOT.read_text(encoding='utf-8'))
+
+
 async def test_research_tool_schema_documents_every_parameter() -> None:
     # Agent-discoverability guard: every parameter must carry a description in the
-    # tool inputSchema — the agent's first-glance surface. Bare typed slots (no
+    # tool input_schema — the agent's first-glance surface. Bare typed slots (no
     # description) are what left `primary` / `journal` / the substrate vocabulary
     # undiscoverable to a fresh agent before 0.1.1.
     server = build_server()
     tools = await server.list_tools()
     tool = next(t for t in tools if t.name == 'research')
-    props = tool.inputSchema['properties']
+    props = tool.input_schema['properties']
     expected = {
         'question',
         'assurance',
@@ -48,7 +62,7 @@ async def test_research_tool_schema_documents_every_parameter() -> None:
 
 
 async def test_request_context_is_injected_and_not_an_agent_parameter() -> None:
-    # MANT-B01: the handler takes the FastMCP Context so it can report progress.
+    # MANT-B01: the handler takes the MCPServer Context so it can report progress.
     # The SDK must recognise it as the injected context — if it ever leaked into
     # the input schema instead, agents would be asked to supply it.
     server = build_server()
@@ -64,14 +78,14 @@ async def test_research_tool_defaults_to_fast_assurance() -> None:
     server = build_server()
     tools = await server.list_tools()
     tool = next(t for t in tools if t.name == 'research')
-    assert tool.inputSchema['properties']['assurance']['default'] == 'fast'
+    assert tool.input_schema['properties']['assurance']['default'] == 'fast'
 
 
 async def test_research_tool_assurance_description_names_the_escalations() -> None:
     server = build_server()
     tools = await server.list_tools()
     tool = next(t for t in tools if t.name == 'research')
-    description = tool.inputSchema['properties']['assurance']['description']
+    description = tool.input_schema['properties']['assurance']['description']
     assert 'default' in description.lower()
     for tier in ('fast', 'standard', 'high'):
         assert tier in description
@@ -149,12 +163,42 @@ async def test_research_tool_runs_in_live_loop_without_asyncio_error(
 async def test_research_tool_offers_a_research_only_tier() -> None:
     """MANT-B60 — the tier that works from inside a Claude Code session."""
     tool = next(t for t in await build_server().list_tools() if t.name == 'research')
-    description = tool.inputSchema['properties']['assurance']['description']
+    description = tool.input_schema['properties']['assurance']['description']
     assert 'research' in description
 
 
 async def test_research_tool_accepts_a_name() -> None:
     """MANT-B62 — a caller that prefixes shared context can name its run."""
     tool = next(t for t in await build_server().list_tools() if t.name == 'research')
-    assert 'name' in tool.inputSchema['properties']
-    assert tool.inputSchema['properties']['name']['description']
+    assert 'name' in tool.input_schema['properties']
+    assert tool.input_schema['properties']['name']['description']
+
+
+class _RecordingContext:
+    """Records what the bridge sends, in place of the SDK's request context."""
+
+    def __init__(self) -> None:
+        self.progress: list[float] = []
+        self.logged: list[str] = []
+
+    async def report_progress(
+        self, progress: float, total: float | None = None, message: str | None = None
+    ) -> None:
+        self.progress.append(progress)
+
+    async def info(self, message: str, **_: Any) -> None:
+        self.logged.append(message)
+
+
+async def test_progress_bridge_only_reports_steps_that_advance() -> None:
+    # The run emits steps 0,0,1,1,2,2 (a stage start and the previous stage's
+    # finish share a step) and the SDK requires progress to strictly increase, so
+    # the repeats must be logged but not sent as progress.
+    ctx = _RecordingContext()
+    bridge = _progress_bridge(ctx, asyncio.get_running_loop())
+    for step in (0, 0, 1, 1, 2, 2):
+        bridge(RunEvent(kind='stage_start', message=f'step {step}', step=step, total=3))
+    bridge(RunEvent(kind='waiting', message='no scale'))
+    await asyncio.sleep(0.05)
+    assert ctx.progress == [0, 1, 2]
+    assert len(ctx.logged) == 7

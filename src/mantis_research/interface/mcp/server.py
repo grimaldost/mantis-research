@@ -7,10 +7,12 @@ Start it with ``python -m mantis_research.interface.mcp``.
 Pinned ``mcp`` SDK API — probed against the installed package (spec 0002 §2 / FM-2,
 FM-B):
 
-- ``from mcp.server.fastmcp import FastMCP``; ``FastMCP(name)``.
+- ``from mcp.server.mcpserver import Context, MCPServer``; ``MCPServer(name)``. The
+  2.x rename of the 1.x ``FastMCP``, whose module no longer exists.
 - ``@server.tool()`` registers a tool; the function's type hints are the input
   schema, and a ``dict`` return annotation yields structured output (the Tool
-  carries an ``outputSchema``).
+  carries an ``output_schema``). A listed Tool's schema is ``Tool.input_schema``
+  (1.x: ``inputSchema``).
 - ``server.run(transport='stdio')`` serves over stdio.
 - ``await server.list_tools()`` is the public tool-introspection API (used by the
   §2 registration test); a synchronous ``server._tool_manager.list_tools()`` also
@@ -23,7 +25,10 @@ FM-B):
   tool's input schema (``Tool.context_kwarg``), so it never reaches the agent as
   an argument to supply.
 
-Progress is reported over that context. Before it, the whole multi-stage run hid
+Progress is reported over that context. The SDK requires each progress value to be
+strictly greater than the last one sent on the same token, and the run emits
+repeated steps (``run_named`` and ``stage_start`` share one), so the bridge drops
+a step that does not advance. Before it, the whole multi-stage run hid
 behind one ``to_thread`` await and the client saw silence from call to return —
 which a client cannot distinguish from a hang, and answers by giving up.
 """
@@ -37,7 +42,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
 import structlog
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.mcpserver import Context, MCPServer
 from pydantic import Field
 
 from mantis_research.core.sidecar import ResearchSidecar, project_for_agent
@@ -168,12 +173,18 @@ def _run_and_assemble(
     return _agent_result(manifest)
 
 
-async def _deliver(ctx: Any, event: RunEvent) -> None:
-    """Push one run event down the MCP channel (progress + log)."""
+async def _deliver(ctx: Any, event: RunEvent, *, report_progress: bool) -> None:
+    """Push one run event down the MCP channel (progress + log).
+
+    ``report_progress`` is the bridge's verdict on whether this event advances the
+    run; the log line goes out either way."""
     # Both are sent: `report_progress` is the mechanism defined for this, but it
     # no-ops when the client sent no progress token, and a log notification
     # reaches that client anyway. Between them the caller always hears something.
-    if event.step is not None and event.total:
+    # `ctx.info` is deprecated in mcp 2.x (the logging capability is going away,
+    # SEP-2577) but is still delivered, and it is the only channel a client with
+    # no progress token hears; drop it when the SDK does.
+    if report_progress:
         await ctx.report_progress(progress=event.step, total=event.total, message=event.message)
     await ctx.info(event.message)
 
@@ -186,10 +197,21 @@ def _progress_bridge(ctx: Any, loop: asyncio.AbstractEventLoop) -> ProgressCallb
     be handed back across that boundary rather than awaited in place.
     ``run_coroutine_threadsafe`` is that hand-off; the future is deliberately not
     awaited, since the run must not block on its audience.
+
+    Progress must strictly increase, but the run's steps repeat (a stage's start
+    and its predecessor's finish share one), so the highest step sent so far is
+    kept here and an event that does not exceed it is logged without a progress
+    notification. Events arrive from the one worker thread, in order.
     """
+    last_step: float = -1.0
 
     def deliver(event: RunEvent) -> None:
-        asyncio.run_coroutine_threadsafe(_deliver(ctx, event), loop)
+        nonlocal last_step
+        advances = False
+        if event.step is not None and event.total and event.step > last_step:
+            advances = True
+            last_step = event.step
+        asyncio.run_coroutine_threadsafe(_deliver(ctx, event, report_progress=advances), loop)
 
     return deliver
 
@@ -476,9 +498,9 @@ async def research(
     )
 
 
-def build_server() -> FastMCP:
+def build_server() -> MCPServer:
     """Construct the MCP server with the ``research`` tool registered."""
-    server = FastMCP(_SERVER_NAME)
+    server = MCPServer(_SERVER_NAME)
     server.tool()(research)
     server.tool()(research_status)
     return server

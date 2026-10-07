@@ -7,6 +7,23 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+### Changed
+
+- **MCP SDK 1.x → 2.x.** The server now builds on `mcp.server.mcpserver.MCPServer`
+  (the 2.x name for `FastMCP`, whose module no longer exists) and the dependency
+  floor is raised from `mcp>=1.28.1` to `mcp>=2.2,<3`, locked at 2.3.0. Callers
+  that install this package into an environment pinned to `mcp` 1.x must move to
+  2.x; the `mantis-mcp` entry point and the plugin launch command are unchanged.
+  The two tools (`research`, `research_status`) keep their names and input
+  schemas — a snapshot taken before the port is now a test, and an in-process
+  client session lists both tools and completes a `dry_run` call. The 2.x SDK
+  requires progress values to strictly increase, so the progress bridge no longer
+  sends a progress notification for a step that does not advance the run (a stage
+  start shares its step with the previous stage's finish); the log line for every
+  event is still sent. The `<3` ceiling keeps a fresh unlocked install from
+  meeting the next major's import break. Supersedes the Dependabot bump to 2.2.0,
+  which failed `ty check src` on this module.
+
 ## [0.5.1] - 2026-09-13
 
 ### Changed

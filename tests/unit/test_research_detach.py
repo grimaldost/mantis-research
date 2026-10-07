@@ -40,11 +40,11 @@ class TestTheToolSurface:
 
     async def test_detach_is_off_by_default(self) -> None:
         tool = next(t for t in await build_server().list_tools() if t.name == 'research')
-        assert tool.inputSchema['properties']['detach']['default'] is False
+        assert tool.input_schema['properties']['detach']['default'] is False
 
     async def test_the_status_tool_documents_its_argument(self) -> None:
         tool = next(t for t in await build_server().list_tools() if t.name == 'research_status')
-        assert tool.inputSchema['properties']['outputs_dir']['description']
+        assert tool.input_schema['properties']['outputs_dir']['description']
 
 
 class TestADetachedCallReturnsAHandle:

@@ -130,7 +130,7 @@ class TestBackoffHeartbeat:
 
 
 class _FakeContext:
-    """Stands in for the FastMCP request context."""
+    """Stands in for the MCPServer request context."""
 
     def __init__(self) -> None:
         self.progress: list[tuple[float, float | None, str | None]] = []
