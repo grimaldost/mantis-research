@@ -7,6 +7,8 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-07
+
 ### Fixed
 
 - **The README names only commands that exist (docs).** Its batch section taught
