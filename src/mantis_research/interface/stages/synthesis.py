@@ -21,6 +21,7 @@ from pydantic import ValidationError
 from mantis_research.core import prompts as default_prompts
 from mantis_research.core.model_policy import resolve_claude_model
 from mantis_research.core.paths import RunDirs, topic_stem
+from mantis_research.core.retrieval_overlap import extract_urls, pairwise_jaccard, render_overlap
 from mantis_research.core.sidecar import (
     SIDECAR_VERSION,
     Provenance,
@@ -213,6 +214,15 @@ def _resolve_briefs(dirs: RunDirs, topic_id: str, slug: str, primary_spec: str |
     return _Briefs(spec, None, all_secondary)
 
 
+def _retrieval_overlap(briefs: _Briefs) -> str:
+    """The cited-URL overlap of every pair of resolved briefs, as one prompt line."""
+    by_label = [
+        (label, extract_urls(path.read_text(encoding='utf-8', errors='replace')))
+        for label, path in briefs.labelled()
+    ]
+    return render_overlap(pairwise_jaccard(by_label))
+
+
 def _synthesis_prompt(
     template: str, briefs: _Briefs, primary_path: Path, synthesis_path: Path
 ) -> str:
@@ -234,6 +244,9 @@ def _synthesis_prompt(
         # stopped producing (MANT-B05).
         source_count=len(secondaries) + 1,
         substrate_list=', '.join([briefs.primary_label, *(label for label, _ in secondaries)]),
+        # Briefs citing the same URLs share retrieval, so their agreement is
+        # not independent confirmation (T5e).
+        retrieval_overlap=_retrieval_overlap(briefs),
         # Prompt-variable aliases: legacy prompts use {claude_*} / {gemini_*},
         # bound here to the resolved primary and the secondary block so every
         # existing template keeps working.

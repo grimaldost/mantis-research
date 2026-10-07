@@ -49,6 +49,22 @@ releases (starting with 0.1.0).
   seat (a new `seat_acquired` run event), and a finished or failed run's `stages`
   entries keep `started_at` and `finished_at` (and `seat_acquired_at`) beside
   `exit_code`. The manifest the `research` call returns is unchanged.
+- **The synthesis prompt shows how far the briefs share their sources.** Its
+  independence note spoke only of shared training substrate. In one 2026-09-27
+  batch, two of three briefs cited an identical set of five URLs and none of the
+  third brief's ten, so "two of three agree" was one retrieval pool against
+  another, and the synthesizer found that by counting links by hand. The
+  synthesis stage now reads the URLs each brief links (inline links, angle
+  autolinks and reference definitions; query string and fragment dropped;
+  scheme, `www.` and a trailing slash folded, the key the sidecar already merges
+  citations on) and computes the Jaccard overlap of every pair of briefs. The
+  default template's independence note prints it through a new
+  `{retrieval_overlap}` placeholder, one line such as
+  `openrouter:deepseek / openrouter:google 1.00`, and its training-substrate
+  sentence is rewritten to cover retrieval: agreement between briefs that cite
+  the same URLs is shared retrieval, not independent confirmation. A custom
+  synthesis template without the placeholder renders as before. The helper is
+  the new pure module `core/retrieval_overlap.py`.
 
 ### Changed
 

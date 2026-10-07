@@ -33,6 +33,8 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from mantis_research.core.retrieval_overlap import normalize_reference
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
@@ -286,20 +288,6 @@ class ResearchSidecar(SidecarModel):
             raise SidecarContractError(msg)
 
 
-def _normalize_reference(reference: str) -> str:
-    """Fold the spellings of one citation into a single key.
-
-    http vs https, a leading ``www.`` and a trailing slash are the same source;
-    a brief that cites it one way and another that cites it the other must not
-    read as two independent sources.
-    """
-    key = reference.strip().lower()
-    for scheme in ('https://', 'http://'):
-        key = key.removeprefix(scheme)
-    key = key.removeprefix('www.')
-    return key.rstrip('/')
-
-
 def derive_source_overlaps(
     citations: Iterable[SourceCitations],
     *,
@@ -323,7 +311,7 @@ def derive_source_overlaps(
     display: dict[str, tuple[str, CITATION_KIND]] = {}
     for entry in inventory:
         for item in entry.cited:
-            key = _normalize_reference(item.reference)
+            key = normalize_reference(item.reference)
             if not key:
                 continue
             display.setdefault(key, (item.reference, item.kind))
@@ -331,7 +319,7 @@ def derive_source_overlaps(
             if entry.substrate not in substrates:
                 substrates.append(entry.substrate)
 
-    verdict = {_normalize_reference(j.reference): j for j in judgements}
+    verdict = {normalize_reference(j.reference): j for j in judgements}
     overlaps: list[SourceOverlap] = []
     for key, substrates in cited_by.items():
         if len(substrates) < 2:

@@ -74,7 +74,22 @@ Three design notes shape its structure:
 | `{secondary_count}` / `{secondary_block}` | The secondaries, one line each with label, path and size |
 | `{source_count}` | Total briefs being merged (primary + secondaries) |
 | `{substrate_list}` | Every label in the run, comma-joined — what the independence note names |
+| `{retrieval_overlap}` | The cited-URL overlap of every pair of briefs, one line — what the independence note weighs agreement against |
 | `{synthesis_path}` | Where to write the merged brief |
+
+`{retrieval_overlap}` is measured by the runner before the turn
+(`core/retrieval_overlap.py`). It reads the URLs each brief links (inline
+links, angle autolinks and reference definitions, not bare URLs in prose),
+drops the query string and fragment, and folds scheme, `www.` and a trailing
+slash, the same key the sidecar merges citations on. It then renders the
+Jaccard overlap of each pair, primary first, for example
+`openrouter:openai / openrouter:deepseek 0.00; openrouter:openai /
+openrouter:google 0.00; openrouter:deepseek / openrouter:google 1.00`. Two
+briefs that cite no URL score 0.00. The independence note used to speak
+only of shared training substrate. In one 2026-09-27 batch, two of three
+briefs cited the same five URLs and none of the third brief's ten, so "two of
+three agree" was one retrieval pool against another, and the synthesizer found
+that by counting links by hand.
 
 A brief's label is fixed once, when the briefs are resolved: `claude`,
 `gemini`, or `openrouter:<subslug>` for an OpenRouter subsession
@@ -110,7 +125,9 @@ truth and is short enough to read directly. Its shape:
   distribution, (b) notable biases, (c) prompt-signal quality, (d)
   hallucination flags, (e) cross-brief agreement worth verifying plus the
   unverifiable named artifacts, (f) an independence note naming
-  `{substrate_list}`.
+  `{substrate_list}` and printing `{retrieval_overlap}`: agreement between
+  briefs that cite the same URLs is shared retrieval, not independent
+  confirmation.
 
 ---
 
@@ -166,7 +183,7 @@ After Turn 1 completes, the synthesis at
 | All 6 meta-observation subsections (a–f) | Yes, all populated | Missing subsection — re-emphasize in prompt |
 | Hallucination flags concrete | Each flag names a specific claim, the more credible source, the verifiable fact | Handwavy ("one brief was off somewhere") — demand named claims |
 | Co-hallucination candidates listed | Every agreed-on named artifact the briefs do not establish appears in (e) | Missing — an invented repository can reach a recommendation on agreement alone |
-| Independence note | Names the substrate set actually used; acknowledges tertiary-only independence | Missing, or naming substrates the run did not use — risk of overclaiming validation |
+| Independence note | Names the substrate set actually used; acknowledges tertiary-only independence; treats agreement between briefs with high cited-URL overlap as shared retrieval | Missing, or naming substrates the run did not use, or counting two briefs that cite the same URLs as two confirmations — risk of overclaiming validation |
 
 No worked example is carried here. The one that used to be — a two-brief
 Claude+Gemini run with per-brief byte counts — described an input shape

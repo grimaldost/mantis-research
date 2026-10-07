@@ -85,7 +85,7 @@ d) **Hallucination flags.** Cross-brief disagreement on a factual claim is the s
 
 e) **Cross-brief agreement worth verifying.** List 2-3 non-trivial claims the briefs AGREE on that name a specific fact (number, date, name, version, regulation paragraph): agreement on training-data-uniform claims is weak signal, and all of them could be wrong. Then, with no count limit, every agreed-on named artifact whose existence the briefs do not establish — the co-hallucination candidates.
 
-f) **Independence note.** This synthesis merges briefs from: {substrate_list}. Frontier models share substrate (Common Crawl, Wikipedia, GitHub, ArXiv), so this is "tertiary independence" in the MRM/IEEE 1012 sense — not the judge-level independence a programmatic verifier or a domain expert would provide. Treat the synthesis as comprehensive cross-check, not as validation.
+f) **Independence note.** This synthesis merges briefs from: {substrate_list}. The briefs share training substrate (Common Crawl, Wikipedia, GitHub, ArXiv) and, where they cite the same URLs, retrieval as well; the cited-URL overlap of each pair, measured before this turn (Jaccard: 1.00 the same URLs, 0.00 none in common or none cited), is: {retrieval_overlap}. Agreement between briefs that cite the same URLs is shared retrieval, not independent confirmation, and the whole is "tertiary independence" in the MRM/IEEE 1012 sense — not the judge-level independence a programmatic verifier or a domain expert would provide. Treat the synthesis as comprehensive cross-check, not as validation.
 
 The synthesis is the canonical reference document going forward; the individual research briefs are working notes."""
 
