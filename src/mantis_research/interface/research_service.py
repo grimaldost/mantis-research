@@ -69,6 +69,16 @@ LOCAL_SEAT_STAGES = frozenset(
 )
 
 
+#: Observed wall-clock of the research stage, in minutes (low, high): the
+#: substrates run concurrently, so it tracks the slowest. ``skills/research``
+#: states these figures and a doc-consistency test holds the prose to them.
+RESEARCH_STAGE_MINUTES = (5, 10)
+
+#: Median length of one local-seat Claude turn, in minutes (observed range 131 s
+#: to 2601 s). Cited by the skill's latency bullet and by the detach docs.
+LOCAL_SEAT_TURN_MEDIAN_MINUTES = 7
+
+
 class LocalSeatUnavailableError(RuntimeError):
     """The run needs the local ``claude`` seat and that seat is not usable.
 

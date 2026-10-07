@@ -141,9 +141,14 @@ OpenRouter research spend — the local-seat stages add time, not metered dollar
 - **Cost:** **$0.15–0.50** on the default three substrates for a focused
   technical question; $1–6 for broad or real-time ones. Measured over 20 runs.
 - **Latency:** research is 5–10 min (substrates run concurrently, so it tracks
-  the slowest). Each local-seat stage after it is a full Claude turn — 131 s to
-  2601 s observed, median about 7 min. `research` stops after the briefs, `fast`
-  adds one such turn, `standard` two, `high` four.
+  the slowest). Each local-seat turn after it is a full Claude turn — 131 s to
+  2601 s observed, median about 7 min. Counting the sidecar turn inside
+  synthesis, the turns are `research` 0, `fast` 2, `standard` 3, `high` 5, plus 1
+  when journal is on. Every run on the machine queues its local-seat turns on one
+  seat lock, so after research N questions take about N times the synthesis time
+  (observed 2026-09-27: 27 to 85 min from research done to sidecar). The
+  synthesis, journal, falsification, claude-prior and evaluation turns take the
+  lock; the sidecar turn currently does not.
 
 **A local-seat stage is silent while the model thinks, and that is normal.** It
 reports every **20 s of silence** while its child works; a run also reports when

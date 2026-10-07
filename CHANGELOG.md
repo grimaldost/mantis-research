@@ -137,6 +137,19 @@ releases (starting with 0.1.0).
   finished stage. `current_stage` and `artifacts` are additive, and a finished
   record's `stages` entries keep `exit_code` (with the stage's timings beside
   it, see Added).
+- **The skill's latency figure counts turns, not stages, and names the seat
+  queue (docs).** `skills/research` said `fast` adds one local-seat turn,
+  `standard` two and `high` four; counting the sidecar turn that runs inside
+  synthesis the counts are 0, 2, 3 and 5 (one more when the journal is on). The
+  bullet also did not say that every run on the machine queues its local-seat
+  turns on one seat lock, so N questions that finish research together take
+  about N times the synthesis time (27 to 85 minutes from research done to
+  sidecar in the field). The skill now states both, and a test derives the
+  counts from the tier registry. The research range and the median turn length
+  it quotes are now the constants `RESEARCH_STAGE_MINUTES` and
+  `LOCAL_SEAT_TURN_MEDIAN_MINUTES` in `research_service`. No behaviour change.
+  Known gap, not changed here: the sidecar turn does not take the seat lock and
+  reports no progress.
 
 ## [0.5.1] - 2026-09-13
 
