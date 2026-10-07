@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from mantis_research.core.settings import settings
 from mantis_research.interface.mcp.server import build_server, research, research_status
 
 if TYPE_CHECKING:
@@ -148,6 +149,25 @@ class TestStatusReadsWhatIsOnDisk:
         )
         status = await research_status(str(run_dir))
         assert status['sidecar'] == {'status': 'not_run', 'error': None}
+
+    async def test_the_status_names_the_data_root(
+        self, rooted: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Runs no longer live beside the plugin's code, so a caller holding a
+        # run name, or none, needs to be told where the runs are (T4e). It is
+        # reported for an unknown directory too: that is when it is most useful.
+        monkeypatch.setattr(settings, 'MANTIS_HOME', str(rooted / 'mantis-home'))
+        unknown = await research_status(str(rooted / 'outputs_root' / 'no-such-run'))
+        assert unknown['data_root'] == str(rooted / 'mantis-home')
+
+        run_dir = rooted / 'outputs_root' / 'known-run'
+        run_dir.mkdir(parents=True)
+        (run_dir / 'run.json').write_text(
+            json.dumps({'batch_name': 'known-run', 'status': 'complete', 'ok': True}),
+            encoding='utf-8',
+        )
+        known = await research_status(str(run_dir))
+        assert known['data_root'] == str(rooted / 'mantis-home')
 
 
 def _dir(rooted: Path) -> str:

@@ -134,6 +134,22 @@ block (`{ status, error }`) is the epistemic contract's own result
 server runs locally, its synthesis stages inherit your authenticated `claude`
 seat (see Requirements). Reference skill: `skills/research/SKILL.md`.
 
+### Where runs are written
+
+Runs write `outputs/`, `state/`, `logs/` and `transcripts/` under one **data
+root**. Set `MANTIS_HOME` to choose it. Without it, a plugin install writes under
+`~/.mantis`, a clone writes at its own root, and an installed tool writes in the
+working directory. `research_status` reports the root in use as `data_root`.
+
+**Plugin users upgrading from 0.5.1 or earlier:** those versions kept runs inside
+the plugin's versioned cache directory
+(`~/.claude/plugins/cache/<marketplace>/mantis-research/<version>/`), which
+goes away when Claude Code prunes that version. Copy any run you want to keep
+out first. To resume an old run, either set `MANTIS_HOME` to that version
+directory, or move its `outputs/<run>`, `state/<run>` and `transcripts/<run>`
+under the data root. Details:
+[docs/running-batches.md § Where files land](docs/running-batches.md#where-files-land).
+
 ## The epistemic sidecar
 
 Each synthesis writes `<stem>.sidecar.json` next to the markdown brief — the

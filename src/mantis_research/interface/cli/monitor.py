@@ -22,7 +22,7 @@ from typing import Annotated, Optional
 
 import typer
 
-from mantis_research.core.paths import project_root, run_state_dir
+from mantis_research.core.paths import run_state_dir, state_root
 from mantis_research.interface.cli.snapshot import print_snapshot
 
 
@@ -64,7 +64,7 @@ def monitor_cmd(
     progress_path = run_state_dir(layout, batch_name, stage) / 'progress.json'
     if not progress_path.exists() and layout == 'legacy':
         # Legacy fallback: the canonical nested state/<stage>/progress.json.
-        alt = project_root() / 'state' / stage / 'progress.json'
+        alt = state_root() / stage / 'progress.json'
         if alt.exists():
             progress_path = alt
     if not progress_path.exists():

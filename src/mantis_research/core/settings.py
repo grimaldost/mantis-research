@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     # journal-passes, falsification, evaluation, claude-prior.
     DISABLED_STAGES: str = ''
 
+    # Data root — where runs write outputs/, state/, logs/ and transcripts/.
+    # Unset: a checkout uses its repo root, a plugin run from Claude Code's
+    # versioned cache uses ~/.mantis, and an installed tool uses the working
+    # directory (core/paths.py `data_root`).
+    MANTIS_HOME: str | None = None
+
     model_config = SettingsConfigDict(
         env_file='.env',
         env_file_encoding='utf-8',

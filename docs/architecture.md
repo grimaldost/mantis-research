@@ -141,9 +141,11 @@ Two layouts, chosen per config (`runner.layout`,
 [`core/paths.py`](../src/mantis_research/core/paths.py) and a run never mixes
 layouts:
 
-- **`legacy`** (default) — the original flat directories at the project root
-  (`research-outputs*/`, `state*/`, `journals/`, …), byte-identical to what
-  every historical batch used, so old trees keep resuming (invariant I6).
+- **`legacy`** (default) — the original flat directories (`research-outputs*/`,
+  `state*/`, `journals/`, …) at the data root, which in a checkout is the
+  project root ([running-batches.md § Where files land](running-batches.md#where-files-land)),
+  byte-identical to what every historical batch used, so old trees keep
+  resuming (invariant I6).
 - **`batch`** — everything scoped under the batch name
   (`state/<batch>/<stage>/`, `outputs/<batch>/<stage>/`,
   `transcripts/<batch>/`), so runs never collide and a batch can be archived

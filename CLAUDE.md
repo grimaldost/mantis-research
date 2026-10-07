@@ -117,7 +117,8 @@ Settable in `.env`:
   instead. The package default disables nothing.
 
 Other env vars actually read at runtime: `OPENROUTER_API_KEY`,
-`OPENROUTER_BASE_URL`, `MANTIS_HTTP_REFERER`, `MANTIS_APP_TITLE`
+`OPENROUTER_BASE_URL`, `MANTIS_HTTP_REFERER`, `MANTIS_APP_TITLE`, `MANTIS_HOME`
+(the data root runs write under; `core/paths.py` `data_root`)
 (`core/settings.py`). `LOG_LEVEL` / `LOG_FORCE_JSON` are declared on
 `Settings` but nothing reads them — the log level comes from `mantis research
 --log-level` (default `INFO`); `mantis run <stage>` has no level flag. See

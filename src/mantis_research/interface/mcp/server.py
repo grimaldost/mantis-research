@@ -45,6 +45,7 @@ import structlog
 from mcp.server.mcpserver import Context, MCPServer
 from pydantic import Field
 
+from mantis_research.core import paths
 from mantis_research.core.sidecar import ResearchSidecar, project_for_agent
 from mantis_research.interface.research_service import (
     RUN_RECORD_NAME,
@@ -260,10 +261,16 @@ async def research_status(
     """Report how a run is going, without waiting for it.
 
     Returns its state (``running`` / ``finished`` / ``abandoned`` / ``unknown``),
-    per-stage exit codes, cost so far and output paths. A finished run's full
-    epistemic result is fetched by calling ``research`` again with
-    ``resume=<outputs_dir>``, which skips the stages already done.
+    per-stage exit codes, cost so far and output paths, plus ``data_root``: the
+    directory this server writes runs under (``<data_root>/outputs/<run>``). A
+    finished run's full epistemic result is fetched by calling ``research`` again
+    with ``resume=<outputs_dir>``, which skips the stages already done.
     """
+    return {**_status(outputs_dir), 'data_root': str(paths.data_root())}
+
+
+def _status(outputs_dir: str) -> dict[str, Any]:
+    """Read one run's record into the status shape (``unknown`` when it cannot)."""
     record_path = Path(outputs_dir) / RUN_RECORD_NAME
     if not record_path.exists():
         return {

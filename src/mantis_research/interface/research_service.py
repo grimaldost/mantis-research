@@ -422,6 +422,30 @@ def _write_run_record(dirs: RunDirs, record: dict[str, Any]) -> Path:
     return path
 
 
+def _plugin_cache_hint(run_dir: Path) -> str:
+    """Say how to get back a run written inside a plugin version's cache directory.
+
+    Up to 0.5.1 a plugin install kept its runs in its own versioned cache
+    directory; they now live under the data root, so the containment check
+    refuses the old ones. Both ways out work because a resume recomputes every
+    path from the run's batch name: the absolute paths in its ``run.json`` are
+    for display only.
+    """
+    batch = run_dir.name
+    old_root = run_dir.parent.parent if run_dir.parent.name == 'outputs' else None
+    if old_root is None:
+        where, source = 'MANTIS_HOME=<that version directory>', ''
+    else:
+        where, source = f'MANTIS_HOME={old_root}', f' from {old_root}'
+    return (
+        f". It sits in a plugin version's cache directory, where runs were kept "
+        f'before they moved to the data root ({paths.data_root().resolve()}). Either '
+        f'set {where} and resume again to resume it in place, or move outputs/{batch}, '
+        f'state/{batch} and transcripts/{batch}{source} under the data root and '
+        f'resume it there. Copy them out before that cache directory is pruned.'
+    )
+
+
 def resolve_resume_dir(candidate: Path) -> Path:
     """Resolve and validate a run directory offered for ``--resume``.
 
@@ -439,6 +463,8 @@ def resolve_resume_dir(candidate: Path) -> Path:
     resolved = candidate.expanduser().resolve()
     if resolved == root or root not in resolved.parents:
         msg = f'{candidate} is not inside the outputs root ({root}) — refusing to resume it'
+        if paths.in_plugin_cache(resolved):
+            msg += _plugin_cache_hint(resolved)
         raise ValueError(msg)
     if not resolved.is_dir():
         msg = f'no run directory at {resolved}'

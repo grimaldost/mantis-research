@@ -22,9 +22,11 @@ mantis_research …` is equivalent everywhere.
    evaluation / claude-prior stages drive the local `claude` CLI against your
    subscription — run where an authenticated Claude Code CLI lives.
    Research-only runs (OpenRouter) work without it.
-3. **Working directory.** All state/output directories resolve at the project
-   root in a checkout, or under the current working directory for an
+3. **Data root.** All state/output directories resolve under one data root:
+   the project root in a checkout, `~/.mantis` when the package runs from
+   Claude Code's plugin cache, or the current working directory for an
    installed tool — `cd` to where you want the run's tree before starting.
+   `MANTIS_HOME` overrides all three (see [Where files land](#where-files-land)).
 
 ## Author the config
 
@@ -161,6 +163,40 @@ status model and the cross-run rules are described in
 
 ## Where files land
 
+Every path below is relative to the **data root**, which `core/paths.py`
+`data_root()` resolves in this order:
+
+1. `MANTIS_HOME`, when it is set (environment or `.env`; `~` is expanded).
+2. `~/.mantis`, when the package runs from Claude Code's plugin cache
+   (`~/.claude/plugins/cache/…`). The cache keeps one directory per plugin
+   version, so runs kept there were left behind by each upgrade and deleted
+   when the old version was pruned.
+3. Otherwise the project root: the repository root in a checkout (unchanged),
+   or the current working directory for an installed tool.
+
+The seat lock (`state/claude-seat.lock`) sits under the same root, so every
+plugin version on the machine queues on one lock. Config files still resolve
+against the project root. The MCP `research_status` tool returns the data root
+it is using as `data_root`.
+
+**Runs from 0.5.1 and earlier in a plugin install** stayed in that version's
+cache directory (`~/.claude/plugins/cache/<marketplace>/mantis-research/<version>/`).
+`mantis research --resume` and the MCP `resume` parameter refuse such a run,
+because it is outside the new outputs root, and the refusal names two ways back:
+
+- Resume it in place: set `MANTIS_HOME` to that version directory and resume
+  again. For the plugin, the MCP server inherits the environment Claude Code
+  starts in, so set it there and restart Claude Code; unset it afterwards, or
+  new runs keep landing in the cache.
+- Move it: move or copy `outputs/<batch>`, `state/<batch>` and
+  `transcripts/<batch>` from that version directory into the same places under
+  the data root, then resume `<data root>/outputs/<batch>`. A resume recomputes
+  every path from the batch name, so the absolute paths inside the moved
+  `run.json` do not matter.
+
+Copy any run you want to keep out of the old cache directory before Claude Code
+prunes that version.
+
 Layout is per config (`runner.layout` — see
 [architecture.md](architecture.md#run-layouts)). With `legacy` (the default):
 
@@ -200,7 +236,7 @@ nothing is retyped, completed stages and topics are skipped, and a run whose
 `owner_pid` is still a live process is refused rather than run twice. Resuming
 an abandoned run appends a `dead` entry to the record's `history` before it
 starts, so the record says what happened rather than being overwritten. The
-directory offered must be strictly inside `outputs/`.
+directory offered must be strictly inside the data root's `outputs/`.
 
 ## Cost
 

@@ -151,7 +151,12 @@ research substrate, which says nothing between starting and finishing.
 **A single tool call may not outlive your client's ceiling, and a full run
 usually does.** Pass `detach: true`, poll `research_status` with the returned
 `outputs_dir`, then call `research` again with `resume=<outputs_dir>` to collect
-it — finished stages are not re-run or re-bought. Separately, no internal wait
+it — finished stages are not re-run or re-bought. `research_status` also returns
+`data_root`, the directory runs are written under (`<data_root>/outputs/<run>`):
+`~/.mantis` when the plugin runs from Claude Code's plugin cache, the repository
+root from a clone, or whatever `MANTIS_HOME` names. Runs written by 0.5.1 and
+earlier stayed in that version's cache directory; `resume` refuses one there and
+says how to get it back. Separately, no internal wait
 exceeds half `runner.caller_idle_budget_seconds` (default 1500 s), so a
 rate-limited substrate cannot sit past your window.
 

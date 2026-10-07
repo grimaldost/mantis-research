@@ -23,6 +23,29 @@ releases (starting with 0.1.0).
   event is still sent. The `<3` ceiling keeps a fresh unlocked install from
   meeting the next major's import break. Supersedes the Dependabot bump to 2.2.0,
   which failed `ty check src` on this module.
+- **Runtime data moved off the versioned plugin cache.** Run directories
+  (`outputs/`, `state/`, `logs/`, `transcripts/`) and the seat lock now sit under
+  a data root (`core/paths.py` `data_root`), separate from the project root that
+  config lookup keeps using. It resolves to `MANTIS_HOME` when that is set (a new
+  setting; `~` is expanded), to `~/.mantis` when the package runs from Claude
+  Code's plugin cache, and otherwise to the project root as before: a checkout
+  keeps writing at the repository root and an installed tool in the working
+  directory. Before this, a plugin install wrote everything inside its own
+  versioned cache directory, so each upgrade left earlier runs behind, pruning an
+  old version deleted them, and two installed versions each held their own seat
+  lock and could drive the one `claude` seat at once. Now every version queues on
+  `~/.mantis/state/claude-seat.lock`. `research_status` gains a `data_root` field
+  (additive). The legacy-layout progress fallback in `mantis monitor` reads the
+  state root rather than the project root.
+  **Migration for plugin users:** runs written by 0.5.1 and earlier stay in
+  `~/.claude/plugins/cache/<marketplace>/mantis-research/<version>/`, and Claude
+  Code removes that directory when it prunes the version, so copy out any run you
+  want to keep. Resuming one now fails the containment check, and the refusal
+  names the two ways back: set `MANTIS_HOME` to that version directory and resume
+  in place, or move `outputs/<run>`, `state/<run>` and `transcripts/<run>` under
+  the data root and resume from there (a resume rebuilds every path from the run
+  name, so the absolute paths in the moved `run.json` do not matter).
+  `research_status` still reads an old run directory wherever it is.
 
 ## [0.5.1] - 2026-09-13
 
