@@ -281,7 +281,15 @@ Mechanics that matter:
   citation inventory and, per overlapping source, whether the briefs read
   incompatible figures out of it. `derive_source_overlaps` then recomputes which
   substrates cited each source and which never did, and folds the model's
-  conflict judgement onto that. Membership is data; only the conflict is
-  judgement. This is what makes "two substrates cited the same URL and disagreed
-  about it" a computed fact rather than free text improvised into
+  judgements onto that. Membership is data; only the conflict and the source
+  check are judgement. This is what makes "two substrates cited the same URL and
+  disagreed about it" a computed fact rather than free text improvised into
   `Divergence.substrates` — a field documented for something else.
+- **`source_check` compares the briefs with the source, not with each other**
+  (ADR-0003 amendment). `figures_conflict` cannot say that two briefs agree on
+  something the source does not contain; `source_check` can, as
+  `shared_unsupported`, beside `confirmed` and `contradicted`. The prompt tells
+  the turn to carry over a verdict only where the synthesis records one for that
+  source, and otherwise to leave `not_checked`, which is also the schema default
+  and what an overlap with no model judgement reads. Neither turn can fetch a
+  page, so a verdict is never the sidecar turn's own inference.

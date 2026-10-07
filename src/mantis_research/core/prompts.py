@@ -129,7 +129,7 @@ Write ONLY valid JSON to {sidecar_path} with the Write tool — no prose, no mar
     ]}}
   ],
   "source_overlaps": [
-    {{"id": "o1", "reference": "<a source cited by more than one brief>", "figures_conflict": true, "conflict": "<what each brief read out of it, when they are incompatible>"}}
+    {{"id": "o1", "reference": "<a source cited by more than one brief>", "figures_conflict": true, "conflict": "<what each brief read out of it, when they are incompatible>", "source_check": "not_checked"}}
   ]
 }}
 
@@ -137,7 +137,9 @@ Draw the content faithfully from the synthesis's in-line divergence blocks and i
 
 `source_citations` is an inventory, one entry per research brief listed above, with that brief's label as `substrate`: what the brief actually cited, listed once each, verbatim as cited. Be exhaustive rather than selective — this is the substrate for the comparison below, so a source you omit is a comparison that cannot happen.
 
-`source_overlaps` is where this pipeline earns its cost. Two briefs citing the SAME source and reading incompatible figures out of it indicts the source, which no single-provider run can surface — set `figures_conflict` and say in `conflict` what each brief read. Only `reference`, `figures_conflict` and `conflict` are yours: which briefs cited a source is recomputed from `source_citations`, so do not list substrates here, and list an overlap only for a source that appears in the inventory.
+`source_overlaps` is where this pipeline earns its cost. Two briefs citing the SAME source and reading incompatible figures out of it indicts the source, which no single-provider run can surface — set `figures_conflict` and say in `conflict` what each brief read. Only `reference`, `figures_conflict`, `conflict` and `source_check` are yours: which briefs cited a source is recomputed from `source_citations`, so do not list substrates here, and list an overlap only for a source that appears in the inventory.
+
+`source_check` compares the briefs with the source itself, not with each other. Carry over a verdict only where the synthesis records one for that source — `confirmed` (the source says what the briefs read out of it), `contradicted` (it says something else) or `shared_unsupported` (the briefs agree on something the source does not contain) — and otherwise leave `not_checked`; never infer a verdict from the briefs agreeing.
 
 The file is parsed and validated directly: emit ONLY the JSON object, and do not add keys beyond those shown (unknown keys are rejected)."""
 

@@ -65,6 +65,27 @@ releases (starting with 0.1.0).
   the same URLs is shared retrieval, not independent confirmation. A custom
   synthesis template without the placeholder renders as before. The helper is
   the new pure module `core/retrieval_overlap.py`.
+- **Each sidecar source overlap can say whether the source supports the
+  briefs.** A `source_overlaps` entry could record that the briefs citing a
+  source disagree with each other (`figures_conflict`), but not that they agree
+  on something the source does not say. In the field on 2026-09-27, two briefs
+  cited one repository and agreed on five named items its README does not
+  contain, and the overlap read `figures_conflict: false`. `SourceOverlap` gains
+  `source_check`: `confirmed`, `contradicted`, `shared_unsupported` or
+  `not_checked`. It is model-authored, the merge carries it onto the recomputed
+  overlap by normalized reference, and it reaches the MCP result's
+  `source_overlaps`. The sidecar prompt's example shows the field, and one added
+  line tells the sidecar turn to carry over a verdict the synthesis records and
+  otherwise leave `not_checked`. Neither turn can fetch a page, so a verdict
+  exists only where the synthesis settled it from what the briefs quote; the
+  effect on real runs is checked on the next paid run. ADR-0003 gains an
+  amendment; the synthesis playbook and the skill document the field.
+  **For callers:** the field is additive with the default `not_checked`, so
+  `sidecar_version` stays 2 and every sidecar already on disk still validates.
+  Filters on `figures_conflict` are unchanged. Read `not_checked` as unknown,
+  not as clean. Every overlap a new sidecar writes carries the key, default
+  included, so a consumer that rejects unknown keys must learn it: the 0.5.1
+  schema itself forbids unknown keys and rejects such a sidecar.
 
 ### Changed
 

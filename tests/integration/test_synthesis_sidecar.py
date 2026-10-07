@@ -243,6 +243,50 @@ class TestSidecarEmission:
         assert overlap.figures_conflict is True
         assert '4.2%' in (overlap.conflict or '')
 
+    async def test_source_check_survives_the_merge_and_defaults_when_absent(
+        self, paths, tmp_path: Path
+    ) -> None:
+        # T32a: the stage rebuilds every overlap from the inventory, so a verdict
+        # the merge forgot to carry would vanish here, not in the pure helper.
+        written = json.dumps(
+            {
+                'sidecar_version': 2,
+                'source_citations': [
+                    {
+                        'substrate': 'openrouter:deepseek',
+                        'cited': [
+                            {'reference': 'https://github.com/acme/waves', 'kind': 'repository'},
+                            {'reference': 'https://bcb.gov.br/x', 'kind': 'url'},
+                        ],
+                    },
+                    {
+                        'substrate': 'openrouter:google',
+                        'cited': [
+                            {'reference': 'https://github.com/acme/waves', 'kind': 'repository'},
+                            {'reference': 'https://bcb.gov.br/x', 'kind': 'url'},
+                        ],
+                    },
+                ],
+                'source_overlaps': [
+                    {
+                        'id': 'o1',
+                        'reference': 'https://github.com/acme/waves',
+                        'source_check': 'shared_unsupported',
+                    },
+                    {'id': 'o2', 'reference': 'https://bcb.gov.br/x'},
+                ],
+            }
+        )
+        adapter = ScriptedAdapter(paths['synthesis'], paths['sidecar'], paths['journal'], [written])
+        result = await _run(adapter, _config(), tmp_path, SynthesisState(id='1', slug='t'))
+        assert result.success
+        published = json.loads(paths['sidecar'].read_text(encoding='utf-8'))
+        verdicts = {o['reference']: o['source_check'] for o in published['source_overlaps']}
+        assert verdicts == {
+            'https://github.com/acme/waves': 'shared_unsupported',
+            'https://bcb.gov.br/x': 'not_checked',
+        }
+
     async def test_provenance_filled_from_openrouter_state(
         self, paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

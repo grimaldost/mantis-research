@@ -121,13 +121,19 @@ and long free-text is clipped:
 - `verification_queue` — claims worth checking externally; each `{ id, claim,
   reason, sources_disagree }`.
 - `source_overlaps` — the sources **more than one substrate cited**; each
-  `{ id, reference, kind, substrates, not_cited_by, figures_conflict, conflict }`.
+  `{ id, reference, kind, substrates, not_cited_by, figures_conflict, conflict,
+  source_check }`.
   This is the pipeline's sharpest signal: when two substrates cite the same URL
   and read incompatible figures out of it (`figures_conflict: true`) while a
   third never cites it at all (`not_cited_by`), the *source* is suspect — a
   hallucination class no single-provider run can surface. `substrates` and
   `not_cited_by` are computed from the per-substrate citation inventory, not
-  asserted by the model.
+  asserted by the model. `source_check` compares the briefs with the source
+  rather than with each other: `confirmed`, `contradicted`, `shared_unsupported`
+  (the briefs agree on something the source does not contain, which
+  `figures_conflict: false` cannot show) or `not_checked`, the default. It is
+  set only where the synthesis recorded a check, so read `not_checked` as
+  unknown, not as clean.
 - `agreements_worth_verifying`, `coverage_notes` — lists of strings.
 - `truncated` — `{ any, claims, divergences, verification_queue, source_overlaps }`:
   how many items each list dropped by the cap. If `any` is true, read the full

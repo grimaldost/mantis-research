@@ -42,6 +42,10 @@ if TYPE_CHECKING:
 
 SUPPORT_QUALITY = Literal['direct', 'indirect', 'none']
 CITATION_KIND = Literal['url', 'repository', 'package', 'paper', 'other']
+#: The model's brief-against-source verdict on a shared source (T32a): what the
+#: source itself says against what the briefs read out of it. ``not_checked`` is
+#: the default and the honest answer when nobody read the source.
+SOURCE_CHECK = Literal['confirmed', 'contradicted', 'shared_unsupported', 'not_checked']
 
 #: The schema version the runner writes today. Older versions still validate.
 SIDECAR_VERSION = 2
@@ -144,8 +148,14 @@ class SourceOverlap(SidecarModel):
     agreed, but that two of them cited the same source and read incompatible
     figures out of it while a third never cited it at all — which indicts the
     source. ``substrates`` and ``not_cited_by`` are *derived* from the citation
-    inventory; only ``figures_conflict`` / ``conflict`` are the model's
-    judgement.
+    inventory; only ``figures_conflict`` / ``conflict`` / ``source_check`` are
+    the model's judgement.
+
+    ``figures_conflict`` compares the briefs with each other; ``source_check``
+    compares them with the source. Two briefs can agree on a detail the source
+    they share does not contain, which is ``figures_conflict: false`` and
+    ``source_check: 'shared_unsupported'``. The verdict is carried over from a
+    check the synthesis made, never inferred; ``not_checked`` is the default.
     """
 
     id: str
@@ -155,6 +165,7 @@ class SourceOverlap(SidecarModel):
     not_cited_by: list[str] = Field(default_factory=list)
     figures_conflict: bool = False
     conflict: str | None = None  # what disagreed, when figures_conflict
+    source_check: SOURCE_CHECK = 'not_checked'  # the briefs against the source (T32a)
 
 
 # ── runner-authored provenance ───────────────────────────────────────
@@ -257,7 +268,7 @@ class ResearchSidecar(SidecarModel):
     # source provenance (v2). The inventory is model-authored — only the model
     # read the briefs. The overlaps are re-derived by the runner from that
     # inventory, so membership is computed; the model's contribution to an
-    # overlap is the conflict judgement alone.
+    # overlap is its judgements alone (figures conflict and source check).
     source_citations: list[SourceCitations] = Field(default_factory=list)
     source_overlaps: list[SourceOverlap] = Field(default_factory=list)
 
@@ -299,8 +310,9 @@ def derive_source_overlaps(
     inventory, never taken from the model — that is the whole point of typing
     provenance: "two substrates cited the same URL and disagreed about it" is
     computed, not narrated. ``judgements`` supplies the model's
-    ``figures_conflict`` / ``conflict`` assessment, matched by normalized
-    reference and ignored where it names an artifact no inventory contains.
+    ``figures_conflict`` / ``conflict`` / ``source_check`` assessment, matched
+    by normalized reference and ignored where it names an artifact no inventory
+    contains; an overlap with no judgement keeps every default.
     Pure; the synthesis stage calls it at merge time.
     """
     inventory = list(citations)
@@ -335,6 +347,7 @@ def derive_source_overlaps(
                 not_cited_by=[s for s in all_substrates if s not in substrates],
                 figures_conflict=judgement.figures_conflict if judgement else False,
                 conflict=judgement.conflict if judgement else None,
+                source_check=judgement.source_check if judgement else 'not_checked',
             )
         )
     return overlaps

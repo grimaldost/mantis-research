@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+from typing import get_args
 
 import pytest
 from pydantic import ValidationError
 
+from mantis_research.core.prompts import SYNTHESIS_SIDECAR
 from mantis_research.core.sidecar import (
     SIDECAR_VERSION,
     CitedSource,
@@ -208,6 +210,168 @@ class TestSourceProvenance:
         out = project_for_agent(sc)
         assert out['source_overlaps'][0]['reference'] == 'https://bcb.gov.br/report-2025'
         assert out['truncated']['source_overlaps'] == 0
+
+
+_SHARED_UNSUPPORTED_DOC = {
+    'sidecar_version': 2,
+    'source_citations': [
+        {
+            'substrate': 'openrouter:deepseek',
+            'cited': [{'reference': 'https://github.com/acme/waves', 'kind': 'repository'}],
+        },
+        {
+            'substrate': 'openrouter:google',
+            'cited': [{'reference': 'https://github.com/acme/waves', 'kind': 'repository'}],
+        },
+    ],
+    'source_overlaps': [
+        {
+            'id': 'o1',
+            'reference': 'https://github.com/acme/waves',
+            'substrates': ['openrouter:deepseek', 'openrouter:google'],
+            'figures_conflict': False,
+            'source_check': 'shared_unsupported',
+        }
+    ],
+}
+
+
+class TestSourceCheck:
+    """T32a — a brief-against-source judgement on each overlap.
+
+    ``figures_conflict`` records briefs disagreeing with each other about a source
+    they share. It cannot record two briefs agreeing on something the source does
+    not say: in the field, two briefs cited one repository and agreed on five named
+    items its README does not contain, and the overlap carried
+    ``figures_conflict: false``, which reads as clean. ``source_check`` is where
+    that verdict goes, defaulting to ``not_checked`` so every existing sidecar
+    still validates and says nothing it did not check.
+    """
+
+    _VERDICTS = ('confirmed', 'contradicted', 'shared_unsupported', 'not_checked')
+
+    def test_the_vocabulary_is_closed_to_the_four_verdicts(self) -> None:
+        annotation = SourceOverlap.model_fields['source_check'].annotation
+        assert get_args(annotation) == self._VERDICTS
+
+    def test_a_v2_overlap_without_the_field_reads_as_not_checked(self) -> None:
+        # I4/I6: every sidecar written before the field existed still validates.
+        doc = {
+            'sidecar_version': 2,
+            'source_overlaps': [
+                {'id': 'o1', 'reference': 'https://bcb.gov.br/x', 'figures_conflict': True}
+            ],
+        }
+        sc = ResearchSidecar.model_validate_json(json.dumps(doc))
+        assert sc.source_overlaps[0].source_check == 'not_checked'
+        assert sc.source_overlaps[0].figures_conflict is True
+
+    @pytest.mark.parametrize('verdict', _VERDICTS)
+    def test_every_verdict_validates(self, verdict: str) -> None:
+        overlap = SourceOverlap(id='o1', reference='https://bcb.gov.br/x', source_check=verdict)
+        assert overlap.source_check == verdict
+
+    def test_a_shared_unsupported_verdict_round_trips(self) -> None:
+        sc = ResearchSidecar.model_validate_json(json.dumps(_SHARED_UNSUPPORTED_DOC))
+        assert sc.source_overlaps[0].source_check == 'shared_unsupported'
+        written = sc.to_json()
+        assert json.loads(written)['source_overlaps'][0]['source_check'] == 'shared_unsupported'
+        assert ResearchSidecar.model_validate_json(written) == sc
+
+    def test_the_verdict_reaches_the_agent_projection(self) -> None:
+        sc = ResearchSidecar.model_validate_json(json.dumps(_SHARED_UNSUPPORTED_DOC))
+        out = project_for_agent(sc)
+        assert out['source_overlaps'][0]['source_check'] == 'shared_unsupported'
+        # The briefs agreeing is not a figures conflict; the two fields stay apart.
+        assert out['source_overlaps'][0]['figures_conflict'] is False
+
+    def test_the_merge_keeps_the_verdict_for_a_matched_reference(self) -> None:
+        judgement = SourceOverlap(
+            id='ignored', reference='https://github.com/acme/waves/', source_check='contradicted'
+        )
+        sc = ResearchSidecar.model_validate_json(json.dumps(_SHARED_UNSUPPORTED_DOC))
+        overlaps = derive_source_overlaps(sc.source_citations, judgements=[judgement])
+        assert overlaps[0].source_check == 'contradicted'
+        assert overlaps[0].figures_conflict is False
+
+    def test_the_merge_defaults_the_verdict_for_an_unmatched_reference(self) -> None:
+        inventory = [
+            SourceCitations(
+                substrate='openrouter:openai',
+                cited=[
+                    CitedSource(reference='https://bcb.gov.br/x', kind='url'),
+                    CitedSource(reference='https://github.com/acme/waves', kind='repository'),
+                ],
+            ),
+            SourceCitations(
+                substrate='openrouter:deepseek',
+                cited=[
+                    CitedSource(reference='https://bcb.gov.br/x', kind='url'),
+                    CitedSource(reference='https://github.com/acme/waves', kind='repository'),
+                ],
+            ),
+        ]
+        judgement = SourceOverlap(
+            id='o9', reference='https://bcb.gov.br/x', source_check='confirmed'
+        )
+        overlaps = derive_source_overlaps(inventory, judgements=[judgement])
+        by_reference = {o.reference: o.source_check for o in overlaps}
+        assert by_reference == {
+            'https://bcb.gov.br/x': 'confirmed',
+            'https://github.com/acme/waves': 'not_checked',
+        }
+
+    @pytest.mark.parametrize('verdict', ['verified', 'CONFIRMED', 'unsupported', ''])
+    def test_an_unknown_verdict_is_rejected_by_the_vocabulary(self, verdict: str) -> None:
+        doc = {
+            'sidecar_version': 2,
+            'source_overlaps': [{'id': 'o1', 'reference': 'x', 'source_check': verdict}],
+        }
+        with pytest.raises(ValidationError) as exc:
+            ResearchSidecar.model_validate_json(json.dumps(doc))
+        # Rejected as a value outside the closed vocabulary, not as an unknown key.
+        (error,) = exc.value.errors()
+        assert error['type'] == 'literal_error'
+        assert error['loc'] == ('source_overlaps', 0, 'source_check')
+
+    def test_a_misspelled_key_is_still_rejected(self) -> None:
+        doc = {
+            'sidecar_version': 2,
+            'source_overlaps': [{'id': 'o1', 'reference': 'x', 'sourcecheck': 'confirmed'}],
+        }
+        with pytest.raises(ValidationError):
+            ResearchSidecar.model_validate_json(json.dumps(doc))
+
+
+class TestSidecarPromptCarriesTheVerdict:
+    """The sidecar turn is told the field exists and when to fill it (T32a)."""
+
+    def _prompt(self) -> str:
+        return SYNTHESIS_SIDECAR.format(
+            synthesis_path='/x/01-t.md',
+            sidecar_path='/x/01-t.sidecar.draft.json',
+            brief_block='- [openrouter:openai] /x/openrouter/01-t/openai.md',
+        )
+
+    def test_the_overlap_example_validates_and_shows_the_default(self) -> None:
+        (line,) = [ln for ln in self._prompt().splitlines() if '"id": "o1"' in ln]
+        SourceOverlap.model_validate_json(line.strip())  # the example obeys the schema
+        # The key is written out, not left to the default, so the turn sees it.
+        assert json.loads(line)['source_check'] == 'not_checked'
+
+    def test_the_model_owned_fields_include_the_verdict(self) -> None:
+        (sentence,) = [
+            s for s in self._prompt().split('. ') if 'are yours' in s and 'reference' in s
+        ]
+        for field in ('reference', 'figures_conflict', 'conflict', 'source_check'):
+            assert f'`{field}`' in sentence
+
+    def test_the_turn_is_told_to_carry_over_spot_checks_and_otherwise_leave_the_default(
+        self,
+    ) -> None:
+        (line,) = [ln for ln in self._prompt().splitlines() if ln.startswith('`source_check`')]
+        for verdict in ('confirmed', 'contradicted', 'shared_unsupported', 'not_checked'):
+            assert f'`{verdict}`' in line
 
 
 class TestProvenanceAggregation:

@@ -48,3 +48,36 @@ instruction and the stage grows a validate-merge-rewrite step. Downstream
 stages (falsification, evaluation) can later consume the sidecar instead of
 re-extracting claims — out of scope for this series. Cost persistence
 (spec §12) becomes a prerequisite for the runner-filled fields.
+
+## Amendment (2026-10-07): a source check on each source overlap
+
+This amendment applies the decision above; it does not change it. The field is
+additive with a default, so `sidecar_version` stays 2 (I4) and every sidecar
+already on disk still validates (I6).
+
+`source_overlaps[]` (added with v2) recorded one model judgement per shared
+source: `figures_conflict` / `conflict`, whether the briefs read incompatible
+figures out of it. That compares the briefs with each other. It has no place
+for briefs that agree with each other on something the source does not say. In
+the field, two briefs cited one repository and agreed on five named items its
+README does not contain, and the overlap carried `figures_conflict: false`,
+which reads as clean.
+
+`SourceOverlap` gains `source_check`, a closed vocabulary:
+
+- `confirmed` — the source says what the briefs read out of it;
+- `contradicted` — the source says something else;
+- `shared_unsupported` — the briefs agree on something the source does not
+  contain;
+- `not_checked` — the default; nobody compared the briefs with the source.
+
+It is model-authored, like `figures_conflict`, and `derive_source_overlaps`
+carries it onto the recomputed overlap by normalized reference; an overlap with
+no model judgement reads `not_checked`. The sidecar turn is told to carry over a
+verdict only where the synthesis records one and never to infer one from the
+briefs agreeing. Neither the synthesis turn nor the sidecar turn can fetch a
+page (both run with `Read` and `Write` only), so a verdict can exist only where
+the synthesis settled it from what the briefs quote; how often that happens is
+checked on the next paid run. A consumer that filters on `figures_conflict`
+sees no change; one that wants the brief-against-source verdict reads
+`source_check` and treats `not_checked` as "unknown", never as "fine".
