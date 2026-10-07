@@ -74,6 +74,12 @@ def _write_sidecar(tmp_path: Path) -> None:
 
 
 def _patch_run(monkeypatch: pytest.MonkeyPatch, manifest: dict[str, Any]) -> None:
+    """Make the run return ``manifest`` at once.
+
+    The fake never emits ``run_named``, so the calls below pass
+    ``detach=False``: a seat-tier call would otherwise detach (T20a) and wait
+    for a name that never comes.
+    """
     monkeypatch.setattr(
         'mantis_research.interface.mcp.server.run_research',
         lambda question, **_: manifest,
@@ -95,7 +101,7 @@ class TestABriefsOnlyRunIsRefused:
             ),
         )
         with pytest.raises(IncompleteRunError):
-            await research('q')
+            await research('q', detach=False)
 
     async def test_the_refusal_names_the_product_the_stage_and_the_way_back(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -110,7 +116,7 @@ class TestABriefsOnlyRunIsRefused:
             ),
         )
         with pytest.raises(IncompleteRunError) as caught:
-            await research('q')
+            await research('q', detach=False)
         message = str(caught.value)
         assert 'sidecar' in message  # what is missing
         assert 'synthesis' in message  # which stage did not deliver it
@@ -132,7 +138,7 @@ class TestABriefsOnlyRunIsRefused:
             ),
         )
         with pytest.raises(IncompleteRunError):
-            await research('q')
+            await research('q', detach=False)
 
 
 class TestWhatIsStillReturned:
@@ -149,7 +155,7 @@ class TestWhatIsStillReturned:
                 stages={'openrouter': {'exit_code': 0}, 'synthesis': {'exit_code': 0}},
             ),
         )
-        result = await research('q')
+        result = await research('q', detach=False)
         assert result['sidecar_available'] is True
         assert [c['id'] for c in result['claims']] == ['c1']
 
@@ -173,7 +179,7 @@ class TestWhatIsStillReturned:
                 },
             ),
         )
-        result = await research('q')
+        result = await research('q', detach=False)
         assert result['ok'] is False
         assert result['stages']['falsification']['exit_code'] == 1
 

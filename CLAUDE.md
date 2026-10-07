@@ -166,7 +166,11 @@ The tool is served to agents as a **local stdio MCP server** exposing a
   size budget via `core/sidecar.py::project_for_agent`), with synthesis + briefs
   by path. The handler takes the MCPServer `Context` (SDK-injected, absent from the
   input schema) and bridges `core/progress.py`'s `RunEvent`s onto the session's
-  loop — a run that says nothing is indistinguishable from a hang.
+  loop — a run that says nothing is indistinguishable from a hang. A call whose
+  tier uses the local seat detaches unless it passes `detach=false`
+  (`_should_detach`): the run continues in a server thread and the call returns
+  a handle; `research_status` polls it, and a `resume` of the finished run
+  collects the result in one blocking call.
 - **Plugin:** `.claude-plugin/plugin.json` bundles the server inline (launched
   via `uv run --project ${CLAUDE_PLUGIN_ROOT} python -m …mcp`); the reference
   skill is `skills/research/SKILL.md`. Install for local testing with `claude

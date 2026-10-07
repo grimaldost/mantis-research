@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 #: The input schemas both tools published before the SDK major port. The port is
 #: meant to change how the server is built, not what an agent is shown.
 SCHEMA_SNAPSHOT = Path(__file__).resolve().parents[1] / 'data' / 'mcp_tool_schemas.json'
+_ROOT = Path(__file__).resolve().parents[2]
 
 
 async def test_build_server_registers_research_tool() -> None:
@@ -172,6 +173,42 @@ async def test_research_tool_accepts_a_name() -> None:
     tool = next(t for t in await build_server().list_tools() if t.name == 'research')
     assert 'name' in tool.input_schema['properties']
     assert tool.input_schema['properties']['name']['description']
+
+
+async def test_the_tool_description_gives_the_durations_the_skill_cites() -> None:
+    """T20b — the description an agent reads first says how long a run takes.
+
+    The figures come from the constants the skill's latency bullet is held to, so
+    the two surfaces cannot quote different durations.
+    """
+    from mantis_research.interface.research_service import (
+        LOCAL_SEAT_TURN_MEDIAN_MINUTES,
+        RESEARCH_STAGE_MINUTES,
+    )
+    from tests.unit.test_agent_serving_docs import _turns_per_tier
+
+    tool = next(t for t in await build_server().list_tools() if t.name == 'research')
+    description = ' '.join((tool.description or '').split())
+    skill = ' '.join((_ROOT / 'skills' / 'research' / 'SKILL.md').read_text('utf-8').split())
+    lo, hi = RESEARCH_STAGE_MINUTES
+    # The skill writes the range with an en dash; ruff keeps one out of a docstring.
+    assert f'{lo} to {hi} min' in description
+    assert f'{lo}{chr(0x2013)}{hi} min' in skill
+    median = f'about {LOCAL_SEAT_TURN_MEDIAN_MINUTES} min'
+    assert median in description
+    assert median in skill
+
+    # The Parameters entry for detach, up to the next entry or the end.
+    start = description.index('- ``detach``')
+    end = description.find(' - ``', start + 1)
+    entry = description[start : end if end != -1 else None]
+    turns = ', '.join(
+        f'``{tier}`` {n}' for tier, n in _turns_per_tier().items() if tier != 'research'
+    )
+    assert turns in entry
+    assert 'one seat' in entry
+    assert 'subagent' in entry
+    assert 'resume=<outputs_dir>' in entry
 
 
 class _RecordingContext:

@@ -7,10 +7,15 @@ that did return in two seconds were dry runs. Progress notifications helped —
 measured on 2026-08-23 they bought each caller 216-460 s — but they cannot
 extend a call past a ceiling on its total duration.
 
-`detach=True` is additive: the blocking default is unchanged, so no existing
-caller is affected. A detached run is bound to the server's lifetime, which is
-the session doing the polling; a run lost with the session is re-entered with
-``resume``, which is what invariant I5 already provides.
+`detach` arrived as an opt-in (0.4.0). Left unset it is now chosen by tier
+(T20a): a run whose tier uses the local Claude seat detaches, because its seat
+turns alone outlast a client's ceiling, while a research-tier run and a dry run
+still block. Collecting is the other half: a ``resume`` of a finished run
+returns the result in that call whatever ``detach`` says, so poll-then-collect
+always ends in an answer rather than another handle. A detached run is bound to
+the server's lifetime, which is the session doing the polling; a run lost with
+the session is re-entered with ``resume``, which is what invariant I5 already
+provides.
 """
 
 from __future__ import annotations
@@ -28,11 +33,15 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from mantis_research.core.paths import RunDirs
+from mantis_research.core.paths import RunDirs, topic_stem
 from mantis_research.core.progress import RunEvent, emit
 from mantis_research.core.settings import settings
 from mantis_research.interface.mcp.server import build_server, research, research_status
-from mantis_research.interface.research_service import resume_research, run_research
+from mantis_research.interface.research_service import (
+    LocalSeatUnavailableError,
+    resume_research,
+    run_research,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -57,9 +66,18 @@ class TestTheToolSurface:
         names = {t.name for t in await build_server().list_tools()}
         assert names == {'research', 'research_status'}
 
-    async def test_detach_is_off_by_default(self) -> None:
+    async def test_detach_is_chosen_by_tier_unless_the_caller_says(self) -> None:
+        # T20a: unset means the automatic rule; an explicit true or false still
+        # validates, so a caller that passed a boolean before is unaffected.
         tool = next(t for t in await build_server().list_tools() if t.name == 'research')
-        assert tool.input_schema['properties']['detach']['default'] is False
+        detach = tool.input_schema['properties']['detach']
+        assert detach['default'] is None
+        assert {branch.get('type') for branch in detach['anyOf']} == {'boolean', 'null'}
+        description = detach['description']
+        assert 'uses the local Claude seat' in description
+        assert 'Pass false to block' in description
+        assert 'A resume of a finished run' in description
+        assert 'Off by default' not in description
 
     async def test_the_status_tool_documents_its_argument(self) -> None:
         tool = next(t for t in await build_server().list_tools() if t.name == 'research_status')
@@ -210,8 +228,10 @@ def _exit_codes(stages: dict[str, dict[str, Any]]) -> dict[str, Any]:
     return {stage: entry['exit_code'] for stage, entry in stages.items()}
 
 
-class TestTheBlockingDefaultIsUnchanged:
-    async def test_a_plain_call_still_returns_the_result(
+class TestWhatStillBlocks:
+    """A dry run, a research-tier run and `detach=False` return the result (T20a)."""
+
+    async def test_a_dry_run_still_returns_the_result(
         self, rooted: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         seen: dict[str, Any] = {}
@@ -233,6 +253,23 @@ class TestTheBlockingDefaultIsUnchanged:
         result = await research('q', dry_run=True)
         assert seen.get('blocked') is True
         assert result['question'] == 'q'
+
+    async def test_a_research_tier_call_returns_the_result(
+        self, rooted: Path, delivering_stages: None
+    ) -> None:
+        # No local-seat stage, so nothing in it outlasts a client's ceiling.
+        result = await research('q', assurance='research')
+        assert 'state' not in result
+        assert result['ok'] is True
+        assert result['assurance'] == 'research'
+
+    async def test_detach_false_blocks_a_seat_tier_call_and_returns_the_answer(
+        self, rooted: Path, delivering_stages: None
+    ) -> None:
+        result = await research('q', detach=False)
+        assert 'state' not in result
+        assert result['assurance'] == 'fast'
+        assert [c['id'] for c in result['claims']] == ['c1']
 
 
 class _StageBoomError(RuntimeError):
@@ -467,6 +504,137 @@ class TestALiveRunReportsItsStages:
             )
         )
         assert record['status'] == 'complete'
+
+
+_SIDECAR = {
+    'sidecar_version': 2,
+    'claims': [{'id': 'c1', 'text': 'a claim', 'support': 'direct'}],
+    'divergences': [],
+    'verification_queue': [],
+    'agreements_worth_verifying': [],
+    'coverage_notes': [],
+}
+
+
+@pytest.fixture
+def delivering_stages(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every stage succeeds at once, and the synthesis stage publishes a sidecar."""
+    monkeypatch.setattr(
+        'mantis_research.interface.research_service.require_local_claude_seat',
+        lambda **_: None,
+    )
+
+    def fake(stage: str, cfg: Any, **_: Any) -> int:
+        if stage == 'synthesis':
+            out = RunDirs('batch', cfg.batch_name).output('synthesis')
+            out.mkdir(parents=True, exist_ok=True)
+            stem = topic_stem('1', cfg.topics[0].slug)
+            (out / f'{stem}.sidecar.json').write_text(json.dumps(_SIDECAR), encoding='utf-8')
+        return 0
+
+    monkeypatch.setattr('mantis_research.interface.cli.dispatch.dispatch_stage_config', fake)
+
+
+def _abandon(outputs_dir: str) -> None:
+    """Leave a run's record at `dispatching`, owned by a process that is gone."""
+    record_path = Path(outputs_dir) / 'run.json'
+    record = json.loads(record_path.read_text(encoding='utf-8'))
+    record.update(status='dispatching', owner_pid=_exited_pid())
+    record_path.write_text(json.dumps(record), encoding='utf-8')
+
+
+class TestASeatTierCallDetachesByDefault:
+    """A plain call whose tier uses the local seat returns a handle (T20a).
+
+    The seat turns alone take longer than a client holds one call open, so the
+    blocking default was the one that failed: blocking is now the opt-in.
+    """
+
+    async def test_a_plain_fast_call_returns_a_handle_while_the_run_continues(
+        self, rooted: Path, queued_synthesis: _SeatGate
+    ) -> None:
+        handle = await research('q')
+
+        assert handle['state'] == 'running'
+        assert handle['assurance'] == 'fast'
+        assert handle['outputs_dir']
+        assert 'claims' not in handle
+        assert await asyncio.to_thread(queued_synthesis.waiting.wait, 10)
+        assert (await research_status(handle['outputs_dir']))['state'] == 'running'
+
+        queued_synthesis.release.set()
+        assert (await _until_not_running(handle['outputs_dir']))['state'] == 'finished'
+
+    @pytest.mark.parametrize('assurance', ['standard', 'high'])
+    async def test_the_deeper_seat_tiers_detach_too(
+        self, rooted: Path, queued_synthesis: _SeatGate, assurance: str
+    ) -> None:
+        handle = await research('q', assurance=assurance)
+        assert handle['state'] == 'running'
+        assert handle['assurance'] == assurance
+        queued_synthesis.release.set()
+
+    @pytest.mark.parametrize('detach', [None, True])
+    async def test_an_unusable_seat_is_raised_rather_than_hidden_behind_a_handle(
+        self, rooted: Path, monkeypatch: pytest.MonkeyPatch, detach: bool | None
+    ) -> None:
+        # The seat check runs before the run names itself. A detached call that
+        # only waited for the name answered "did not name itself" instead of
+        # the refusal that says what to fix.
+        def refuse(**_: Any) -> None:
+            msg = 'this run needs the local claude CLI seat, and that seat is not usable'
+            raise LocalSeatUnavailableError(msg)
+
+        monkeypatch.setattr(
+            'mantis_research.interface.research_service.require_local_claude_seat', refuse
+        )
+        with pytest.raises(LocalSeatUnavailableError, match='seat is not usable'):
+            await research('q', detach=detach)
+
+
+class TestAResumeOfAFinishedRunCollects:
+    """Collecting a finished run returns its result, not another handle (T20a).
+
+    A resume went through the same `if detach:` as a new run, with the call's
+    own default tier, so an automatic detach would have answered the collect
+    call with a second handle.
+    """
+
+    @pytest.mark.parametrize('detach', [None, True])
+    async def test_it_returns_the_full_result_whatever_detach_says(
+        self, rooted: Path, delivering_stages: None, detach: bool | None
+    ) -> None:
+        first = run_research('q', assurance='fast', batch_name='finished-run')
+
+        result = await research('', resume=first['outputs_dir'], detach=detach)
+
+        assert 'state' not in result
+        assert result['outputs_dir'] == first['outputs_dir']
+        assert [c['id'] for c in result['claims']] == ['c1']
+
+    async def test_an_abandoned_research_tier_run_blocks_on_its_own_tier(
+        self, rooted: Path, delivering_stages: None
+    ) -> None:
+        # The call's assurance defaults to fast and is ignored on a resume; the
+        # record's own tier decides.
+        first = run_research('q', assurance='research', batch_name='abandoned-research')
+        _abandon(first['outputs_dir'])
+
+        result = await research('', resume=first['outputs_dir'])
+
+        assert 'state' not in result
+        assert result['ok'] is True
+
+    async def test_an_abandoned_fast_run_detaches_on_its_own_tier(
+        self, rooted: Path, delivering_stages: None
+    ) -> None:
+        first = run_research('q', assurance='fast', batch_name='abandoned-fast')
+        _abandon(first['outputs_dir'])
+
+        handle = await research('', resume=first['outputs_dir'], assurance='research')
+
+        assert handle['state'] == 'running'
+        assert handle['batch_name'] == 'abandoned-fast'
 
 
 class TestStatusFallsBackToWhatIsOnDisk:

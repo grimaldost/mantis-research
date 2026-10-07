@@ -125,9 +125,10 @@ uv run python -m mantis_research.interface.mcp
 ```
 
 The agent calls the `research` tool (`question`, `assurance`, optional
-`substrates` / `primary` / `journal` / `dry_run`) and gets back the run manifest
-plus the sidecar's `claims` / `divergences` / `verification_queue` (bounded to the
-MCP result-size budget), with synthesis and briefs referenced by path. The
+`substrates` / `primary` / `journal` / `dry_run` / `name` / `resume` / `detach`)
+and gets back the run manifest plus the sidecar's `claims` / `divergences` /
+`verification_queue` (bounded to the MCP result-size budget), with synthesis and
+briefs referenced by path. The
 manifest reports two outcomes, not one: `ok` is the stages, and a `sidecar`
 block (`{ status, error }`) is the epistemic contract's own result
 ([ADR-0011](docs/adr/0011-two-outcomes-per-synthesis-run.md)). Because the
@@ -138,6 +139,15 @@ how a run is going from its `outputs_dir`; called with no argument it lists the
 runs under the data root, newest first (`state`, `age_s`, `question_slug`,
 `batch_name`; at most 50, with `truncated` counting the rest). Reference skill:
 `skills/research/SKILL.md`.
+
+A run with local-seat turns takes longer than a client will hold one tool call
+open, so a plain `fast`, `standard` or `high` call **detaches**: it returns a
+handle at once (`state: "running"`, `outputs_dir`, `batch_name`) while the run
+continues in the server. Poll `research_status` until the run is `finished`,
+then call `research` with `resume=<outputs_dir>`; a resume of a finished run
+blocks and returns the full result. A `research`-tier call and a `dry_run` block
+and return the result directly. Pass `detach: false` to block on any tier, or
+`detach: true` to detach any run.
 
 ### Where runs are written
 

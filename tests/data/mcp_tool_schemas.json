@@ -8,10 +8,17 @@
         "type": "string"
       },
       "detach": {
-        "default": false,
-        "description": "Start the run and return its identity immediately instead of waiting for it. A full run takes many minutes and can outlast the time a client will hold one tool call open; with this, poll `research_status` with the returned \"outputs_dir\", then call `research` again with `resume=<outputs_dir>` to collect the finished result. Off by default: a plain call still blocks and returns the answer.",
-        "title": "Detach",
-        "type": "boolean"
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Start the run and return its identity immediately (\"state\": \"running\", \"outputs_dir\", \"batch_name\") instead of waiting for it. A run with local-seat turns takes many minutes and outlasts the time a client will hold one tool call open; poll `research_status` with the returned \"outputs_dir\", then call `research` again with `resume=<outputs_dir>` to collect the finished result. Leave it unset to choose by tier: a run whose tier uses the local Claude seat (\"fast\", \"standard\", \"high\") detaches, and a \"research\"-tier run or a dry run blocks and returns the result. Pass false to block on any tier, or true to detach any run. A resume of a finished run is a collect: it blocks and returns the result whatever this says.",
+        "title": "Detach"
       },
       "dry_run": {
         "default": false,
@@ -44,7 +51,7 @@
       },
       "resume": {
         "default": "",
-        "description": "Re-enter an interrupted run instead of starting a new one: pass its output directory (the \"outputs_dir\" of the run you lost, e.g. \"outputs/research-my-question-20260811T101500Z\"). Stages that already finished are skipped, and the question and settings come from that run's own record, so \"question\" is ignored.",
+        "description": "Re-enter an interrupted run instead of starting a new one: pass its output directory (the \"outputs_dir\" of the run you lost, e.g. \"outputs/research-my-question-20260811T101500Z\"). Stages that already finished are skipped, and the question and settings come from that run's own record, so \"question\" is ignored. Pass a finished run's directory to collect its result: that call blocks whatever \"detach\" says.",
         "title": "Resume",
         "type": "string"
       },

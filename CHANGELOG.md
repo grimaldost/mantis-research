@@ -89,6 +89,32 @@ releases (starting with 0.1.0).
   the data root and resume from there (a resume rebuilds every path from the run
   name, so the absolute paths in the moved `run.json` do not matter).
   `research_status` still reads an old run directory wherever it is.
+- **A plain `research` call to a seat tier detaches, and a resume of a finished
+  run collects.** `detach` was off by default, so a plain `fast`, `standard` or
+  `high` call blocked for the whole run: research takes 5–10 min, then each
+  local-seat turn about 7 min (median), queued on one seat for every run on the
+  machine, which outlasts what an MCP client holds one tool call open for.
+  `detach` is now `boolean | null` with default `null`, which means automatic: a
+  run whose tier includes a local-seat stage detaches, and a `research`-tier run
+  or a dry run blocks as before. An explicit `true` or `false` is honoured as
+  before. A `resume` of a run whose record is terminal (anything but
+  `dispatching`) is a collect: it blocks and returns the full result whatever
+  `detach` says, where `detach=true` used to answer it with another handle. A
+  resume of an abandoned run detaches or blocks by the tier in its record, not
+  the call's `assurance`. A run refused before it names itself (an unusable seat,
+  an invalid argument) now raises that refusal from a detached call as well,
+  instead of "did not name itself within 30s". The tool description gains a
+  `detach` entry with those durations, held by a test to the constants
+  `RESEARCH_STAGE_MINUTES` and `LOCAL_SEAT_TURN_MEDIAN_MINUTES` that the skill
+  cites, and says a subagent caller keeps the detached default and collects with
+  `resume`.
+  **For callers:** a plain `fast`, `standard` or `high` call now returns a
+  handle (`state: "running"`, `outputs_dir`, `batch_name`, the run's identity
+  and a `seat` block) instead of the result. Poll `research_status` until the
+  run is `finished`, then call `research(resume=<outputs_dir>)` to collect it,
+  or pass `detach=false` to block as before. Callers that already pass
+  `detach` see no change, except that a resume of a finished run now always
+  returns the result.
 
 ### Fixed
 

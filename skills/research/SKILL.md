@@ -65,7 +65,16 @@ Arguments:
   `outputs/research-my-question-20260811T101500Z`). Stages that already finished
   are skipped, and the question and settings come from that run's own record, so
   `question` is ignored. Cheaper and more faithful than re-asking: the per-model
-  briefs a lost run already paid for are reused rather than bought again.
+  briefs a lost run already paid for are reused rather than bought again. Passed
+  a finished run, it is the **collect** call: it returns that run's result in
+  the same call, whatever `detach` says.
+- `detach` — whether the call returns the run's identity at once instead of the
+  result. Leave it unset and the tier decides: a `fast`, `standard` or `high`
+  run detaches, because its local-seat turns outlast what a client will hold one
+  call open for, and a `research`-tier run or a dry run blocks and returns the
+  result. Pass `detach: false` to block on any tier (the call then lasts the
+  whole run), or `detach: true` to detach any run. Collecting a detached run is
+  described under [Cost & latency](#cost--latency).
 
 ## What comes back
 
@@ -156,17 +165,28 @@ it is named, at each stage boundary, per substrate, every 5 s while queued for
 the seat, and through any backoff. The one genuinely quiet stretch is a single
 research substrate, which says nothing between starting and finishing.
 
-**A single tool call may not outlive your client's ceiling, and a full run
-usually does.** Pass `detach: true`, poll `research_status` with the returned
-`outputs_dir`, then call `research` again with `resume=<outputs_dir>` to collect
-it — finished stages are not re-run or re-bought. `research_status` also returns
-`data_root`, the directory runs are written under (`<data_root>/outputs/<run>`):
-`~/.mantis` when the plugin runs from Claude Code's plugin cache, the repository
-root from a clone, or whatever `MANTIS_HOME` names. Runs written by 0.5.1 and
-earlier stayed in that version's cache directory; `resume` refuses one there and
-says how to get it back. Separately, no internal wait
-exceeds half `runner.caller_idle_budget_seconds` (default 1500 s), so a
-rate-limited substrate cannot sit past your window.
+**A plain call to a seat tier returns a handle; collect the answer with
+`resume`.** A single tool call may not outlive your client's ceiling, and a run
+with local-seat turns usually does, so a `fast`, `standard` or `high` call
+detaches unless you pass `detach: false`. It returns at once with `state:
+"running"`, `outputs_dir`, `batch_name`, the run's `question`, `assurance` and
+`substrates`, and the `seat` block described below, but no epistemic payload.
+Poll `research_status` with the `outputs_dir` until `state` is `finished`, then
+call `research` with `resume=<outputs_dir>`: a resume of a finished run returns
+the full result in that call whatever `detach` says, and finished stages are not
+re-run or re-bought (a stage that failed is re-run first, so read `ok` before
+collecting). A run left `abandoned` by a server that went away is re-entered by
+the same call, which detaches or blocks by that run's own tier. A subagent
+calling this tool keeps the detached default and collects this way; pass
+`detach: true` to detach a `research`-tier run as well.
+
+`research_status` also returns `data_root`, the directory runs are written under
+(`<data_root>/outputs/<run>`): `~/.mantis` when the plugin runs from Claude
+Code's plugin cache, the repository root from a clone, or whatever `MANTIS_HOME`
+names. Runs written by 0.5.1 and earlier stayed in that version's cache
+directory; `resume` refuses one there and says how to get it back. Separately,
+no internal wait exceeds half `runner.caller_idle_budget_seconds` (default
+1500 s), so a rate-limited substrate cannot sit past your window.
 
 **Reading a poll.** While a run is in flight, `research_status` answers `state:
 "running"` and its `stages` map fills in as the run goes. Each entry carries
@@ -260,6 +280,9 @@ Ask for a default (`fast`) run:
 
 > Use the research tool with question "What changed in ISO 20022 migration for
 > Brazilian banks in 2025?".
+
+It returns a handle at once; poll `research_status` and collect the result with
+`resume=<outputs_dir>` as described under [Cost & latency](#cost--latency).
 
 Escalate only when the extra checking earns its Claude-seat time:
 

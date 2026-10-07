@@ -52,6 +52,7 @@ from mantis_research.core.sidecar import ResearchSidecar, project_for_agent
 from mantis_research.interface.research_service import (
     RUN_RECORD_NAME,
     missing_product,
+    resolve_resume_dir,
     resume_research,
     run_research,
     seat_report,
@@ -425,6 +426,30 @@ def _read_record(record_path: Path) -> dict[str, Any]:
             return record
 
 
+def _should_detach(detach: bool | None, *, assurance: str, dry_run: bool, resume: str) -> bool:
+    """Whether this call returns a handle instead of the result (T20a).
+
+    A resume of a run whose record is terminal is a collect, and a collect
+    returns the result whatever ``detach`` says: answering it with another
+    handle would leave the caller polling a run that is already finished. A
+    record that cannot be read also blocks, so the resume's own refusal reaches
+    the caller. Otherwise an explicit ``detach`` is honoured, and unset it
+    detaches exactly the runs that will queue for the local seat, judged on the
+    tier the run will actually use: on a resume, the record's, not the call's.
+    """
+    if resume:
+        try:
+            record = _read_record(resolve_resume_dir(Path(resume)) / RUN_RECORD_NAME)
+        except (OSError, ValueError):
+            return False
+        if record.get('status') != 'dispatching':
+            return False
+        assurance = str(record.get('assurance') or 'fast')
+    if detach is not None:
+        return detach
+    return uses_local_seat(assurance, dry_run=dry_run)
+
+
 def _detach(
     question: str,
     *,
@@ -452,6 +477,7 @@ def _detach(
     """
     started = threading.Event()
     identity: dict[str, Any] = {}
+    refused: list[Exception] = []
 
     def note(event: RunEvent) -> None:
         if event.kind == 'run_named' and not identity:
@@ -471,6 +497,12 @@ def _detach(
                 resume=resume,
                 on_event=note,
             )
+        except Exception as exc:
+            # Before the run names itself, a failure is the caller's answer:
+            # the seat check and argument validation run there.
+            if not identity:
+                refused.append(exc)
+            log.exception('detached run failed')
         except BaseException:  # the thread must never take the server down
             log.exception('detached run failed')
         finally:
@@ -482,10 +514,12 @@ def _detach(
     # the config to build — not for the research to happen.
     started.wait(timeout=_NAMING_TIMEOUT_S)
     if not identity:
+        if refused:
+            raise refused[0]
         msg = (
             'the detached run did not name itself within '
             f'{_NAMING_TIMEOUT_S:.0f}s — it failed before dispatch. Re-run '
-            'without detach to see the error.'
+            'with detach=false to see the error.'
         )
         raise RuntimeError(msg)
     handle: dict[str, Any] = {'state': 'running', **identity}
@@ -547,19 +581,24 @@ async def research(
         Field(description='Validate orchestration without spending any model calls.'),
     ] = False,
     detach: Annotated[
-        bool,
+        bool | None,
         Field(
             description=(
-                'Start the run and return its identity immediately instead of '
-                'waiting for it. A full run takes many minutes and can outlast '
-                'the time a client will hold one tool call open; with this, poll '
+                'Start the run and return its identity immediately ("state": '
+                '"running", "outputs_dir", "batch_name") instead of waiting for '
+                'it. A run with local-seat turns takes many minutes and outlasts '
+                'the time a client will hold one tool call open; poll '
                 '`research_status` with the returned "outputs_dir", then call '
                 '`research` again with `resume=<outputs_dir>` to collect the '
-                'finished result. Off by default: a plain call still blocks and '
-                'returns the answer.'
+                'finished result. Leave it unset to choose by tier: a run whose '
+                'tier uses the local Claude seat ("fast", "standard", "high") '
+                'detaches, and a "research"-tier run or a dry run blocks and '
+                'returns the result. Pass false to block on any tier, or true to '
+                'detach any run. A resume of a finished run is a collect: it '
+                'blocks and returns the result whatever this says.'
             )
         ),
-    ] = False,
+    ] = None,
     name: Annotated[
         str,
         Field(
@@ -579,7 +618,9 @@ async def research(
                 'its output directory (the "outputs_dir" of the run you lost, e.g. '
                 '"outputs/research-my-question-20260811T101500Z"). Stages that '
                 'already finished are skipped, and the question and settings come '
-                'from that run\'s own record, so "question" is ignored.'
+                'from that run\'s own record, so "question" is ignored. Pass a '
+                "finished run's directory to collect its result: that call "
+                'blocks whatever "detach" says.'
             )
         ),
     ] = '',
@@ -592,7 +633,8 @@ async def research(
     sidecar's claims, cross-model divergences, and verification queue. The
     synthesis / falsification / evaluation / journal stages drive a local
     authenticated ``claude`` CLI (ADR-0009); research-only runs need only an
-    ``OPENROUTER_API_KEY``.
+    ``OPENROUTER_API_KEY``. A plain call to a tier that uses that seat returns a
+    handle first and the result on the collect call (see ``detach``).
 
     Parameters:
       - ``assurance`` (``fast`` | ``standard`` | ``high``) chooses depth. ``fast``
@@ -614,13 +656,29 @@ async def research(
       - ``dry_run`` validates orchestration without spending model calls.
       - ``resume`` re-enters an interrupted run by its output directory instead
         of starting a new one; completed stages are skipped and the question and
-        settings are read from that run's own record.
+        settings are read from that run's own record. On a finished run it is
+        the collect call, and returns the result.
+      - ``detach`` returns the run's identity at once (``state``,
+        ``outputs_dir``, ``batch_name``) instead of the result. Unset, it is
+        chosen by tier: a run that uses the local Claude seat detaches, and a
+        ``research``-tier run or a dry run blocks; pass ``false`` to block or
+        ``true`` to detach. Research takes 5 to 10 min. Each local-seat turn after
+        it takes about 7 min (median), and every run on the machine queues those
+        turns on one seat; the turns per tier are ``fast`` 2, ``standard`` 3,
+        ``high`` 5, plus 1 with ``journal``. A subagent, or any caller whose
+        tool call can be cut off, keeps the detached default: poll
+        ``research_status``, then collect with ``resume=<outputs_dir>``. A
+        resume of a finished run blocks and returns the result whatever
+        ``detach`` says.
     """
     # dispatch_stage_config nests asyncio.run per stage, so the synchronous
     # pipeline must run OFF this event loop or it raises RuntimeError (FM-1).
     # The bridge is built here, on the loop, and closes over it: the worker
     # thread hands events back rather than touching the session directly.
-    if detach:
+    # Off the loop: on a resume the decision reads the run's record.
+    if await asyncio.to_thread(
+        _should_detach, detach, assurance=assurance, dry_run=dry_run, resume=resume
+    ):
         return _detach(
             question,
             assurance=assurance,
