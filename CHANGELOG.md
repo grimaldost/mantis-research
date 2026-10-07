@@ -7,6 +7,8 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-07
+
 ### Added
 
 - **`research_status` with no argument lists the runs.** A caller that had lost a
