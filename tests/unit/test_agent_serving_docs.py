@@ -76,3 +76,8 @@ class TestTheSkillDoesNotOverstateLiveness:
         skill = _skill()
         assert 'detach: true' in skill
         assert 'research_status' in skill
+
+    def test_the_quoted_seat_sample_is_the_one_the_code_reads(self) -> None:
+        from mantis_research.interface.research_service import SEAT_SAMPLE_RUNS
+
+        assert f'the {SEAT_SAMPLE_RUNS} most recent finished runs' in _skill()

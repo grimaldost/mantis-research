@@ -20,6 +20,7 @@ import json
 import os
 import threading
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -197,6 +198,10 @@ def _dir(rooted: Path) -> str:
     return str(next((rooted / 'outputs_root').iterdir()))
 
 
+def _exit_codes(stages: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    return {stage: entry['exit_code'] for stage, entry in stages.items()}
+
+
 class TestTheBlockingDefaultIsUnchanged:
     async def test_a_plain_call_still_returns_the_result(
         self, rooted: Path, monkeypatch: pytest.MonkeyPatch
@@ -270,7 +275,7 @@ class TestAnExceptionLeavesATerminalRecord:
         assert record['ok'] is False
         assert record['finished_at']
         assert 'the synthesis adapter blew up' in record['error']
-        assert record['stages'] == {'openrouter': {'exit_code': 0}}
+        assert _exit_codes(record['stages']) == {'openrouter': 0}
         assert record['question'] == 'q'
         assert record['batch_name'] == 'dies-run'
 
@@ -333,7 +338,7 @@ class TestADetachedRunThatDiesIsNotRunningForever:
         assert status['state'] == 'finished'
         assert status['ok'] is False
         assert 'the synthesis adapter blew up' in status['error']
-        assert status['stages'] == {'openrouter': {'exit_code': 0}}
+        assert _exit_codes(status['stages']) == {'openrouter': 0}
 
     async def test_a_polled_failure_can_be_resumed(
         self, rooted: Path, dying_synthesis: None
@@ -443,7 +448,11 @@ class TestALiveRunReportsItsStages:
         queued_synthesis.release.set()
         status = await _until_not_running(handle['outputs_dir'])
         assert status['state'] == 'finished'
-        assert status['stages'] == {'openrouter': {'exit_code': 0}, 'synthesis': {'exit_code': 0}}
+        assert _exit_codes(status['stages']) == {'openrouter': 0, 'synthesis': 0}
+        # A finished entry keeps when its stage ran, and drops the live `state`.
+        for entry in status['stages'].values():
+            assert entry['started_at'] <= entry['finished_at']
+            assert 'state' not in entry
         record = json.loads(
             (rooted / 'outputs_root' / handle['batch_name'] / 'run.json').read_text(
                 encoding='utf-8'
@@ -531,3 +540,231 @@ class TestStatusFallsBackToWhatIsOnDisk:
         )
         status = await research_status(str(run_dir))
         assert status['artifacts'] == {'briefs': [], 'synthesis': [], 'sidecar': []}
+
+
+def _iso(at: datetime) -> str:
+    return at.isoformat()
+
+
+def _finished_run(root: Path, name: str, *, seat_turn_s: float, ago_s: float = 3600.0) -> None:
+    """A complete run record whose synthesis held the seat for ``seat_turn_s``."""
+    took = datetime.now(UTC) - timedelta(seconds=ago_s)
+    run_dir = root / 'outputs_root' / name
+    run_dir.mkdir(parents=True)
+    (run_dir / 'run.json').write_text(
+        json.dumps(
+            {
+                'question': 'q',
+                'batch_name': name,
+                'status': 'complete',
+                'ok': True,
+                'stages': {
+                    'openrouter': {'exit_code': 0},
+                    'synthesis': {
+                        'exit_code': 0,
+                        'started_at': _iso(took - timedelta(seconds=30)),
+                        'seat_acquired_at': _iso(took),
+                        'finished_at': _iso(took + timedelta(seconds=seat_turn_s)),
+                    },
+                },
+            }
+        ),
+        encoding='utf-8',
+    )
+
+
+def _hold_the_seat(root: Path, *, owner: str, for_s: float) -> Path:
+    """Stamp the seat lock as held by this live test process for ``for_s`` so far."""
+    lock = root / 'state_root' / 'claude-seat.lock'
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    since = datetime.now(UTC) - timedelta(seconds=for_s)
+    lock.write_text(
+        json.dumps({'pid': os.getpid(), 'owner': owner, 'at': _iso(since)}), encoding='utf-8'
+    )
+    return lock
+
+
+def _queue_behind(lock: Path, owner: str) -> None:
+    """Leave the ticket a run waiting on ``lock`` holds, as ``seat_lock`` does."""
+    waiters = lock.with_name(f'{lock.name}.waiters')
+    waiters.mkdir(parents=True, exist_ok=True)
+    token = owner.replace('/', '_').replace(':', '_')
+    (waiters / f'{os.getpid()}-{token}.json').write_text(
+        json.dumps({'pid': os.getpid(), 'owner': owner, 'since': 'now'}), encoding='utf-8'
+    )
+
+
+def _waiting_run(root: Path, name: str) -> Path:
+    """A live run whose synthesis stage is waiting."""
+    run_dir = root / 'outputs_root' / name
+    run_dir.mkdir(parents=True)
+    (run_dir / 'run.json').write_text(
+        json.dumps(
+            {
+                'question': 'q',
+                'batch_name': name,
+                'status': 'dispatching',
+                'owner_pid': os.getpid(),
+                'current_stage': 'synthesis',
+                'stages': {
+                    'openrouter': {'state': 'done', 'exit_code': 0},
+                    'synthesis': {'state': 'waiting', 'exit_code': None, 'started_at': 'x'},
+                },
+            }
+        ),
+        encoding='utf-8',
+    )
+    return run_dir
+
+
+class TestAQueuedRunReportsTheSeat:
+    """How many runs wait on the seat, and when this one can expect it (T1f).
+
+    A queued run said only `waiting`: nothing about how long, so a collector
+    could not tell a short queue from a stuck one. The lock has no order (any
+    waiter may win the next 5 s poll), so a count and a range are all that can
+    be promised: the early bound assumes this run goes next, the late bound
+    that every other waiter goes first.
+    """
+
+    async def test_each_waiter_sees_the_queue_and_a_range_from_the_median(
+        self, rooted: Path
+    ) -> None:
+        for name, seconds in (('run-a', 200.0), ('run-b', 300.0), ('run-c', 400.0)):
+            _finished_run(rooted, name, seat_turn_s=seconds)  # median 300 s
+        lock = _hold_the_seat(rooted, owner='holder-run/synthesis:1', for_s=60.0)
+        waiters = ('first-waiter', 'second-waiter')
+        for name in waiters:
+            _waiting_run(rooted, name)
+            _queue_behind(lock, f'{name}/synthesis:1')
+
+        for name in waiters:
+            status = await research_status(str(rooted / 'outputs_root' / name))
+            seat = status['seat']
+            assert seat['waiting'] == 2
+            assert seat['holder'] == 'holder-run/synthesis:1'
+            early, late = seat['expected_start_s']
+            # 300 s median less the holder's 60 s so far; the clock ran on a little.
+            assert 230 <= early <= 240
+            assert late - early == 300  # one other waiter, one median turn
+            assert seat['reason'] is None
+
+    async def test_with_no_measured_turn_the_range_is_null_with_a_reason(
+        self, rooted: Path
+    ) -> None:
+        lock = _hold_the_seat(rooted, owner='holder-run/synthesis:1', for_s=60.0)
+        _waiting_run(rooted, 'lone-waiter')
+        _queue_behind(lock, 'lone-waiter/synthesis:1')
+
+        seat = (await research_status(str(rooted / 'outputs_root' / 'lone-waiter')))['seat']
+
+        assert seat['waiting'] == 1
+        assert seat['expected_start_s'] is None
+        assert seat['reason']
+
+    async def test_a_run_backing_off_rather_than_queued_has_no_seat_block(
+        self, rooted: Path
+    ) -> None:
+        # A stage's `waiting` also covers a rate-limit backoff; only a run that
+        # holds a ticket is queued for the seat.
+        _hold_the_seat(rooted, owner='holder-run/synthesis:1', for_s=60.0)
+        _waiting_run(rooted, 'backing-off')
+        status = await research_status(str(rooted / 'outputs_root' / 'backing-off'))
+        assert status['state'] == 'running'
+        assert 'seat' not in status
+
+    async def test_only_turns_that_held_the_seat_are_measured(self, rooted: Path) -> None:
+        _finished_run(rooted, 'measured', seat_turn_s=300.0)
+        # A dry run, a failed run and a stage that never took the seat (skipped
+        # on a resume) say nothing about how long a seat turn lasts.
+        now = _iso(datetime.now(UTC))
+        others: tuple[tuple[str, str, dict[str, Any]], ...] = (
+            ('dry', 'validated', {'exit_code': 0, 'seat_acquired_at': now, 'finished_at': now}),
+            ('broke', 'failed', {'exit_code': 1}),
+            ('resumed', 'complete', {'exit_code': 0, 'started_at': now, 'finished_at': now}),
+        )
+        for name, status, synthesis in others:
+            run_dir = rooted / 'outputs_root' / name
+            run_dir.mkdir(parents=True)
+            (run_dir / 'run.json').write_text(
+                json.dumps(
+                    {'batch_name': name, 'status': status, 'stages': {'synthesis': synthesis}}
+                ),
+                encoding='utf-8',
+            )
+        lock = _hold_the_seat(rooted, owner='holder-run/synthesis:1', for_s=0.0)
+        _waiting_run(rooted, 'waiter')
+        _queue_behind(lock, 'waiter/synthesis:1')
+
+        seat = (await research_status(str(rooted / 'outputs_root' / 'waiter')))['seat']
+
+        early, late = seat['expected_start_s']
+        assert 290 <= early <= 300
+        assert late == early
+
+
+class TestADetachedHandleReportsTheSeat:
+    @pytest.fixture(autouse=True)
+    def _instant_stages(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            'mantis_research.interface.research_service.require_local_claude_seat',
+            lambda **_: None,
+        )
+        monkeypatch.setattr(
+            'mantis_research.interface.cli.dispatch.dispatch_stage_config', lambda *a, **k: 0
+        )
+
+    async def test_the_handle_carries_the_queue_this_run_would_join(self, rooted: Path) -> None:
+        for name, seconds in (('run-a', 200.0), ('run-b', 300.0), ('run-c', 400.0)):
+            _finished_run(rooted, name, seat_turn_s=seconds)
+        lock = _hold_the_seat(rooted, owner='holder-run/synthesis:1', for_s=60.0)
+        _queue_behind(lock, 'other-run/synthesis:1')
+
+        handle = await research('q', assurance='fast', detach=True)
+
+        seat = handle['seat']
+        assert seat['waiting'] == 1
+        assert seat['holder'] == 'holder-run/synthesis:1'
+        early, late = seat['expected_start_s']
+        assert 230 <= early <= 240
+        # Joining now, this run would sit behind the one already waiting.
+        assert late - early == 300
+
+    async def test_a_research_only_handle_has_no_seat_block(self, rooted: Path) -> None:
+        handle = await research('q', assurance='research', detach=True)
+        assert 'seat' not in handle
+
+
+class TestAFinishedRunRecordsItsSeatTurn:
+    def test_the_record_keeps_when_each_stage_ran_and_took_the_seat(
+        self, rooted: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            'mantis_research.interface.research_service.require_local_claude_seat',
+            lambda **_: None,
+        )
+
+        def fake(stage: str, cfg: Any, *, on_event: Any = None, **_: Any) -> int:
+            if stage == 'synthesis':
+                emit(on_event, RunEvent(kind='waiting', message='queued', data={'seat_pid': 1}))
+                emit(
+                    on_event,
+                    RunEvent(
+                        kind='seat_acquired',
+                        message='took the seat',
+                        data={'seat_owner': f'{cfg.batch_name}/synthesis:1'},
+                    ),
+                )
+            return 0
+
+        monkeypatch.setattr('mantis_research.interface.cli.dispatch.dispatch_stage_config', fake)
+        run_research('q', assurance='fast', batch_name='timed-run')
+
+        record = json.loads(
+            (rooted / 'outputs_root' / 'timed-run' / 'run.json').read_text(encoding='utf-8')
+        )
+        synthesis = record['stages']['synthesis']
+        assert synthesis['exit_code'] == 0
+        assert synthesis['started_at'] <= synthesis['seat_acquired_at'] <= synthesis['finished_at']
+        assert 'seat_acquired_at' not in record['stages']['openrouter']
+        assert record['stages']['openrouter']['exit_code'] == 0

@@ -7,6 +7,35 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+### Added
+
+- **A run queued for the local seat says how many runs are waiting and when it
+  can expect its turn.** A queued run reported only `waiting`, with nothing about
+  how long: in the field on 2026-09-27, runs that had finished research at 11:35
+  and 12:22 were still queued at 13:15, and a caller could not tell a long queue
+  from a stuck run. Each run waiting for the seat now keeps a ticket,
+  `<pid>-<token>.json` (`pid`, `owner`, `since`), in a
+  `claude-seat.lock.waiters/` directory beside the lock, and removes it when the
+  wait ends, whether it took the seat or gave up; a ticket whose pid is no longer
+  a live process is ignored and removed by the next reader. `research_status`
+  for a run that holds a ticket, and the `detach` handle of a run whose tier uses
+  the seat (not a dry run), carry `seat: { waiting, holder, expected_start_s,
+  reason }`. `waiting` counts the runs queued now and `holder` names the run
+  holding the seat. `expected_start_s` is `[early, late]` in seconds: early if
+  this run is taken next (the holder's remaining time on the median seat turn),
+  late if every other waiter goes first (one median turn each). The median is
+  taken over the 20 most recent complete runs whose synthesis took the seat,
+  from taking the seat to the end of the synthesis stage. That span includes the
+  sidecar turn, which runs after the seat is released, so the range errs late.
+  With no such run on record, `expected_start_s` is `null` and `reason` says so.
+  There is no queue position: every waiter polls the lock every 5 s, and
+  whichever polls first after a release takes the seat. On the handle, the range
+  is for the run as if it queued now; it queues once its research stage is done.
+  To feed the median, a stage records `seat_acquired_at` when it first takes the
+  seat (a new `seat_acquired` run event), and a finished or failed run's `stages`
+  entries keep `started_at` and `finished_at` (and `seat_acquired_at`) beside
+  `exit_code`. The manifest the `research` call returns is unchanged.
+
 ### Changed
 
 - **MCP SDK 1.x → 2.x.** The server now builds on `mcp.server.mcpserver.MCPServer`
@@ -92,7 +121,8 @@ releases (starting with 0.1.0).
   **For callers:** `stages` entries now exist mid-run with `exit_code: null`, so
   a collector must read an entry's `state` rather than take its presence as a
   finished stage. `current_stage` and `artifacts` are additive, and a finished
-  record's `stages` keep their `{ exit_code }` shape.
+  record's `stages` entries keep `exit_code` (with the stage's timings beside
+  it, see Added).
 
 ## [0.5.1] - 2026-09-13
 

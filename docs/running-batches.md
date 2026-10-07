@@ -149,7 +149,11 @@ status model and the cross-run rules are described in
   `state/claude-seat.lock` that records the holder's PID and a name like
   `<batch>/synthesis:<topic>`. Concurrent runs queue and say who they are waiting
   for; a lock whose recorded PID is gone is reclaimed immediately rather than
-  waited out.
+  waited out. While a run waits it keeps a ticket, `<pid>-<token>.json`, in
+  `state/claude-seat.lock.waiters/` and removes it when the wait ends, whether
+  it took the seat or gave up; a ticket whose PID is gone is ignored and removed
+  by the next reader. The tickets give a count, not an order: every waiter polls
+  the lock every 5 s, and whichever polls first after a release takes the seat.
 - **An abandoned topic is `dead`, not `failed`.** Every topic records the PID
   that put it `in_flight`. A later run reads that back, and a topic whose owner
   is no longer a live process is marked `dead` (marker `DD` in the snapshot)
@@ -229,13 +233,18 @@ and its slug, the batch name, the assurance tier, the substrate set and
 each transition (a stage starting or finishing, a research substrate's brief
 landing, a stage starting or ending a wait for the seat) with a `stages` map and
 a `current_stage`. Each entry carries `state` (`running`, `waiting` or `done`),
-`started_at`, `exit_code` (`null` until the stage is done) and `finished_at`.
+`started_at`, `exit_code` (`null` until the stage is done) and `finished_at`,
+plus `seat_acquired_at` once the stage has taken the local seat.
 These writes are best-effort, and the MCP status tool also lists the artifacts
 already on disk. When the run finishes it is rewritten with the final
-manifest and `status: "complete"` (or `"validated"` for a dry run). A run that ends on an
+manifest and `status: "complete"` (or `"validated"` for a dry run); each
+`stages` entry keeps its `exit_code` and its timings, without `state`. A run that ends on an
 exception is rewritten too, with `status: "failed"`, `ok: false`, the stages that
 finished and an `error` string, and the status tool reports it as finished with
-`ok` false. A run whose caller walked away is therefore
+`ok` false. While a run waits for the seat, the status tool adds a `seat` block:
+how many runs are queued, which one holds the seat, and an expected start range
+worked out from the median time between taking the seat and finishing synthesis
+over the 20 most recent complete runs that took the seat. A run whose caller walked away is therefore
 still identifiable on disk — which question it was answering and whether it got
 past dispatch — rather than an orphan directory nothing can be matched to.
 

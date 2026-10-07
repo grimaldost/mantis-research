@@ -53,6 +53,9 @@ from mantis_research.interface.research_service import (
     missing_product,
     resume_research,
     run_research,
+    seat_report,
+    seat_report_if_queued,
+    uses_local_seat,
 )
 from mantis_research.interface.seat import process_is_alive
 
@@ -250,7 +253,8 @@ def _project(record: dict[str, Any], run_dir: Path) -> dict[str, Any]:
     answer the question, not hand back an exception to interpret.
 
     A run that has not finished also reports the ``artifacts`` already on disk
-    under ``run_dir``, so a lagging record cannot hide them.
+    under ``run_dir``, so a lagging record cannot hide them, and a run queued
+    for the local seat reports the queue as ``seat`` (T1f).
     """
     status = str(record.get('status', ''))
     if status == 'dispatching':
@@ -278,6 +282,10 @@ def _project(record: dict[str, Any], run_dir: Path) -> dict[str, Any]:
     }
     if status == 'dispatching':
         projection['artifacts'] = _artifacts_on_disk(run_dir)
+    if state == 'running':
+        seat = seat_report_if_queued(str(record.get('batch_name') or run_dir.name))
+        if seat is not None:
+            projection['seat'] = seat
     if record.get('error'):
         projection['error'] = record['error']
     return projection
@@ -370,7 +378,8 @@ def _detach(
 
     The handle carries no epistemic payload. There is nothing to report yet, and
     a result shaped like an answer is exactly what let a briefs-only run read as
-    one.
+    one. When the run will need the local seat, it carries the queue it will
+    join as ``seat`` (T1f).
     """
     started = threading.Event()
     identity: dict[str, Any] = {}
@@ -410,7 +419,10 @@ def _detach(
             'without detach to see the error.'
         )
         raise RuntimeError(msg)
-    return {'state': 'running', **identity}
+    handle: dict[str, Any] = {'state': 'running', **identity}
+    if uses_local_seat(str(identity.get('assurance')), dry_run=bool(identity.get('dry_run'))):
+        handle['seat'] = seat_report(str(identity.get('batch_name')))
+    return handle
 
 
 async def research(

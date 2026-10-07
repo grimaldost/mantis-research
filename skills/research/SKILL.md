@@ -165,12 +165,26 @@ rate-limited substrate cannot sit past your window.
 `state` — `running`, `waiting` (queued for the local Claude seat, or backing off
 after a rate limit; the run is alive) or `done` — plus `started_at`, and
 `exit_code`, which stays `null` until that stage is done (`finished_at` is added
-then). The research stage also lists `substrates_done`, and `current_stage` names
-the stage most recently started. **A stage listed in `stages` is not necessarily
-finished: read its `state`.** `artifacts` lists the `briefs`, `synthesis` and
-`sidecar` files already on disk, read from the run directory rather than the
-record, so a record that lags still shows them. Once `state` is `finished`, each
-`stages` entry carries just its `exit_code`, and `ok` says how the run went.
+then; `seat_acquired_at` once the stage has taken the local seat). The research
+stage also lists `substrates_done`, and `current_stage` names the stage most
+recently started. **A stage listed in `stages` is not necessarily finished: read
+its `state`.** `artifacts` lists the `briefs`, `synthesis` and `sidecar` files
+already on disk, read from the run directory rather than the record, so a record
+that lags still shows them. Once `state` is `finished`, each `stages` entry
+carries its `exit_code` with `started_at`, `finished_at` and, for a stage that
+took the seat, `seat_acquired_at`; `ok` says how the run went.
+
+**How long a queued run will wait.** While a run is queued for the local seat,
+`research_status` also returns `seat`: `waiting` (how many runs are queued now,
+this one included), `holder` (the run holding the seat) and `expected_start_s`,
+a range `[early, late]` in seconds — early if this run is taken next, late if
+every other queued run goes first. It is worked out from the median seat turn
+over the 20 most recent finished runs that took the seat, and is `null`, with a
+`reason`, when there is none to go on. There is no queue position: the seat goes
+to whichever queued run polls first once it frees. The handle a detached call
+returns carries the same `seat` block when the tier uses the seat, with the
+range worked out as if the run queued now; it actually queues once its research
+stage is done.
 
 Use `dry_run: true` first — it validates the pipeline offline and for free, and
 records itself as `validated` rather than as a completed run.

@@ -1,10 +1,13 @@
 """Liveness for the single local Claude seat (backlog MANT-B08).
 
-Two things live here, both I/O and therefore both outside ``core/`` (I1):
+Three things live here, all I/O and therefore all outside ``core/`` (I1):
 
 - :func:`process_is_alive` — is the process that claimed something still there?
-- :class:`SeatLock` — an explicit, PID-stamped lock on the one local Claude CLI
-  seat, so concurrent runs serialise visibly instead of interleaving invisibly.
+- :func:`seat_lock` / :func:`async_seat_lock` — an explicit, PID-stamped lock
+  on the one local Claude CLI seat, so concurrent runs serialise visibly
+  instead of interleaving invisibly.
+- :func:`seat_queue` — who holds the seat and how many runs wait for it, read
+  from the tickets waiters leave beside the lock.
 
 The shape is deliberately the one the sibling series engine already uses rather
 than a second design: the owner's PID goes **into** the lock file and is read
@@ -24,6 +27,7 @@ import asyncio
 import contextlib
 import json
 import os
+import secrets
 import sys
 import time
 from dataclasses import dataclass
@@ -163,6 +167,99 @@ def _try_acquire(
     return mine
 
 
+def _waiters_dir(path: Path) -> Path:
+    """Where the runs queued on the lock at ``path`` leave their tickets."""
+    return path.with_name(f'{path.name}.waiters')
+
+
+def _take_ticket(path: Path, owner: str) -> Path | None:
+    """Say on disk that ``owner`` is waiting for the seat; None if that failed.
+
+    The file name carries the pid, so a reader can tell a live waiter from one
+    that died without reading the body, which may still be half written. The
+    token keeps two waiters in one process apart. Best-effort: a ticket feeds
+    an estimate, and failing to write one must not stop the wait.
+    """
+    waiters = _waiters_dir(path)
+    ticket = waiters / f'{os.getpid()}-{secrets.token_hex(4)}.json'
+    try:
+        waiters.mkdir(parents=True, exist_ok=True)
+        ticket.write_text(
+            json.dumps({'pid': os.getpid(), 'owner': owner, 'since': _now_iso()}),
+            encoding='utf-8',
+        )
+    except OSError as exc:
+        log.debug('could not write a seat waiter ticket', ticket=str(ticket), error=str(exc))
+        return None
+    return ticket
+
+
+def _drop_ticket(ticket: Path | None) -> None:
+    if ticket is not None:
+        with contextlib.suppress(OSError):
+            ticket.unlink()
+
+
+def _acquired(on_event: ProgressCallback | None, mine: SeatHolder) -> None:
+    emit(
+        on_event,
+        RunEvent(
+            kind='seat_acquired',
+            message=f'took the local Claude seat as {mine.owner}',
+            data={'seat_owner': mine.owner, 'seat_pid': mine.pid},
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class SeatQueue:
+    """The seat as a waiter sees it: who holds it and who else is waiting.
+
+    There is no position. The lock is an ``O_EXCL`` file that every waiter
+    polls, so whichever polls first after a release takes it.
+    """
+
+    waiting: int
+    holder: str | None
+    holder_since: str | None
+    owners: tuple[str, ...]
+
+
+def seat_queue(path: Path) -> SeatQueue:
+    """Read the seat at ``path``: its live holder and its live waiters.
+
+    A ticket counts only while the pid in its name is a live process. A ticket
+    whose pid is gone was left by a waiter that died without its ``finally``
+    running, and is removed here, best-effort.
+    """
+    holder = SeatHolder.read(path)
+    if holder is not None and not holder.is_alive():
+        holder = None
+    owners: list[str] = []
+    for ticket in sorted(_waiters_dir(path).glob('*.json')):
+        pid_text, _, _ = ticket.stem.partition('-')
+        try:
+            pid = int(pid_text)
+        except ValueError:
+            continue
+        if not process_is_alive(pid):
+            with contextlib.suppress(OSError):
+                ticket.unlink()
+            continue
+        try:
+            owner = str(json.loads(ticket.read_text(encoding='utf-8')).get('owner', ''))
+        except (OSError, ValueError, AttributeError):
+            # Mid-write, or unreadable: the waiter is alive all the same.
+            owner = ''
+        owners.append(owner)
+    return SeatQueue(
+        waiting=len(owners),
+        holder=holder.owner if holder else None,
+        holder_since=holder.acquired_at if holder else None,
+        owners=tuple(owners),
+    )
+
+
 def _held_by_a_live_owner(path: Path) -> bool:
     holder = SeatHolder.read(path)
     return holder is not None and holder.is_alive()
@@ -190,13 +287,23 @@ def seat_lock(
     Blocks while a *live* owner holds it, saying so on every poll — waiting for
     a seat is legitimate, waiting silently is the thing this whole area is about.
     A lock whose recorded PID is gone is reclaimed immediately and loudly.
+
+    While it waits, the caller holds a ticket beside the lock
+    (:func:`seat_queue` counts them). The ticket goes when the wait ends,
+    whether the seat was taken or the wait was given up.
     """
-    while True:
-        mine = _try_acquire(path, owner, on_event=on_event)
-        if mine is not None:
-            break
-        if _held_by_a_live_owner(path):
-            time.sleep(poll_seconds)
+    ticket: Path | None = None
+    try:
+        while True:
+            mine = _try_acquire(path, owner, on_event=on_event)
+            if mine is not None:
+                break
+            if _held_by_a_live_owner(path):
+                ticket = ticket or _take_ticket(path, owner)
+                time.sleep(poll_seconds)
+    finally:
+        _drop_ticket(ticket)
+    _acquired(on_event, mine)
     try:
         yield mine
     finally:
@@ -213,15 +320,22 @@ async def async_seat_lock(
 ) -> AsyncIterator[SeatHolder]:
     """:func:`seat_lock` for an adapter running on the event loop.
 
-    Same contract; the wait yields to the loop instead of blocking it, so the
-    progress reporter and sibling topics keep running while this call queues.
+    Same contract, ticket included; the wait yields to the loop instead of
+    blocking it, so the progress reporter and sibling topics keep running while
+    this call queues.
     """
-    while True:
-        mine = _try_acquire(path, owner, on_event=on_event)
-        if mine is not None:
-            break
-        if _held_by_a_live_owner(path):
-            await asyncio.sleep(poll_seconds)
+    ticket: Path | None = None
+    try:
+        while True:
+            mine = _try_acquire(path, owner, on_event=on_event)
+            if mine is not None:
+                break
+            if _held_by_a_live_owner(path):
+                ticket = ticket or _take_ticket(path, owner)
+                await asyncio.sleep(poll_seconds)
+    finally:
+        _drop_ticket(ticket)
+    _acquired(on_event, mine)
     try:
         yield mine
     finally:

@@ -20,6 +20,7 @@ import json
 import os
 import re
 import secrets
+import statistics
 import threading
 import time
 from datetime import UTC, datetime
@@ -32,17 +33,18 @@ from mantis_research.core import paths
 from mantis_research.core.config import load_batch_config
 from mantis_research.core.logging import configure_logging
 from mantis_research.core.paths import RunDirs, topic_stem
-from mantis_research.core.progress import RunEvent, emit
+from mantis_research.core.progress import RunEvent, emit, seat_start_range
 from mantis_research.core.prompts import RESEARCH_REQUEST
 from mantis_research.core.sidecar import SidecarOutcome
 from mantis_research.core.state import OpenRouterResearchState, SynthesisState
-from mantis_research.interface.seat import process_is_alive
+from mantis_research.interface.seat import process_is_alive, seat_queue
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from mantis_research.core.progress import ProgressCallback
     from mantis_research.core.stage import SeatProbe
+    from mantis_research.interface.seat import SeatQueue
 
 log = structlog.get_logger(__name__)
 
@@ -457,9 +459,11 @@ class _StageRecorder:
     Each ``stages`` entry carries ``state`` (``running``, ``waiting`` or
     ``done``), ``started_at`` and ``exit_code`` (``None`` until the stage is
     done), plus ``finished_at`` once it is; the research stage also lists
-    ``substrates_done``. The seat reports its wait every few seconds, so only
-    the move into ``waiting`` is written, and the next sign of work (a child's
-    output, a substrate starting) moves it back to ``running``.
+    ``substrates_done``, and a stage that took the local seat records the first
+    time it did as ``seat_acquired_at`` (T1f). The seat reports its wait every
+    few seconds, so only the move into ``waiting`` is written, and the next sign
+    of work (the seat taken, a child's output, a substrate starting) moves it
+    back to ``running``.
 
     These writes are best-effort: on Windows ``replace`` fails while a poller
     holds the record open, and the next transition writes the whole state
@@ -496,6 +500,25 @@ class _StageRecorder:
         with self._lock:
             self._closed = True
 
+    def finished_stages(self, results: Mapping[str, int]) -> dict[str, dict[str, Any]]:
+        """The terminal record's ``stages``: each exit code, with when the stage ran.
+
+        The timings outlive the run so a later queued run can estimate how long
+        a seat turn takes (:func:`seat_turn_durations`).
+        """
+        with self._lock:
+            return {
+                stage: {
+                    'exit_code': rc,
+                    **{
+                        key: self._stages[stage][key]
+                        for key in _STAGE_TIMINGS
+                        if key in self._stages.get(stage, {})
+                    },
+                }
+                for stage, rc in results.items()
+            }
+
     def _apply(self, event: RunEvent) -> bool:
         """Fold one event into the stage map; True when the record should change."""
         if event.kind == 'stage_start':
@@ -519,6 +542,13 @@ class _StageRecorder:
                 return False
             entry['state'] = 'waiting'
             return True
+        if event.kind == 'seat_acquired':
+            # The first acquisition is the one kept: a journal turn takes the
+            # seat again inside the same stage.
+            changed = entry['state'] == 'waiting' or 'seat_acquired_at' not in entry
+            entry.setdefault('seat_acquired_at', _now_iso())
+            entry['state'] = 'running'
+            return changed
         if event.kind not in ('substrate_start', 'substrate_done', 'thinking'):
             return False
         changed = entry['state'] == 'waiting'
@@ -537,6 +567,119 @@ class _StageRecorder:
             _write_run_record(self._dirs, record)
         except OSError as exc:
             log.debug('run record progress write skipped', error=str(exc))
+
+
+#: The timing fields a stage entry keeps in the terminal record.
+_STAGE_TIMINGS = ('started_at', 'seat_acquired_at', 'finished_at')
+
+#: How many recent seat turns the expected-start estimate takes its median over.
+SEAT_SAMPLE_RUNS = 20
+
+
+def seat_turn_durations(outputs_root: Path, *, limit: int = SEAT_SAMPLE_RUNS) -> list[float]:
+    """Seconds from taking the seat to finishing synthesis, newest run first.
+
+    Read from the finished run records under ``outputs_root``, up to ``limit``
+    of them. Only a complete run whose synthesis exited 0 and took the seat
+    counts: a dry run never takes it, a failed one stopped early, and a stage
+    skipped on a resume finished in an instant without it. The span runs to the
+    end of the stage, so it includes the sidecar turn, which runs after the
+    seat is released; the estimate errs late by that much.
+    """
+
+    def modified(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    samples: list[float] = []
+    for path in sorted(outputs_root.glob(f'*/{RUN_RECORD_NAME}'), key=modified, reverse=True):
+        if len(samples) >= limit:
+            break
+        try:
+            record = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        seconds = _seat_turn_s(record)
+        if seconds is not None:
+            samples.append(seconds)
+    return samples
+
+
+def _seat_turn_s(record: Any) -> float | None:
+    if not isinstance(record, dict) or record.get('status') != 'complete':
+        return None
+    stage = (record.get('stages') or {}).get('synthesis')
+    if not isinstance(stage, dict) or stage.get('exit_code') != 0:
+        return None
+    try:
+        took = datetime.fromisoformat(str(stage['seat_acquired_at']))
+        done = datetime.fromisoformat(str(stage['finished_at']))
+        seconds = (done - took).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        return None
+    return seconds if seconds >= 0 else None
+
+
+def uses_local_seat(assurance: str, *, dry_run: bool) -> bool:
+    """True when a run of this tier will queue for the local seat."""
+    return not dry_run and any(s in LOCAL_SEAT_STAGES for s in _TIER_STAGES.get(assurance, ()))
+
+
+def seat_report(batch_name: str) -> dict[str, Any]:
+    """The seat as run ``batch_name`` sees it: the queue, and when it can expect a turn.
+
+    ``waiting`` counts every run queued on the seat now, and ``holder`` names the
+    one holding it. ``expected_start_s`` is ``[early, late]`` in seconds from
+    now, for this run as one of the waiters (counted in if it is not queued
+    yet): early if it is taken next, late if every other waiter goes first.
+    There is no position, because the lock grants the seat to whichever waiter
+    polls first. With no measured seat turn to go on, the range is ``None`` and
+    ``reason`` says why.
+    """
+    return _seat_block(seat_queue(paths.seat_lock_path()), batch_name)
+
+
+def seat_report_if_queued(batch_name: str) -> dict[str, Any] | None:
+    """:func:`seat_report`, or None when run ``batch_name`` holds no waiter ticket.
+
+    A stage's ``waiting`` also covers a rate-limit backoff, so the ticket is
+    what says the run is queued for the seat.
+    """
+    queue = seat_queue(paths.seat_lock_path())
+    if not _is_queued(queue, batch_name):
+        return None
+    return _seat_block(queue, batch_name)
+
+
+def _is_queued(queue: SeatQueue, batch_name: str) -> bool:
+    # Seat owners are named `<batch>/<stage>:<topic>` (StageContext.seat_owner).
+    return any(owner.startswith(f'{batch_name}/') for owner in queue.owners)
+
+
+def _seat_block(queue: SeatQueue, batch_name: str) -> dict[str, Any]:
+    samples = seat_turn_durations(paths.outputs_root())
+    median = statistics.median(samples) if samples else None
+    elapsed = _seconds_since(queue.holder_since) if queue.holder is not None else None
+    waiting = queue.waiting + (0 if _is_queued(queue, batch_name) else 1)
+    span = seat_start_range(waiting, elapsed, median)
+    reason = None if span else 'no finished run on record has a measured seat turn to go on'
+    return {
+        'waiting': queue.waiting,
+        'holder': queue.holder,
+        'expected_start_s': [round(span[0]), round(span[1])] if span else None,
+        'reason': reason,
+    }
+
+
+def _seconds_since(iso: str | None) -> float:
+    """Seconds since ``iso``; 0 when it cannot be read, which errs late."""
+    try:
+        since = datetime.fromisoformat(str(iso))
+        return max(0.0, (datetime.now(UTC) - since).total_seconds())
+    except (TypeError, ValueError):
+        return 0.0
 
 
 #: How many times a blocked ``replace`` is tried, and the pause between tries. On
@@ -863,13 +1006,23 @@ def run_research(
         # record is a destination, and only a real run turns them into evidence.
         status = 'validated' if dry_run else 'complete'
         recorder.close()
-        _write_run_record(dirs, {**manifest, 'status': status, 'finished_at': _now_iso()})
+        # The record keeps each stage's timings beside its exit code; the
+        # manifest returned to the caller keeps its shape.
+        _write_run_record(
+            dirs,
+            {
+                **manifest,
+                'stages': recorder.finished_stages(results),
+                'status': status,
+                'finished_at': _now_iso(),
+            },
+        )
     except BaseException as exc:
         recorder.close()
         _write_failed_record(
             dirs,
             identity,
-            results=results,
+            stages=recorder.finished_stages(results),
             started_at=started_at,
             error=exc,
         )
@@ -892,7 +1045,7 @@ def _write_failed_record(
     dirs: RunDirs,
     identity: Mapping[str, Any],
     *,
-    results: Mapping[str, int],
+    stages: Mapping[str, Mapping[str, Any]],
     started_at: str,
     error: BaseException,
 ) -> None:
@@ -908,7 +1061,7 @@ def _write_failed_record(
                 **identity,
                 'status': 'failed',
                 'ok': False,
-                'stages': {stage: {'exit_code': rc} for stage, rc in results.items()},
+                'stages': dict(stages),
                 'error': repr(error)[:_ERROR_CHARS],
                 'owner_pid': os.getpid(),
                 'started_at': started_at,
