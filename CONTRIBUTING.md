@@ -95,7 +95,8 @@ artifact trees stay readable. Details and enforcement:
 - **An MCP-surface change** — the tool schema and result shape are a public
   contract (ADR-0009): additive only, every parameter described, and
   `skills/research/SKILL.md` + the README's served-tool section updated with
-  it.
+  it. A change that cannot be additive is recorded as an ADR-0009 amendment in
+  the same PR, as the seat-tier `detach` default was.
 
 ## Decisions, specs, changelog
 

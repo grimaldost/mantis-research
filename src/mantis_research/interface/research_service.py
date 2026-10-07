@@ -763,6 +763,78 @@ def resolve_resume_dir(candidate: Path) -> Path:
     return resolved
 
 
+def is_finished_record(record: Mapping[str, Any]) -> bool:
+    """True when a run record is a successful, real run with nothing left to run.
+
+    The one judgement behind "a resume collects": a ``complete`` record whose
+    stages all exited 0. A ``failed`` record, a ``complete`` one with a stage
+    that exited non-zero, a dry run's ``validated`` one and an abandoned
+    ``dispatching`` one each still have stages to run, so resuming them is a
+    resume and not a collect.
+    """
+    return (
+        record.get('status') == 'complete'
+        and record.get('ok') is True
+        and not record.get('dry_run', False)
+    )
+
+
+def _collect_finished(
+    record: Mapping[str, Any], on_event: ProgressCallback | None
+) -> dict[str, Any] | None:
+    """Rebuild the manifest of a finished run from its record, writing nothing.
+
+    A resume of a finished run used to run every stage again, each skipping, and
+    then rewrite ``run.json`` with only that call's timings. That dropped the
+    seat turn the expected-start estimate reads, and the rewrite moved the run
+    up the newest-first listing, so collecting a run erased it from the one and
+    misplaced it in the other. The record already holds what the manifest needs
+    and the artifacts are on disk, so collecting reads them and leaves the
+    record as it is. ``None`` when the record lacks a field the manifest needs,
+    and the caller then falls back to a full resume.
+    """
+    try:
+        stages = {str(stage): int(entry['exit_code']) for stage, entry in record['stages'].items()}
+        manifest = _manifest(
+            question=str(record['question']),
+            batch_name=str(record['batch_name']),
+            assurance=str(record['assurance']),
+            slug=str(record['question_slug']),
+            substrates=_recorded_substrates(record),
+            results=stages,
+            dry_run=False,
+        )
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+    emit(
+        on_event,
+        RunEvent(
+            kind='run_done',
+            message=f'run {manifest["batch_name"]} was already complete (ok=True)',
+            step=len(stages),
+            total=len(stages),
+            data={
+                'batch_name': manifest['batch_name'],
+                'ok': True,
+                'outputs_dir': manifest['outputs_dir'],
+            },
+        ),
+    )
+    return manifest
+
+
+def _recorded_substrates(record: Mapping[str, Any]) -> list[str]:
+    """The substrates a finished run asked for.
+
+    A terminal record written before it carried ``substrates`` still names
+    them, as the brief files the manifest lists, one ``<substrate>.md`` each.
+    """
+    recorded = record.get('substrates')
+    if recorded:
+        return [str(sub) for sub in recorded]
+    return [Path(str(brief)).name.removesuffix('.md') for brief in record['outputs']['briefs']]
+
+
 def resume_research(
     run_dir: Path,
     *,
@@ -786,6 +858,11 @@ def resume_research(
     except KeyError as exc:
         msg = f'run record at {resolved} is missing {exc.args[0]!r}'
         raise ValueError(msg) from exc
+
+    if not dry_run and is_finished_record(record):
+        collected = _collect_finished(record, on_event)
+        if collected is not None:
+            return collected
 
     history: list[dict[str, Any]] = []
     if record.get('status') == 'dispatching':
@@ -1016,12 +1093,16 @@ def run_research(
         # record is a destination, and only a real run turns them into evidence.
         status = 'validated' if dry_run else 'complete'
         recorder.close()
-        # The record keeps each stage's timings beside its exit code; the
-        # manifest returned to the caller keeps its shape.
+        # The record keeps each stage's timings beside its exit code, and what
+        # the run started with: `started_at` orders the run listing, and a
+        # resume asks the research stage for `substrates` again. The manifest
+        # returned to the caller keeps its shape.
         _write_run_record(
             dirs,
             {
                 **manifest,
+                'substrates': subs,
+                'started_at': started_at,
                 'stages': recorder.finished_stages(results),
                 'status': status,
                 'finished_at': _now_iso(),

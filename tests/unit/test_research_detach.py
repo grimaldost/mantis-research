@@ -41,6 +41,7 @@ from mantis_research.interface.research_service import (
     LocalSeatUnavailableError,
     resume_research,
     run_research,
+    seat_turn_durations,
 )
 
 if TYPE_CHECKING:
@@ -637,6 +638,66 @@ class TestAResumeOfAFinishedRunCollects:
         assert handle['batch_name'] == 'abandoned-fast'
 
 
+def _settle(outputs_dir: str, **fields: Any) -> None:
+    """Rewrite fields of a run's record, as an earlier attempt that ended badly would."""
+    record_path = Path(outputs_dir) / 'run.json'
+    record = json.loads(record_path.read_text(encoding='utf-8'))
+    record.update(fields)
+    record_path.write_text(json.dumps(record), encoding='utf-8')
+
+
+class TestAResumeOfARunWithStagesLeftIsNotACollect:
+    """Only a run with nothing left to run is collected (T20a).
+
+    A `failed` record, or a `complete` one with a stage that exited non-zero,
+    re-runs its remaining stages on resume, and those block for as long as a new
+    run's. Answering them as a collect ignored an explicit `detach=true` and the
+    tier default, which is the long blocking call T20a set out to remove.
+    """
+
+    _UNFINISHED = pytest.mark.parametrize(
+        'fields',
+        [{'status': 'failed', 'ok': False}, {'status': 'complete', 'ok': False}],
+        ids=['failed', 'a-stage-exited-non-zero'],
+    )
+
+    @_UNFINISHED
+    @pytest.mark.parametrize('detach', [None, True])
+    async def test_it_returns_a_handle_unless_told_to_block(
+        self, rooted: Path, delivering_stages: None, fields: dict[str, Any], detach: bool | None
+    ) -> None:
+        first = run_research('q', assurance='fast', batch_name='unfinished-run')
+        _settle(first['outputs_dir'], **fields)
+
+        handle = await research('', resume=first['outputs_dir'], detach=detach)
+
+        assert handle['state'] == 'running'
+        assert handle['batch_name'] == 'unfinished-run'
+
+    @_UNFINISHED
+    async def test_detach_false_still_blocks_and_returns_the_result(
+        self, rooted: Path, delivering_stages: None, fields: dict[str, Any]
+    ) -> None:
+        first = run_research('q', assurance='fast', batch_name='unfinished-run')
+        _settle(first['outputs_dir'], **fields)
+
+        result = await research('', resume=first['outputs_dir'], detach=False)
+
+        assert 'state' not in result
+        assert [c['id'] for c in result['claims']] == ['c1']
+
+    @_UNFINISHED
+    async def test_an_unfinished_research_tier_run_still_blocks_on_its_own_tier(
+        self, rooted: Path, delivering_stages: None, fields: dict[str, Any]
+    ) -> None:
+        first = run_research('q', assurance='research', batch_name='unfinished-research')
+        _settle(first['outputs_dir'], **fields)
+
+        result = await research('', resume=first['outputs_dir'])
+
+        assert 'state' not in result
+
+
 class TestStatusFallsBackToWhatIsOnDisk:
     """A record that lags, or was written by a version that only wrote it twice,
     must not hide artifacts that are already on disk (T1e)."""
@@ -944,6 +1005,135 @@ class TestAFinishedRunRecordsItsSeatTurn:
         assert synthesis['started_at'] <= synthesis['seat_acquired_at'] <= synthesis['finished_at']
         assert 'seat_acquired_at' not in record['stages']['openrouter']
         assert record['stages']['openrouter']['exit_code'] == 0
+
+
+class TestCollectingARunKeepsItsRecord:
+    """A collect reads the finished run; it does not run it again (T1f).
+
+    The collect call is the standard way to finish a seat-tier run. It used to
+    run every stage again, each skipping, and rewrite `run.json` with that call's
+    timings only: the seat turn the expected-start median reads was dropped, and
+    `started_at` moved to the collect, which put an old run at the top of the
+    newest-first listing.
+    """
+
+    @pytest.fixture
+    def seat_run(self, rooted: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+        monkeypatch.setattr(
+            'mantis_research.interface.research_service.require_local_claude_seat',
+            lambda **_: None,
+        )
+
+        def fake(stage: str, cfg: Any, *, on_event: Any = None, **_: Any) -> int:
+            if stage == 'synthesis':
+                emit(
+                    on_event,
+                    RunEvent(
+                        kind='seat_acquired',
+                        message='took the seat',
+                        data={'seat_owner': f'{cfg.batch_name}/synthesis:1'},
+                    ),
+                )
+            return 0
+
+        monkeypatch.setattr('mantis_research.interface.cli.dispatch.dispatch_stage_config', fake)
+        return run_research('q', assurance='fast', batch_name='collected-run')
+
+    def test_the_record_is_untouched_and_the_seat_turn_still_counts(
+        self, rooted: Path, seat_run: dict[str, Any]
+    ) -> None:
+        record_path = rooted / 'outputs_root' / 'collected-run' / 'run.json'
+        before = record_path.read_bytes()
+        assert len(seat_turn_durations(rooted / 'outputs_root')) == 1
+
+        collected = resume_research(Path(seat_run['outputs_dir']))
+
+        assert record_path.read_bytes() == before
+        assert len(seat_turn_durations(rooted / 'outputs_root')) == 1
+        assert collected == seat_run
+
+    def test_a_collect_does_not_need_the_seat(
+        self, rooted: Path, seat_run: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def refuse(**_: Any) -> None:
+            msg = 'the seat must not be consulted to read a finished run'
+            raise LocalSeatUnavailableError(msg)
+
+        monkeypatch.setattr(
+            'mantis_research.interface.research_service.require_local_claude_seat', refuse
+        )
+        assert resume_research(Path(seat_run['outputs_dir']))['ok'] is True
+
+    async def test_collecting_an_old_run_leaves_the_listing_order(
+        self, rooted: Path, seat_run: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run_research('newer question', assurance='fast', batch_name='newer-run')
+        names = [r['batch_name'] for r in (await research_status())['runs']]
+        assert names == ['newer-run', 'collected-run']
+
+        resume_research(Path(seat_run['outputs_dir']))
+
+        names = [r['batch_name'] for r in (await research_status())['runs']]
+        assert names == ['newer-run', 'collected-run']
+
+    def test_a_dry_run_resume_still_walks_the_stages(
+        self, rooted: Path, seat_run: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Only a real call collects; a dry run walks its stages as a dry run.
+        calls: list[tuple[str, bool]] = []
+
+        def fake(stage: str, cfg: Any, *, dry_run: bool = False, **_: Any) -> int:
+            calls.append((stage, dry_run))
+            return 0
+
+        monkeypatch.setattr('mantis_research.interface.cli.dispatch.dispatch_stage_config', fake)
+        resume_research(Path(seat_run['outputs_dir']), dry_run=True)
+        assert calls == [('openrouter', True), ('synthesis', True)]
+
+
+class TestAFinishedRecordKeepsTheRunsIdentity:
+    """The terminal record kept the manifest and dropped what the run started with.
+
+    `started_at` is what the run listing sorts on and what `age_s` counts from,
+    so every finished run fell back to its directory's modification time, which
+    any later write moves. `substrates` is what a resume asks the research stage
+    for, so a resume of a finished run whose research failed asked the default
+    set and bought briefs the caller never asked for.
+    """
+
+    def test_the_record_keeps_when_the_run_started(
+        self, rooted: Path, delivering_stages: None
+    ) -> None:
+        run_research('q', assurance='fast', batch_name='finished-run')
+
+        record = json.loads(
+            (rooted / 'outputs_root' / 'finished-run' / 'run.json').read_text(encoding='utf-8')
+        )
+        assert record['status'] == 'complete'
+        assert record['started_at'] <= record['finished_at']
+
+    def test_a_resume_of_a_run_whose_research_failed_asks_the_same_substrates(
+        self, rooted: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            'mantis_research.interface.research_service.require_local_claude_seat',
+            lambda **_: None,
+        )
+        asked: list[list[str]] = []
+
+        def fake(stage: str, cfg: Any, **_: Any) -> int:
+            if stage != 'openrouter':
+                return 0
+            asked.append([entry.subslug for entry in cfg.topics[0].stages.openrouter])
+            return 1 if len(asked) == 1 else 0
+
+        monkeypatch.setattr('mantis_research.interface.cli.dispatch.dispatch_stage_config', fake)
+        first = run_research('q', assurance='fast', substrates=['openai'], batch_name='one-model')
+        assert first['ok'] is False
+
+        resume_research(Path(first['outputs_dir']))
+
+        assert asked == [['openai'], ['openai']]
 
 
 def _exited_pid() -> int:

@@ -144,10 +144,11 @@ A run with local-seat turns takes longer than a client will hold one tool call
 open, so a plain `fast`, `standard` or `high` call **detaches**: it returns a
 handle at once (`state: "running"`, `outputs_dir`, `batch_name`) while the run
 continues in the server. Poll `research_status` until the run is `finished`,
-then call `research` with `resume=<outputs_dir>`; a resume of a finished run
-blocks and returns the full result. A `research`-tier call and a `dry_run` block
-and return the result directly. Pass `detach: false` to block on any tier, or
-`detach: true` to detach any run.
+then call `research` with `resume=<outputs_dir>`; a resume of a run that
+succeeded blocks and returns the full result, while one whose `ok` is false
+re-runs its failed stage like a new run. A `research`-tier call and a `dry_run`
+block and return the result directly. Pass `detach: false` to block on any tier,
+or `detach: true` to detach any run.
 
 ### Where runs are written
 

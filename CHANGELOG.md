@@ -18,7 +18,9 @@ releases (starting with 0.1.0).
   status projection plus `age_s`, `question_slug` and `batch_name`. At most 50 are
   listed and `truncated` counts the older ones; a record that cannot be read is
   listed with state `unknown` and a `detail` rather than failing the listing.
-  The single-run status also reports `started_at` and `question_slug`.
+  The single-run status also reports `started_at` and `question_slug`. A
+  finished run's record now keeps the `started_at` its `dispatching` record had
+  (see Fixed), so a finished run sorts and ages by when it started.
 - **A `research` result names its run.** The result of a blocking call, and of a
   resume, now carries `outputs_dir` and `batch_name` from the run manifest, so a
   caller can poll or resume the run without a second lookup. Both fields are
@@ -31,7 +33,10 @@ releases (starting with 0.1.0).
   `<pid>-<token>.json` (`pid`, `owner`, `since`), in a
   `claude-seat.lock.waiters/` directory beside the lock, and removes it when the
   wait ends, whether it took the seat or gave up; a ticket whose pid is no longer
-  a live process is ignored and removed by the next reader. `research_status`
+  a live process is skipped by readers, which change nothing (a status poll
+  stays read-only), and removed by the next run that joins the queue. A pid the
+  operating system has since given to another process still reads as live, so
+  such a ticket stays counted until that process ends. `research_status`
   for a run that holds a ticket, and the `detach` handle of a run whose tier uses
   the seat (not a dry run), carry `seat: { waiting, holder, expected_start_s,
   reason }`. `waiting` counts the runs queued now and `holder` names the run
@@ -81,7 +86,9 @@ releases (starting with 0.1.0).
   effect on real runs is checked on the next paid run. ADR-0003 gains an
   amendment; the synthesis playbook and the skill document the field.
   **For callers:** the field is additive with the default `not_checked`, so
-  `sidecar_version` stays 2 and every sidecar already on disk still validates.
+  it needs no version bump of its own and every sidecar already on disk still
+  validates. This release writes `sidecar_version` 3 (see the entry on sidecar
+  paths).
   Filters on `figures_conflict` are unchanged. Read `not_checked` as unknown,
   not as clean. Every overlap a new sidecar writes carries the key, default
   included, so a consumer that rejects unknown keys must learn it: the 0.5.1
@@ -98,12 +105,13 @@ releases (starting with 0.1.0).
   kinds fits and otherwise to omit both, because any other `check_kind` fails
   validation and costs a re-ask. `sources_disagree` keeps its meaning. The
   synthesis playbook and the skill document the fields.
-  **For callers:** both fields default to `null`, so `sidecar_version` stays 2
-  and every sidecar already on disk still validates, its items reading `null`
-  for both. Dispatch on `check_kind` when it is set and fall back to `claim`
-  when it is `null`. Every verification item a new sidecar writes carries both
-  keys, `null` included, and the 0.5.1 schema, which forbids unknown keys,
-  rejects such a sidecar.
+  **For callers:** both fields default to `null`, so they need no version bump
+  of their own and every sidecar already on disk still validates, its items
+  reading `null` for both. This release writes `sidecar_version` 3 (see the
+  entry on sidecar paths). Dispatch on `check_kind` when it is set and fall back
+  to `claim` when it is `null`. Every verification item a new sidecar writes
+  carries both keys, `null` included, and the 0.5.1 schema, which forbids
+  unknown keys, rejects such a sidecar.
 
 ### Changed
 
@@ -121,6 +129,10 @@ releases (starting with 0.1.0).
   event is still sent. The `<3` ceiling keeps a fresh unlocked install from
   meeting the next major's import break. Supersedes the Dependabot bump to 2.2.0,
   which failed `ty check src` on this module.
+  **For callers:** an environment pinned to `mcp` 1.x cannot install this
+  release; move it to `mcp>=2.2,<3`. Tool names, input schemas and result shapes
+  are unchanged. A client that listens for progress notifications sees none for
+  a step that repeats the previous one; every event is still sent as a log line.
 - **Runtime data moved off the versioned plugin cache.** Run directories
   (`outputs/`, `state/`, `logs/`, `transcripts/`) and the seat lock now sit under
   a data root (`core/paths.py` `data_root`), separate from the project root that
@@ -135,7 +147,7 @@ releases (starting with 0.1.0).
   `~/.mantis/state/claude-seat.lock`. `research_status` gains a `data_root` field
   (additive). The legacy-layout progress fallback in `mantis monitor` reads the
   state root rather than the project root.
-  **Migration for plugin users:** runs written by 0.5.1 and earlier stay in
+  **For callers:** for plugin users, runs written by 0.5.1 and earlier stay in
   `~/.claude/plugins/cache/<marketplace>/mantis-research/<version>/`, and Claude
   Code removes that directory when it prunes the version, so copy out any run you
   want to keep. Resuming one now fails the containment check, and the refusal
@@ -152,13 +164,20 @@ releases (starting with 0.1.0).
   `detach` is now `boolean | null` with default `null`, which means automatic: a
   run whose tier includes a local-seat stage detaches, and a `research`-tier run
   or a dry run blocks as before. An explicit `true` or `false` is honoured as
-  before. A `resume` of a run whose record is terminal (anything but
-  `dispatching`) is a collect: it blocks and returns the full result whatever
-  `detach` says, where `detach=true` used to answer it with another handle. A
-  resume of an abandoned run detaches or blocks by the tier in its record, not
-  the call's `assurance`. A run refused before it names itself (an unusable seat,
-  an invalid argument) now raises that refusal from a detached call as well,
-  instead of "did not name itself within 30s". The tool description gains a
+  before. A real (not dry-run) `resume` of a run that finished, a real run whose
+  record is `complete` with every stage at exit 0, is a collect: it blocks and
+  returns the full result whatever `detach` says, where `detach=true` used to
+  answer it with another handle. A collect reads the run's record and the
+  artifacts on disk and writes nothing, so it keeps the run's seat timings and
+  its place in the run listing, and it does not need the local seat. A resume of
+  a run with stages left to run (`failed`, `complete` with a stage that exited
+  non-zero, abandoned, or a dry run's `validated` record) re-runs them and is
+  not a collect: an explicit `detach` is honoured, and unset it detaches or
+  blocks by the tier in the record, not the call's `assurance`. A run refused
+  before it names itself (an unusable seat, an invalid argument) now raises that
+  refusal from a detached call as well, instead of "did not name itself within
+  30s". ADR-0009 gains an amendment recording this as a deliberate exception to
+  its additive-only rule for the tool's result. The tool description gains a
   `detach` entry with those durations, held by a test to the constants
   `RESEARCH_STAGE_MINUTES` and `LOCAL_SEAT_TURN_MEDIAN_MINUTES` that the skill
   cites, and says a subagent caller keeps the detached default and collects with
@@ -169,7 +188,9 @@ releases (starting with 0.1.0).
   run is `finished`, then call `research(resume=<outputs_dir>)` to collect it,
   or pass `detach=false` to block as before. Callers that already pass
   `detach` see no change, except that a resume of a finished run now always
-  returns the result.
+  returns the result. Read `ok` before collecting: a resume of a run whose `ok`
+  is false re-runs its failed stage, and on a seat tier returns another handle
+  unless you pass `detach=false`.
 - **The research prompt asks where each named source came from.** The default
   research template (`RESEARCH_REQUEST`, what `mantis research` and the
   `research` tool send every substrate) said only to mark anything unverifiable
@@ -197,8 +218,8 @@ releases (starting with 0.1.0).
   Versions 1 and 2 still validate. The sidecar prompt's example shows version 3;
   the runner stamps the version either way. ADR-0003 gains an amendment that
   also records the alternative not taken: additive `rel_path` fields with no
-  bump. The entries above that say `sidecar_version` stays 2 are still additive
-  on their own, but this release writes 3.
+  bump. The source-check and verification-item entries above are additive on
+  their own and need no bump, but this release writes 3.
   **For callers:** a sidecar written from now on carries `sidecar_version: 3`.
   A consumer that opens `sources[].path` or `synthesis_path` must join it onto
   the directory two levels above the sidecar file (for an MCP or
@@ -290,6 +311,17 @@ releases (starting with 0.1.0).
   and the Claude and Gemini output directories when a brief lives there. A batch
   whose own synthesis prompt reads `{secondary_block}`, `{gemini_block}` or
   `{substrate_list}` now sees the subslug labels there too.
+- **A resume of a finished run asks for that run's own substrates.** The
+  terminal record of a `complete` run was the manifest, which lists no
+  substrates, so resuming a run whose research stage had exited non-zero ran it
+  with the default set (`openai`, `deepseek`, `google`) and bought briefs from
+  models the caller had not asked for. The record also dropped `started_at`, so
+  the run listing fell back to the directory's modification time, which any later
+  write moves. A `complete` or `validated` record now keeps `substrates` and
+  `started_at`, as the `dispatching` and `failed` records already did. A collect
+  of a record written before this reads the substrates off the brief paths.
+  **For callers:** both fields are additive in `run.json`; the manifest the
+  `research` call returns is unchanged.
 
 ## [0.5.1] - 2026-09-13
 

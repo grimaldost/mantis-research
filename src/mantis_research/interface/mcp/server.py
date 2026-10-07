@@ -51,6 +51,7 @@ from mantis_research.core import paths
 from mantis_research.core.sidecar import ResearchSidecar, project_for_agent
 from mantis_research.interface.research_service import (
     RUN_RECORD_NAME,
+    is_finished_record,
     missing_product,
     resolve_resume_dir,
     resume_research,
@@ -429,20 +430,23 @@ def _read_record(record_path: Path) -> dict[str, Any]:
 def _should_detach(detach: bool | None, *, assurance: str, dry_run: bool, resume: str) -> bool:
     """Whether this call returns a handle instead of the result (T20a).
 
-    A resume of a run whose record is terminal is a collect, and a collect
-    returns the result whatever ``detach`` says: answering it with another
-    handle would leave the caller polling a run that is already finished. A
-    record that cannot be read also blocks, so the resume's own refusal reaches
-    the caller. Otherwise an explicit ``detach`` is honoured, and unset it
-    detaches exactly the runs that will queue for the local seat, judged on the
-    tier the run will actually use: on a resume, the record's, not the call's.
+    A resume of a run that finished is a collect, and a collect returns the
+    result whatever ``detach`` says: answering it with another handle would
+    leave the caller polling a run that is already finished. Only a run with
+    nothing left to run is a collect (:func:`is_finished_record`); a ``failed``
+    or abandoned one, or one with a stage that exited non-zero, re-runs its
+    remaining stages on resume, and that is as long as a new run. A record that
+    cannot be read blocks, so the resume's own refusal reaches the caller.
+    Otherwise an explicit ``detach`` is honoured, and unset it detaches exactly
+    the runs that will queue for the local seat, judged on the tier the run will
+    actually use: on a resume, the record's, not the call's.
     """
     if resume:
         try:
             record = _read_record(resolve_resume_dir(Path(resume)) / RUN_RECORD_NAME)
         except (OSError, ValueError):
             return False
-        if record.get('status') != 'dispatching':
+        if not dry_run and is_finished_record(record):
             return False
         assurance = str(record.get('assurance') or 'fast')
     if detach is not None:
@@ -595,7 +599,8 @@ async def research(
                 'detaches, and a "research"-tier run or a dry run blocks and '
                 'returns the result. Pass false to block on any tier, or true to '
                 'detach any run. A resume of a finished run is a collect: it '
-                'blocks and returns the result whatever this says.'
+                'blocks and returns the result whatever this says. A resume of '
+                'a failed run re-runs it and follows this setting.'
             )
         ),
     ] = None,
@@ -620,7 +625,9 @@ async def research(
                 'already finished are skipped, and the question and settings come '
                 'from that run\'s own record, so "question" is ignored. Pass a '
                 "finished run's directory to collect its result: that call "
-                'blocks whatever "detach" says.'
+                'blocks whatever "detach" says. A failed run, or one with a stage '
+                'that exited non-zero, is re-run from that stage instead, and '
+                '"detach" applies to it as to a new run.'
             )
         ),
     ] = '',
@@ -669,7 +676,9 @@ async def research(
         tool call can be cut off, keeps the detached default: poll
         ``research_status``, then collect with ``resume=<outputs_dir>``. A
         resume of a finished run blocks and returns the result whatever
-        ``detach`` says.
+        ``detach`` says. A resume of a failed or abandoned run, or of one with a
+        stage that exited non-zero, re-runs those stages and follows ``detach``
+        like a new run.
     """
     # dispatch_stage_config nests asyncio.run per stage, so the synchronous
     # pipeline must run OFF this event loop or it raises RuntimeError (FM-1).

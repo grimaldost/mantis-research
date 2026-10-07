@@ -52,8 +52,9 @@ re-extracting claims — out of scope for this series. Cost persistence
 ## Amendment (2026-10-07): a source check on each source overlap
 
 This amendment applies the decision above; it does not change it. The field is
-additive with a default, so `sidecar_version` stays 2 (I4) and every sidecar
-already on disk still validates (I6).
+additive with a default, so it needs no version bump of its own (I4) and every
+sidecar already on disk still validates (I6). The release that ships it also
+ships the v3 paths change below, so the sidecar it writes is version 3.
 
 `source_overlaps[]` (added with v2) recorded one model judgement per shared
 source: `figures_conflict` / `conflict`, whether the briefs read incompatible

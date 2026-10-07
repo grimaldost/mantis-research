@@ -232,7 +232,11 @@ class TestSeatQueue:
         assert queue.holder_since == '2026-10-06T10:00:00+00:00'
         assert sorted(queue.owners) == ['first-run/synthesis:1', 'second-run/synthesis:1']
 
-    def test_a_ticket_left_by_a_dead_waiter_is_ignored_and_removed(self, tmp_path: Path) -> None:
+    def test_reading_the_queue_ignores_a_dead_waiters_ticket_and_removes_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        # A status poll reads the seat for a caller that asked how a run is
+        # going; it must not change the tree it reads.
         lock = tmp_path / 'seat.lock'
         _hold(lock)
         live = _ticket(lock, pid=os.getpid(), owner='live-run/synthesis:1', token='aaaa')
@@ -243,7 +247,7 @@ class TestSeatQueue:
         assert queue.waiting == 1
         assert queue.owners == ('live-run/synthesis:1',)
         assert live.exists()
-        assert not dead.exists()
+        assert dead.exists()
 
     def test_a_free_seat_with_nobody_queued(self, tmp_path: Path) -> None:
         queue = seat_queue(tmp_path / 'seat.lock')
@@ -283,6 +287,23 @@ class TestWaiterTickets:
         assert ticket['pid'] == os.getpid()
         assert ticket['owner'] == 'b/synthesis:1'
         assert ticket['since']
+
+    def test_a_waiter_joining_the_queue_clears_the_tickets_of_dead_waiters(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        lock = tmp_path / 'seat.lock'
+        _hold(lock)
+        dead = _ticket(lock, pid=_exited_pid(), owner='crashed-run/synthesis:1', token='bbbb')
+        live = _ticket(lock, pid=os.getpid(), owner='live-run/synthesis:1', token='aaaa')
+
+        def fake_sleep(_: float) -> None:
+            assert not dead.exists()
+            assert live.exists()
+            lock.unlink()  # the holder finishes
+
+        monkeypatch.setattr('mantis_research.interface.seat.time.sleep', fake_sleep)
+        with seat_lock(lock, owner='b/synthesis:1', poll_seconds=0.0):
+            pass
 
     def test_the_ticket_is_gone_when_the_body_raises(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

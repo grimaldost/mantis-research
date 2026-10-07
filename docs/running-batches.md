@@ -151,8 +151,9 @@ status model and the cross-run rules are described in
   for; a lock whose recorded PID is gone is reclaimed immediately rather than
   waited out. While a run waits it keeps a ticket, `<pid>-<token>.json`, in
   `state/claude-seat.lock.waiters/` and removes it when the wait ends, whether
-  it took the seat or gave up; a ticket whose PID is gone is ignored and removed
-  by the next reader. The tickets give a count, not an order: every waiter polls
+  it took the seat or gave up; a ticket whose PID is gone is ignored by readers
+  (a status poll changes nothing) and removed by the next run that joins the
+  queue. The tickets give a count, not an order: every waiter polls
   the lock every 5 s, and whichever polls first after a release takes the seat.
 - **An abandoned topic is `dead`, not `failed`.** Every topic records the PID
   that put it `in_flight`. A later run reads that back, and a topic whose owner

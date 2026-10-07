@@ -172,6 +172,26 @@ def _waiters_dir(path: Path) -> Path:
     return path.with_name(f'{path.name}.waiters')
 
 
+def _tickets(path: Path) -> list[tuple[Path, int]]:
+    """Each ticket beside the lock at ``path`` with the pid its name carries."""
+    found: list[tuple[Path, int]] = []
+    for ticket in sorted(_waiters_dir(path).glob('*.json')):
+        pid_text, _, _ = ticket.stem.partition('-')
+        try:
+            found.append((ticket, int(pid_text)))
+        except ValueError:
+            continue
+    return found
+
+
+def _clear_dead_tickets(path: Path) -> None:
+    """Remove the tickets of waiters that died without dropping theirs, best-effort."""
+    for ticket, pid in _tickets(path):
+        if not process_is_alive(pid):
+            with contextlib.suppress(OSError):
+                ticket.unlink()
+
+
 def _take_ticket(path: Path, owner: str) -> Path | None:
     """Say on disk that ``owner`` is waiting for the seat; None if that failed.
 
@@ -179,7 +199,9 @@ def _take_ticket(path: Path, owner: str) -> Path | None:
     that died without reading the body, which may still be half written. The
     token keeps two waiters in one process apart. Best-effort: a ticket feeds
     an estimate, and failing to write one must not stop the wait.
+    Joining also clears the tickets of waiters that have died.
     """
+    _clear_dead_tickets(path)
     waiters = _waiters_dir(path)
     ticket = waiters / f'{os.getpid()}-{secrets.token_hex(4)}.json'
     try:
@@ -230,21 +252,18 @@ def seat_queue(path: Path) -> SeatQueue:
 
     A ticket counts only while the pid in its name is a live process. A ticket
     whose pid is gone was left by a waiter that died without its ``finally``
-    running, and is removed here, best-effort.
+    running; it is skipped here and left on disk, because this is what a status
+    poll reads and a poll must not change what it reads. A waiter clears those
+    tickets when it joins the queue (:func:`_take_ticket`). A pid the operating
+    system has since handed to another process reads as live, so such a ticket
+    stays counted until that process ends.
     """
     holder = SeatHolder.read(path)
     if holder is not None and not holder.is_alive():
         holder = None
     owners: list[str] = []
-    for ticket in sorted(_waiters_dir(path).glob('*.json')):
-        pid_text, _, _ = ticket.stem.partition('-')
-        try:
-            pid = int(pid_text)
-        except ValueError:
-            continue
+    for ticket, pid in _tickets(path):
         if not process_is_alive(pid):
-            with contextlib.suppress(OSError):
-                ticket.unlink()
             continue
         try:
             owner = str(json.loads(ticket.read_text(encoding='utf-8')).get('owner', ''))
