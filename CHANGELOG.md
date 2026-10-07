@@ -9,6 +9,20 @@ releases (starting with 0.1.0).
 
 ### Added
 
+- **`research_status` with no argument lists the runs.** A caller that had lost a
+  run's `outputs_dir` had no way to find it from the server. `outputs_dir` is now
+  optional (the schema loses only `required`, so every existing call is
+  unchanged); without it the tool returns `runs`: each run directory under the
+  data root that holds a `run.json`, newest first by `started_at` (the
+  directory's modification time when a record has none). Each entry is the usual
+  status projection plus `age_s`, `question_slug` and `batch_name`. At most 50 are
+  listed and `truncated` counts the older ones; a record that cannot be read is
+  listed with state `unknown` and a `detail` rather than failing the listing.
+  The single-run status also reports `started_at` and `question_slug`.
+- **A `research` result names its run.** The result of a blocking call, and of a
+  resume, now carries `outputs_dir` and `batch_name` from the run manifest, so a
+  caller can poll or resume the run without a second lookup. Both fields are
+  additive.
 - **A run queued for the local seat says how many runs are waiting and when it
   can expect its turn.** A queued run reported only `waiting`, with nothing about
   how long: in the field on 2026-09-27, runs that had finished research at 11:35

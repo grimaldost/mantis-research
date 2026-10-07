@@ -18,6 +18,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
+import sys
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -62,6 +64,12 @@ class TestTheToolSurface:
     async def test_the_status_tool_documents_its_argument(self) -> None:
         tool = next(t for t in await build_server().list_tools() if t.name == 'research_status')
         assert tool.input_schema['properties']['outputs_dir']['description']
+
+    async def test_the_status_argument_is_optional(self) -> None:
+        # No argument lists the runs, so the schema must not demand one (T21).
+        tool = next(t for t in await build_server().list_tools() if t.name == 'research_status')
+        assert 'outputs_dir' not in tool.input_schema.get('required', [])
+        assert tool.input_schema['properties']['outputs_dir']['default'] == ''
 
 
 class TestADetachedCallReturnsAHandle:
@@ -768,3 +776,134 @@ class TestAFinishedRunRecordsItsSeatTurn:
         assert synthesis['started_at'] <= synthesis['seat_acquired_at'] <= synthesis['finished_at']
         assert 'seat_acquired_at' not in record['stages']['openrouter']
         assert record['stages']['openrouter']['exit_code'] == 0
+
+
+def _exited_pid() -> int:
+    proc = subprocess.Popen([sys.executable, '-c', ''])
+    proc.wait()
+    return proc.pid
+
+
+def _listed_run(
+    rooted: Path, name: str, *, status: str, owner_pid: int, started_ago: timedelta
+) -> Path:
+    run_dir = rooted / 'outputs_root' / name
+    run_dir.mkdir(parents=True)
+    (run_dir / 'run.json').write_text(
+        json.dumps(
+            {
+                'question': f'question for {name}',
+                'question_slug': f'{name}-slug',
+                'batch_name': name,
+                'outputs_dir': str(run_dir),
+                'status': status,
+                'owner_pid': owner_pid,
+                'started_at': (datetime.now(UTC) - started_ago).isoformat(),
+                'assurance': 'fast',
+                'stages': {},
+            }
+        ),
+        encoding='utf-8',
+    )
+    return run_dir
+
+
+class TestStatusWithNoArgumentListsRuns:
+    """`research_status()` answers "what runs are there?" without a path (T21)."""
+
+    async def test_the_runs_come_back_projected_and_newest_first(self, rooted: Path) -> None:
+        # Written oldest-first on purpose, so directory order cannot pass for sorting.
+        old = _listed_run(
+            rooted, 'abandoned-run', status='dispatching', owner_pid=_exited_pid(),
+            started_ago=timedelta(hours=3),
+        )  # fmt: skip
+        mid = _listed_run(
+            rooted, 'finished-run', status='complete', owner_pid=0,
+            started_ago=timedelta(hours=2),
+        )  # fmt: skip
+        new = _listed_run(
+            rooted, 'running-run', status='dispatching', owner_pid=os.getpid(),
+            started_ago=timedelta(minutes=5),
+        )  # fmt: skip
+
+        listing = await research_status()
+
+        runs = listing['runs']
+        assert [r['batch_name'] for r in runs] == ['running-run', 'finished-run', 'abandoned-run']
+        assert [r['state'] for r in runs] == ['running', 'finished', 'abandoned']
+        assert [r['outputs_dir'] for r in runs] == [str(new), str(mid), str(old)]
+        assert [r['question_slug'] for r in runs] == [
+            'running-run-slug',
+            'finished-run-slug',
+            'abandoned-run-slug',
+        ]
+        assert runs[0]['question'] == 'question for running-run'
+        assert runs[0]['age_s'] == pytest.approx(300, abs=60)
+        assert runs[2]['age_s'] == pytest.approx(3 * 3600, abs=60)
+        assert listing['truncated'] == 0
+        assert listing['data_root']
+
+    async def test_a_directory_without_a_record_is_not_a_run(self, rooted: Path) -> None:
+        _listed_run(
+            rooted, 'a-run', status='complete', owner_pid=0, started_ago=timedelta(minutes=1)
+        )
+        (rooted / 'outputs_root' / 'stray-dir').mkdir()
+        (rooted / 'outputs_root' / 'stray-file.txt').write_text('x', encoding='utf-8')
+
+        runs = (await research_status())['runs']
+
+        assert [r['batch_name'] for r in runs] == ['a-run']
+
+    async def test_an_unreadable_record_is_listed_as_unknown(self, rooted: Path) -> None:
+        _listed_run(
+            rooted, 'good-run', status='complete', owner_pid=0, started_ago=timedelta(minutes=1)
+        )
+        bad = rooted / 'outputs_root' / 'bad-run'
+        bad.mkdir()
+        (bad / 'run.json').write_text('{not json', encoding='utf-8')
+
+        runs = (await research_status())['runs']
+
+        by_dir = {Path(r['outputs_dir']).name: r for r in runs}
+        assert by_dir['bad-run']['state'] == 'unknown'
+        assert by_dir['bad-run']['detail']
+        assert by_dir['good-run']['state'] == 'finished'
+
+    async def test_a_record_without_started_at_sorts_by_directory_mtime(self, rooted: Path) -> None:
+        stamped = _listed_run(
+            rooted, 'stamped', status='complete', owner_pid=0, started_ago=timedelta(hours=1)
+        )
+        bare = rooted / 'outputs_root' / 'bare'
+        bare.mkdir()
+        (bare / 'run.json').write_text(
+            json.dumps({'batch_name': 'bare', 'status': 'complete'}), encoding='utf-8'
+        )
+        recent = datetime.now(UTC).timestamp() - 60
+        os.utime(bare, (recent, recent))
+        os.utime(stamped, (recent - 7200, recent - 7200))
+
+        runs = (await research_status())['runs']
+
+        assert [r['batch_name'] for r in runs] == ['bare', 'stamped']
+        assert runs[0]['age_s'] == pytest.approx(60, abs=60)
+
+    async def test_the_listing_is_capped_and_says_how_many_were_left_out(
+        self, rooted: Path
+    ) -> None:
+        for n in range(53):
+            _listed_run(
+                rooted, f'run-{n:02d}', status='complete', owner_pid=0,
+                started_ago=timedelta(minutes=n + 1),
+            )  # fmt: skip
+
+        listing = await research_status()
+
+        assert len(listing['runs']) == 50
+        assert listing['truncated'] == 3
+        assert listing['runs'][0]['batch_name'] == 'run-00'
+
+    async def test_an_empty_outputs_root_lists_nothing(self, rooted: Path) -> None:
+        listing = await research_status()
+
+        assert listing['runs'] == []
+        assert listing['truncated'] == 0

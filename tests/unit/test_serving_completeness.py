@@ -290,3 +290,30 @@ class TestAResearchOnlyRunIsNotIncomplete:
         }
         with pytest.raises(IncompleteRunError):
             _agent_result(manifest)
+
+
+@pytest.fixture
+def rooted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    for fn in ('state_root', 'outputs_root', 'transcripts_root', 'logs_root'):
+        monkeypatch.setattr(f'mantis_research.core.paths.{fn}', lambda fn=fn: tmp_path / fn)
+    return tmp_path
+
+
+class TestTheResultNamesTheRunDirectory:
+    """A caller that wants to resume or poll needs the run's directory and name
+    from the result it already holds, not from a second lookup (T9c)."""
+
+    async def test_a_blocking_result_carries_outputs_dir_and_batch_name(self, rooted: Path) -> None:
+        result = await research('where does a dry run land?', assurance='research', dry_run=True)
+
+        (run_dir,) = (rooted / 'outputs_root').iterdir()
+        assert result['outputs_dir'] == str(run_dir)
+        assert result['batch_name'] == run_dir.name
+
+    async def test_a_resumed_result_carries_both_as_well(self, rooted: Path) -> None:
+        first = await research('where does a resumed run land?', assurance='research', dry_run=True)
+
+        resumed = await research('', resume=first['outputs_dir'], dry_run=True)
+
+        assert resumed['outputs_dir'] == first['outputs_dir']
+        assert resumed['batch_name'] == first['batch_name']

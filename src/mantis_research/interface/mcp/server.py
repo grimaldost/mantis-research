@@ -39,6 +39,7 @@ import asyncio
 import json
 import threading
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
@@ -78,6 +79,8 @@ _NAMING_TIMEOUT_S = 30.0
 #: swap takes milliseconds.
 _RECORD_READ_ATTEMPTS = 5
 _RECORD_READ_PAUSE_S = 0.05
+# The most runs one listing returns; older ones are counted, not sent.
+_LIST_LIMIT = 50
 
 log = structlog.get_logger(__name__)
 
@@ -135,6 +138,11 @@ def _agent_result(manifest: dict[str, Any]) -> dict[str, Any]:
         'cost': manifest['cost'],
         'stages': manifest['stages'],
         'outputs': manifest['outputs'],
+        # Where the run lives and what it is called, so a caller that wants to
+        # poll or resume has them from the result in hand (T9c). Both are on
+        # every manifest `run_research` and `resume_research` return.
+        'outputs_dir': manifest.get('outputs_dir'),
+        'batch_name': manifest.get('batch_name'),
         # The run's second outcome (ADR-0011). Absent on run records written
         # before the field, which a resume still reads: unknown, not fine.
         'sidecar': manifest.get('sidecar') or _UNKNOWN_SIDECAR,
@@ -270,6 +278,8 @@ def _project(record: dict[str, Any], run_dir: Path) -> dict[str, Any]:
         'batch_name': record.get('batch_name'),
         'outputs_dir': record.get('outputs_dir'),
         'question': record.get('question'),
+        'question_slug': record.get('question_slug'),
+        'started_at': record.get('started_at'),
         'assurance': record.get('assurance'),
         'ok': record.get('ok'),
         # Mid-run each entry carries `state`, and `exit_code` stays null until
@@ -298,10 +308,12 @@ async def research_status(
             description=(
                 'The output directory of a run to report on — the "outputs_dir" '
                 "a detached `research` call returned. Reads the run's own record "
-                'and per-stage state; it never starts or changes anything.'
+                'and per-stage state; it never starts or changes anything. Leave it '
+                "empty to list the runs under this server's data root instead, "
+                'newest first.'
             )
         ),
-    ],
+    ] = '',
 ) -> dict[str, Any]:
     """Report how a run is going, without waiting for it.
 
@@ -315,9 +327,18 @@ async def research_status(
     lists the briefs, syntheses and sidecars already on disk. A finished run's
     full epistemic result is fetched by calling ``research`` again with
     ``resume=<outputs_dir>``, which skips the stages already done.
+
+    With no ``outputs_dir``, returns ``runs``: every run directory under the data
+    root that holds a record, newest first, each described as above plus
+    ``age_s`` (seconds since it started), ``question_slug`` and ``batch_name``.
+    At most 50 are listed; ``truncated`` counts the older ones left out. A record
+    that cannot be read is listed with state ``unknown`` and a ``detail``.
     """
     # Off the loop: the read can pause for a writer, and the artifact listing
     # walks the run directory.
+    if not outputs_dir:
+        listing = await asyncio.to_thread(_list_runs)
+        return {**listing, 'data_root': str(paths.data_root())}
     status = await asyncio.to_thread(_status, outputs_dir)
     return {**status, 'data_root': str(paths.data_root())}
 
@@ -339,6 +360,54 @@ def _status(outputs_dir: str) -> dict[str, Any]:
     except (OSError, ValueError) as exc:
         return {'state': 'unknown', 'outputs_dir': outputs_dir, 'detail': str(exc)}
     return _project(record, record_path.parent)
+
+
+def _list_runs() -> dict[str, Any]:
+    """Describe the runs under the outputs root, newest first, capped at the limit.
+
+    A run is a direct child directory holding a record. Each is read through
+    :func:`_status`, so an unreadable record becomes an ``unknown`` entry rather
+    than an exception: a listing that failed on one bad directory would hide
+    every good one. Recency is the record's ``started_at``, falling back to the
+    directory's modification time for a record that has none.
+    """
+    root = paths.outputs_root()
+    try:
+        candidates = [d for d in root.iterdir() if (d / RUN_RECORD_NAME).is_file()]
+    except OSError:
+        candidates = []
+    now = time.time()
+    entries: list[tuple[float, dict[str, Any]]] = []
+    for run_dir in candidates:
+        entry = _status(str(run_dir))
+        started = _epoch(entry.get('started_at'))
+        if started is None:
+            try:
+                started = run_dir.stat().st_mtime
+            except OSError:
+                started = now
+        entry['age_s'] = max(0.0, round(now - started, 1))
+        entry['batch_name'] = entry.get('batch_name') or run_dir.name
+        entry['outputs_dir'] = entry.get('outputs_dir') or str(run_dir)
+        entries.append((started, entry))
+    entries.sort(key=lambda pair: pair[0], reverse=True)
+    return {
+        'runs': [entry for _, entry in entries[:_LIST_LIMIT]],
+        'truncated': max(0, len(entries) - _LIST_LIMIT),
+    }
+
+
+def _epoch(stamp: object) -> float | None:
+    """Parse an ISO-8601 timestamp to epoch seconds, or ``None`` when it is not one."""
+    if not isinstance(stamp, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(stamp)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.timestamp()
 
 
 def _read_record(record_path: Path) -> dict[str, Any]:

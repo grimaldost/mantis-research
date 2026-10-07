@@ -132,7 +132,12 @@ manifest reports two outcomes, not one: `ok` is the stages, and a `sidecar`
 block (`{ status, error }`) is the epistemic contract's own result
 ([ADR-0011](docs/adr/0011-two-outcomes-per-synthesis-run.md)). Because the
 server runs locally, its synthesis stages inherit your authenticated `claude`
-seat (see Requirements). Reference skill: `skills/research/SKILL.md`.
+seat (see Requirements). The result also names the run's `outputs_dir` and
+`batch_name`, to poll or resume it by. A second tool, `research_status`, reports
+how a run is going from its `outputs_dir`; called with no argument it lists the
+runs under the data root, newest first (`state`, `age_s`, `question_slug`,
+`batch_name`; at most 50, with `truncated` counting the rest). Reference skill:
+`skills/research/SKILL.md`.
 
 ### Where runs are written
 

@@ -88,6 +88,9 @@ the sidecar's epistemic content merged in at the top level.
 - `outputs` — file **paths**: `briefs` (one per substrate), `synthesis`,
   `sidecar`, plus `falsification` / `evaluation` when those ran. The synthesis and
   briefs are referenced by path, never inlined — read those files for full text.
+- `outputs_dir`, `batch_name` — the run's directory and name, so a call that
+  returned a result can be polled or resumed (`resume=<outputs_dir>`) without a
+  second lookup. Also present on a resumed result.
 - `dry_run` (bool) — whether this was a dry run. When true, every path under
   `outputs` is a destination and none of the files exist.
 - `sidecar_available` (bool) — if `false`, none of the sidecar keys below are
@@ -173,6 +176,13 @@ already on disk, read from the run directory rather than the record, so a record
 that lags still shows them. Once `state` is `finished`, each `stages` entry
 carries its `exit_code` with `started_at`, `finished_at` and, for a stage that
 took the seat, `seat_acquired_at`; `ok` says how the run went.
+
+**Finding a run you lost track of.** `research_status` with no argument lists the
+runs under `data_root`, newest first, as `runs`: each entry is described as a
+poll describes a run, plus `age_s` (seconds since it started), `question_slug` and
+`batch_name`. At most 50 are listed; `truncated` counts the older ones left out. A
+run whose record cannot be read is listed with `state: "unknown"` and a `detail`.
+Take the `outputs_dir` of the entry you want and poll it or pass it as `resume`.
 
 **How long a queued run will wait.** While a run is queued for the local seat,
 `research_status` also returns `seat`: `waiting` (how many runs are queued now,

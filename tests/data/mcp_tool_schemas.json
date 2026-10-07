@@ -74,14 +74,12 @@
   "research_status": {
     "properties": {
       "outputs_dir": {
-        "description": "The output directory of a run to report on \u2014 the \"outputs_dir\" a detached `research` call returned. Reads the run's own record and per-stage state; it never starts or changes anything.",
+        "default": "",
+        "description": "The output directory of a run to report on \u2014 the \"outputs_dir\" a detached `research` call returned. Reads the run's own record and per-stage state; it never starts or changes anything. Leave it empty to list the runs under this server's data root instead, newest first.",
         "title": "Outputs Dir",
         "type": "string"
       }
     },
-    "required": [
-      "outputs_dir"
-    ],
     "title": "research_statusArguments",
     "type": "object"
   }
