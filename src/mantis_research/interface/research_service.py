@@ -767,15 +767,28 @@ def is_finished_record(record: Mapping[str, Any]) -> bool:
     """True when a run record is a successful, real run with nothing left to run.
 
     The one judgement behind "a resume collects": a ``complete`` record whose
-    stages all exited 0. A ``failed`` record, a ``complete`` one with a stage
-    that exited non-zero, a dry run's ``validated`` one and an abandoned
-    ``dispatching`` one each still have stages to run, so resuming them is a
-    resume and not a collect.
+    stages all exited 0 and whose sidecar did not fail. A ``failed`` record, a
+    ``complete`` one with a stage that exited non-zero, a dry run's
+    ``validated`` one and an abandoned ``dispatching`` one each still have
+    stages to run, so resuming them is a resume and not a collect.
+
+    So does a run whose sidecar failed, although its stages all exited 0
+    (ADR-0011): its synthesis state is not settled, so a resume re-enters that
+    stage for the sidecar alone. A sidecar removed after it was published does
+    not make a run unfinished: its synthesis is recorded as done with the
+    sidecar delivered, so a resume would re-run nothing and end at the same
+    refusal, and reading it as a collect returns that refusal at once rather
+    than a handle to a run that cannot change.
     """
+    sidecar = record.get('sidecar')
+    sidecar_failed = (
+        isinstance(sidecar, dict) and sidecar.get('status') == SidecarOutcome.FAILED.value
+    )
     return (
         record.get('status') == 'complete'
         and record.get('ok') is True
         and not record.get('dry_run', False)
+        and not sidecar_failed
     )
 
 

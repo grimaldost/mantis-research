@@ -36,7 +36,15 @@ import pytest
 from mantis_research.core.paths import RunDirs, topic_stem
 from mantis_research.core.progress import RunEvent, emit
 from mantis_research.core.settings import settings
-from mantis_research.interface.mcp.server import build_server, research, research_status
+from mantis_research.core.sidecar import SidecarOutcome
+from mantis_research.core.state import SynthesisState, TopicStatus
+from mantis_research.interface.mcp.server import (
+    IncompleteRunError,
+    _detach,
+    build_server,
+    research,
+    research_status,
+)
 from mantis_research.interface.research_service import (
     LocalSeatUnavailableError,
     resume_research,
@@ -696,6 +704,156 @@ class TestAResumeOfARunWithStagesLeftIsNotACollect:
         result = await research('', resume=first['outputs_dir'])
 
         assert 'state' not in result
+
+
+@dataclass
+class _SidecarAttempts:
+    """The stages each call dispatched, and how many sidecar turns are left to fail."""
+
+    dispatched: list[str] = field(default_factory=list)
+    failures_left: int = 1
+
+
+@pytest.fixture
+def sidecar_fails_once(monkeypatch: pytest.MonkeyPatch) -> _SidecarAttempts:
+    """Every stage exits 0; the first sidecar turn fails and the next one publishes.
+
+    The ADR-0011 shape: the synthesis stage records the sidecar's failure on its
+    own axis and still exits 0, so the run ends `complete` with `ok` true and no
+    sidecar. Its state is then not settled, which is what sends a resume back to
+    the sidecar turn.
+    """
+    monkeypatch.setattr(
+        'mantis_research.interface.research_service.require_local_claude_seat',
+        lambda **_: None,
+    )
+    attempts = _SidecarAttempts()
+
+    def fake(stage: str, cfg: Any, **_: Any) -> int:
+        attempts.dispatched.append(stage)
+        if stage != 'synthesis':
+            return 0
+        dirs = RunDirs('batch', cfg.batch_name)
+        slug = cfg.topics[0].slug
+        state = SynthesisState(id='1', slug=slug, status=TopicStatus.DONE)
+        if attempts.failures_left:
+            attempts.failures_left -= 1
+            state.sidecar_status = SidecarOutcome.FAILED
+            state.sidecar_error = 'schema drift on every re-ask'
+        else:
+            out = dirs.output('synthesis')
+            out.mkdir(parents=True, exist_ok=True)
+            (out / f'{topic_stem("1", slug)}.sidecar.json').write_text(
+                json.dumps(_SIDECAR), encoding='utf-8'
+            )
+            state.sidecar_status = SidecarOutcome.OK
+        state.save(dirs.state('synthesis'))
+        return 0
+
+    monkeypatch.setattr('mantis_research.interface.cli.dispatch.dispatch_stage_config', fake)
+    return attempts
+
+
+class TestAResumeOfARunWhoseSidecarFailedRetriesIt:
+    """`ok` true is not a finished run when its sidecar failed (T20a).
+
+    Since ADR-0011 a run whose sidecar turn failed still ends `complete` with
+    `ok` true, and the refusal it gets tells the caller to resume it. Counting
+    every `ok` run as a collect made that resume read the record back and raise
+    the same refusal, so the recovery the refusal names never ran.
+    """
+
+    def test_a_resume_re_enters_the_stages(
+        self, rooted: Path, sidecar_fails_once: _SidecarAttempts
+    ) -> None:
+        first = run_research('q', assurance='fast', batch_name='sidecar-failed')
+        assert first['ok'] is True
+        assert first['sidecar']['status'] == 'failed'
+        sidecar_fails_once.dispatched.clear()
+
+        resumed = resume_research(Path(first['outputs_dir']))
+
+        assert sidecar_fails_once.dispatched == ['openrouter', 'synthesis']
+        assert resumed['sidecar']['status'] == 'ok'
+
+    async def test_following_the_refusal_ends_in_the_answer(
+        self, rooted: Path, sidecar_fails_once: _SidecarAttempts
+    ) -> None:
+        with pytest.raises(IncompleteRunError, match='resume=') as refused:
+            await research('q', name='sidecar-failed', detach=False)
+        outputs_dir = str(rooted / 'outputs_root' / 'sidecar-failed')
+        assert outputs_dir in str(refused.value)
+
+        result = await research('', resume=outputs_dir, detach=False)
+
+        assert [c['id'] for c in result['claims']] == ['c1']
+        assert result['sidecar']['status'] == 'ok'
+
+    async def test_a_fast_resume_detaches_by_default_and_then_collects(
+        self, rooted: Path, sidecar_fails_once: _SidecarAttempts
+    ) -> None:
+        first = run_research('q', assurance='fast', batch_name='sidecar-failed')
+
+        handle = await research('', resume=first['outputs_dir'])
+
+        assert handle['state'] == 'running'
+        assert handle['batch_name'] == 'sidecar-failed'
+        assert (await _until_not_running(first['outputs_dir']))['state'] == 'finished'
+        result = await research('', resume=first['outputs_dir'])
+        assert [c['id'] for c in result['claims']] == ['c1']
+
+
+def _lose_sidecar(manifest: dict[str, Any]) -> None:
+    """Remove a run's published sidecar, as a cleanup after the run would."""
+    Path(manifest['outputs']['sidecar']).unlink()
+
+
+class TestALostSidecarIsStillACollect:
+    """A sidecar removed after it was published stays a collect that refuses.
+
+    Its synthesis is recorded as done with the sidecar delivered, so a resume
+    has nothing to re-run and would end at the same refusal. Treated as a run
+    with stages left, a plain resume of a fast run would hand back a handle,
+    the run would finish `ok` again, and the next collect would hand back
+    another: the caller would never see the refusal.
+    """
+
+    @pytest.mark.parametrize('detach', [None, True])
+    async def test_the_collect_refuses_whatever_detach_says(
+        self, rooted: Path, delivering_stages: None, detach: bool | None
+    ) -> None:
+        first = run_research('q', assurance='fast', batch_name='lost-sidecar')
+        _lose_sidecar(first)
+
+        with pytest.raises(IncompleteRunError, match='lost'):
+            await research('', resume=first['outputs_dir'], detach=detach)
+
+
+class TestADetachedCollectReturnsTheResult:
+    """A detached resume that finds the run finished returns its result (T20a).
+
+    `research` decides to detach on the record it reads first. When that record
+    was `dispatching` and its owner finished before the worker resumed it, the
+    worker collects, and a collect never names a run: waiting for the name
+    raised "did not name itself" over a run that had succeeded.
+    """
+
+    def test_it_returns_the_collected_result(self, rooted: Path, delivering_stages: None) -> None:
+        first = run_research('q', assurance='fast', batch_name='finished-under-us')
+
+        result = _detach(
+            '',
+            assurance='fast',
+            substrates=None,
+            primary='',
+            journal=False,
+            dry_run=False,
+            name='',
+            resume=first['outputs_dir'],
+        )
+
+        assert 'state' not in result
+        assert [c['id'] for c in result['claims']] == ['c1']
 
 
 class TestStatusFallsBackToWhatIsOnDisk:

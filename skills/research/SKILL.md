@@ -67,7 +67,8 @@ Arguments:
   `question` is ignored. Cheaper and more faithful than re-asking: the per-model
   briefs a lost run already paid for are reused rather than bought again. Passed
   a finished run, it is the **collect** call: it returns that run's result in
-  the same call, whatever `detach` says. A failed run is re-run instead.
+  the same call, whatever `detach` says. A failed run is re-run instead, and a
+  run whose sidecar failed has its sidecar retried.
 - `detach` — whether the call returns the run's identity at once instead of the
   result. Leave it unset and the tier decides: a `fast`, `standard` or `high`
   run detaches, because its local-seat turns outlast what a client will hold one
@@ -187,11 +188,14 @@ detaches unless you pass `detach: false`. It returns at once with `state:
 Poll `research_status` with the `outputs_dir` until `state` is `finished`, then
 call `research` with `resume=<outputs_dir>`: a resume of a finished run returns
 the full result in that call whatever `detach` says, and finished stages are not
-re-run or re-bought. Only a run that succeeded is collected: a resume of a run
-whose `ok` is false (`failed`, or a stage that exited non-zero) re-runs the
-stages left, and follows `detach` like a new run, so read `ok` before
-collecting. A run left `abandoned` by a server that went away is re-entered by
-the same call, which detaches or blocks by that run's own tier. A subagent
+re-run or re-bought. Only a run that succeeded, with `ok` true and a sidecar
+delivered (or none owed), is collected: a resume of a run whose `ok` is false
+(`failed`, or a stage that exited non-zero) re-runs the stages left, a resume of
+a run whose `sidecar.status` is `failed` re-enters the synthesis stage for the
+sidecar alone, and both follow `detach` like a new run, so read `ok` and
+`sidecar.status` before collecting. A run left `abandoned` by a server that went
+away is re-entered by the same call, which detaches or blocks by that run's own
+tier. A subagent
 calling this tool keeps the detached default and collects this way; pass
 `detach: true` to detach a `research`-tier run as well.
 

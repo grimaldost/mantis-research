@@ -254,7 +254,10 @@ to re-enter an interrupted run: the question and settings come from it, so
 nothing is retyped, completed stages and topics are skipped, and a run whose
 `owner_pid` is still a live process is refused rather than run twice. Resuming
 an abandoned run appends a `dead` entry to the record's `history` before it
-starts, so the record says what happened rather than being overwritten. The
+starts, so the record says what happened rather than being overwritten. A resume
+of a run that finished with `ok` true and a sidecar that did not fail reads the
+record and the files back and writes nothing; a run whose sidecar failed is
+re-entered at the synthesis stage, which retries the sidecar alone. The
 directory offered must be strictly inside the data root's `outputs/`.
 
 ## Cost

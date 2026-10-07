@@ -165,18 +165,22 @@ releases (starting with 0.1.0).
   run whose tier includes a local-seat stage detaches, and a `research`-tier run
   or a dry run blocks as before. An explicit `true` or `false` is honoured as
   before. A real (not dry-run) `resume` of a run that finished, a real run whose
-  record is `complete` with every stage at exit 0, is a collect: it blocks and
-  returns the full result whatever `detach` says, where `detach=true` used to
-  answer it with another handle. A collect reads the run's record and the
-  artifacts on disk and writes nothing, so it keeps the run's seat timings and
-  its place in the run listing, and it does not need the local seat. A resume of
-  a run with stages left to run (`failed`, `complete` with a stage that exited
-  non-zero, abandoned, or a dry run's `validated` record) re-runs them and is
-  not a collect: an explicit `detach` is honoured, and unset it detaches or
-  blocks by the tier in the record, not the call's `assurance`. A run refused
-  before it names itself (an unusable seat, an invalid argument) now raises that
-  refusal from a detached call as well, instead of "did not name itself within
-  30s". ADR-0009 gains an amendment recording this as a deliberate exception to
+  record is `complete` with every stage at exit 0 and a sidecar that did not
+  fail, is a collect: it blocks and returns the full result whatever `detach`
+  says, where `detach=true` used to answer it with another handle. A collect
+  reads the run's record and the artifacts on disk and writes nothing, so it
+  keeps the run's seat timings and its place in the run listing, and it does not
+  need the local seat. A resume of a run with stages left to run (`failed`,
+  `complete` with a stage that exited non-zero, abandoned, or a dry run's
+  `validated` record) re-runs them and is not a collect: an explicit `detach` is
+  honoured, and unset it detaches or blocks by the tier in the record, not the
+  call's `assurance`. So is a run whose sidecar failed (`ok` true,
+  `sidecar.status` `failed`, ADR-0011): its resume re-enters the synthesis stage
+  for the sidecar alone, which is the recovery that run's refusal names. A run
+  refused before it names itself (an unusable seat, an invalid argument) now
+  raises that refusal from a detached call as well, instead of "did not name
+  itself within 30s", and a detached resume that finds the run already finished
+  returns its result. ADR-0009 gains an amendment recording this as a deliberate exception to
   its additive-only rule for the tool's result. The tool description gains a
   `detach` entry with those durations, held by a test to the constants
   `RESEARCH_STAGE_MINUTES` and `LOCAL_SEAT_TURN_MEDIAN_MINUTES` that the skill
@@ -188,9 +192,11 @@ releases (starting with 0.1.0).
   run is `finished`, then call `research(resume=<outputs_dir>)` to collect it,
   or pass `detach=false` to block as before. Callers that already pass
   `detach` see no change, except that a resume of a finished run now always
-  returns the result. Read `ok` before collecting: a resume of a run whose `ok`
-  is false re-runs its failed stage, and on a seat tier returns another handle
-  unless you pass `detach=false`.
+  returns the result. Read `ok` and `sidecar.status` before collecting: a resume
+  of a run whose `ok` is false re-runs its failed stage, a resume of a run whose
+  sidecar failed retries the sidecar, and on a seat tier either returns another
+  handle unless you pass `detach=false`. Only a run that succeeded, with `ok`
+  true and a sidecar delivered (or none owed), is collected.
 - **The research prompt asks where each named source came from.** The default
   research template (`RESEARCH_REQUEST`, what `mantis research` and the
   `research` tool send every substrate) said only to mark anything unverifiable

@@ -119,5 +119,8 @@ that did not read the description on the failing path.
 The opt-out is `detach=false`, which blocks on any tier as before. A `research`
 tier run and a dry run still block by default. Collecting is the same tool: a
 `resume` of a finished run returns the full result in that call whatever `detach`
-says. The change is marked as breaking in the CHANGELOG with a **For callers:**
-note, and the skill documents poll-then-collect.
+says. A finished run here is one that ended with `ok` true and a sidecar that did
+not fail; a resume of a run whose sidecar failed re-enters the synthesis stage
+for the sidecar (ADR-0011) and follows `detach` like a new run. The change is
+marked as breaking in the CHANGELOG with a **For callers:** note, and the skill
+documents poll-then-collect.

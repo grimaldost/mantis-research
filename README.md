@@ -145,10 +145,11 @@ open, so a plain `fast`, `standard` or `high` call **detaches**: it returns a
 handle at once (`state: "running"`, `outputs_dir`, `batch_name`) while the run
 continues in the server. Poll `research_status` until the run is `finished`,
 then call `research` with `resume=<outputs_dir>`; a resume of a run that
-succeeded blocks and returns the full result, while one whose `ok` is false
-re-runs its failed stage like a new run. A `research`-tier call and a `dry_run`
-block and return the result directly. Pass `detach: false` to block on any tier,
-or `detach: true` to detach any run.
+succeeded (`ok` true and a sidecar delivered, or none owed) blocks and returns
+the full result. One whose `ok` is false re-runs its failed stage, and one whose
+`sidecar.status` is `failed` retries the sidecar, each like a new run. A
+`research`-tier call and a `dry_run` block and return the result directly. Pass
+`detach: false` to block on any tier, or `detach: true` to detach any run.
 
 ### Where runs are written
 

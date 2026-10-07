@@ -435,7 +435,8 @@ def _should_detach(detach: bool | None, *, assurance: str, dry_run: bool, resume
     leave the caller polling a run that is already finished. Only a run with
     nothing left to run is a collect (:func:`is_finished_record`); a ``failed``
     or abandoned one, or one with a stage that exited non-zero, re-runs its
-    remaining stages on resume, and that is as long as a new run. A record that
+    remaining stages on resume, and that is as long as a new run. So does one
+    whose sidecar failed, which re-enters the synthesis stage. A record that
     cannot be read blocks, so the resume's own refusal reaches the caller.
     Otherwise an explicit ``detach`` is honoured, and unset it detaches exactly
     the runs that will queue for the local seat, judged on the tier the run will
@@ -478,10 +479,16 @@ def _detach(
     a result shaped like an answer is exactly what let a briefs-only run read as
     one. When the run will need the local seat, it carries the queue it will
     join as ``seat`` (T1f).
+
+    A resume can turn out to be a collect: the record the caller's check read
+    was ``dispatching``, and its owner finished before this worker resumed it.
+    A collect names no run, so the worker returns before any name arrives, and
+    its result is returned as a blocking collect would return it.
     """
     started = threading.Event()
     identity: dict[str, Any] = {}
     refused: list[Exception] = []
+    collected: list[dict[str, Any]] = []
 
     def note(event: RunEvent) -> None:
         if event.kind == 'run_named' and not identity:
@@ -490,7 +497,7 @@ def _detach(
 
     def work() -> None:
         try:
-            _run_and_assemble(
+            result = _run_and_assemble(
                 question,
                 assurance=assurance,
                 substrates=substrates,
@@ -501,6 +508,8 @@ def _detach(
                 resume=resume,
                 on_event=note,
             )
+            if not identity:
+                collected.append(result)
         except Exception as exc:
             # Before the run names itself, a failure is the caller's answer:
             # the seat check and argument validation run there.
@@ -520,6 +529,8 @@ def _detach(
     if not identity:
         if refused:
             raise refused[0]
+        if collected:
+            return collected[0]
         msg = (
             'the detached run did not name itself within '
             f'{_NAMING_TIMEOUT_S:.0f}s — it failed before dispatch. Re-run '
@@ -600,7 +611,8 @@ async def research(
                 'returns the result. Pass false to block on any tier, or true to '
                 'detach any run. A resume of a finished run is a collect: it '
                 'blocks and returns the result whatever this says. A resume of '
-                'a failed run re-runs it and follows this setting.'
+                'a failed run re-runs it, and a resume of a run whose sidecar '
+                'failed retries the sidecar; both follow this setting.'
             )
         ),
     ] = None,
@@ -626,8 +638,9 @@ async def research(
                 'from that run\'s own record, so "question" is ignored. Pass a '
                 "finished run's directory to collect its result: that call "
                 'blocks whatever "detach" says. A failed run, or one with a stage '
-                'that exited non-zero, is re-run from that stage instead, and '
-                '"detach" applies to it as to a new run.'
+                'that exited non-zero, is re-run from that stage instead, and a '
+                'run whose sidecar failed has its sidecar retried; "detach" '
+                'applies to either as to a new run.'
             )
         ),
     ] = '',
@@ -678,7 +691,8 @@ async def research(
         resume of a finished run blocks and returns the result whatever
         ``detach`` says. A resume of a failed or abandoned run, or of one with a
         stage that exited non-zero, re-runs those stages and follows ``detach``
-        like a new run.
+        like a new run, and so does a resume of a run whose sidecar failed, which
+        retries the sidecar.
     """
     # dispatch_stage_config nests asyncio.run per stage, so the synchronous
     # pipeline must run OFF this event loop or it raises RuntimeError (FM-1).
