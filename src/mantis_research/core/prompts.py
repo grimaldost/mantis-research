@@ -25,7 +25,7 @@ A domain expert researching the question below for an autonomous agent that need
 </question>
 
 <method>
-Produce a dense, well-sourced markdown brief that answers the question. Lead with a direct answer, then the evidence and mechanism, then boundary conditions and open questions. Ground every non-obvious claim in a real, named source; where sources disagree, surface the disagreement rather than smoothing it. Mark anything you cannot verify "Not found" instead of inventing it.
+Produce a dense, well-sourced markdown brief that answers the question. Lead with a direct answer, then the evidence and mechanism, then boundary conditions and open questions. Ground every non-obvious claim in a real, named source; where sources disagree, surface the disagreement rather than smoothing it. For every named repository, paper, product or benchmark, state whether you retrieved it this turn or recall it from training, and attach no specific numbers (stars, versions, scores, latencies) to one you only recall; mark anything you cannot verify either way "Not found" instead of inventing it.
 </method>
 
 <guardrails>

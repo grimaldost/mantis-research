@@ -3,14 +3,20 @@
 The load-bearing case is the empty string: 163 committed Path-B topics carry
 ``claude.prompt == ""``, so resolution must key on ``is not None``, never
 truthiness (which would drop ``""`` to the fallback and reject those configs).
+
+The default template a ``mantis research`` question is formatted into,
+``RESEARCH_REQUEST``, is pinned at the end: its provenance rule (T25a).
 """
 
 from __future__ import annotations
+
+import re
 
 import pytest
 from pydantic import ValidationError
 
 from mantis_research.core.config import load_batch_config
+from mantis_research.core.prompts import RESEARCH_REQUEST
 
 
 def _cfg(topic: dict[str, object]) -> dict[str, object]:
@@ -88,3 +94,34 @@ class TestFailFast:
                 }
             )
         assert 'gpt' in str(exc.value)
+
+
+# The one provenance rule of RESEARCH_REQUEST (T25a). Briefs attached confident
+# numbers (stars, versions, benchmark scores) to repositories and papers the model
+# only remembered; the rule makes each named artifact say where it came from.
+_PROVENANCE_RULE = (
+    'For every named repository, paper, product or benchmark, state whether you'
+    ' retrieved it this turn or recall it from training, and attach no specific'
+    ' numbers (stars, versions, scores, latencies) to one you only recall; mark'
+    ' anything you cannot verify either way "Not found" instead of inventing it.'
+)
+_OLD_NOT_FOUND = 'Mark anything you cannot verify "Not found" instead of inventing it.'
+
+
+class TestResearchRequestProvenance:
+    def test_the_provenance_rule_is_in_the_method(self) -> None:
+        method = re.search(r'<method>\n(.*?)\n</method>', RESEARCH_REQUEST, re.DOTALL)
+        assert method is not None
+        # Rewritten in place: the method stays one paragraph, no line is added.
+        assert '\n' not in method.group(1)
+        assert _PROVENANCE_RULE in method.group(1)
+
+    def test_the_old_not_found_sentence_is_gone(self) -> None:
+        assert _OLD_NOT_FOUND not in RESEARCH_REQUEST
+        # "Not found" is asked for in one place, the provenance rule.
+        assert RESEARCH_REQUEST.count('"Not found"') == 1
+
+    def test_the_template_still_formats(self) -> None:
+        rendered = RESEARCH_REQUEST.format(question='q')
+        assert '<question>\nq\n</question>' in rendered
+        assert _PROVENANCE_RULE in rendered

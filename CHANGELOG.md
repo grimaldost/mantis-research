@@ -115,6 +115,17 @@ releases (starting with 0.1.0).
   or pass `detach=false` to block as before. Callers that already pass
   `detach` see no change, except that a resume of a finished run now always
   returns the result.
+- **The research prompt asks where each named source came from.** The default
+  research template (`RESEARCH_REQUEST`, what `mantis research` and the
+  `research` tool send every substrate) said only to mark anything unverifiable
+  "Not found", and briefs attached confident figures (stars, versions, benchmark
+  scores) to repositories and papers the model only remembered. That sentence is
+  rewritten as one provenance rule, with no line added: for every named
+  repository, paper, product or benchmark the brief says whether it was
+  retrieved this turn or recalled from training, attaches no specific numbers to
+  one it only recalls, and marks anything it cannot verify either way
+  "Not found". A test pins the sentence. Whether briefs carry fewer wrong
+  figures is checked on the next paid run.
 
 ### Fixed
 
