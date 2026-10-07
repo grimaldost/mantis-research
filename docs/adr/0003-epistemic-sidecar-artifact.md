@@ -81,3 +81,34 @@ the synthesis settled it from what the briefs quote; how often that happens is
 checked on the next paid run. A consumer that filters on `figures_conflict`
 sees no change; one that wants the brief-against-source verdict reads
 `source_check` and treats `not_checked` as "unknown", never as "fine".
+
+## Amendment (2026-10-07): paths relative to the run root (v3)
+
+This amendment applies the decision above, including its rule that an
+incompatible change bumps `sidecar_version`. It is that case, so the runner now
+writes `sidecar_version: 3`. Versions 1 and 2 still validate (I6).
+
+`sources[].path` and `synthesis_path` held absolute machine paths. A frozen
+sidecar copied to another directory or machine named files that were not there,
+and a consumer had to rewrite the paths by hand before the sources opened. From
+v3 the runner records both relative to the run root, with `/` separators: for
+example `openrouter/01-slug/openai.md` and `synthesis/01-slug.md`. The run root
+is the directory two levels above the sidecar file in both layouts: the run's
+`outputs_dir` (`outputs/<batch>/`) under `batch`, and the data root under
+`legacy`.
+
+The field names and types stay the same, but their meaning changes. A consumer
+that opened the value directly would resolve a v3 path against its own working
+directory, without an error. That is why the version moves rather than staying
+at 2 under I4. The alternative was to add `rel_path` fields beside the absolute
+ones with no bump. It was rejected because a copied sidecar would still carry
+absolute paths that point nowhere, and every reader would have to know which
+field to trust.
+
+`core/sidecar.py` adds `run_root_of(sidecar_path)` and
+`ResearchSidecar.resolved_paths(run_root)`. They are pure. The second joins v3
+paths onto the given run root and returns v1 and v2 paths unchanged, because a
+relative value in those versions was relative to the writer's working directory
+and not to the run root. A consumer either branches on `sidecar_version` or
+calls the resolver. A consumer that validates with the 0.5.1 schema, which
+accepts only versions 1 and 2, rejects a v3 sidecar with a validation error.

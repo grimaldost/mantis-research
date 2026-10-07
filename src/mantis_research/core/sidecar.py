@@ -1,4 +1,4 @@
-"""Epistemic sidecar schema v2 — the agent-consumable contract (ADR-0003).
+"""Epistemic sidecar schema v3 — the agent-consumable contract (ADR-0003).
 
 Each synthesis produces a ``<stem>.sidecar.json`` alongside the markdown brief.
 It carries the pipeline's highest-value signal — divergences, hallucination
@@ -19,7 +19,12 @@ The schema evolves additively (I4); an incompatible change bumps
 ``sidecar_version``. v2 adds ``question`` (a sidecar with no question is not a
 citation surface — a consumer cannot tell which question it answers) and the
 typed source-provenance block. Both additions are readable by a v1 consumer,
-and v1 documents on disk still validate (I6).
+and v1 documents on disk still validate (I6). v3 changes what two
+runner-authored fields mean: ``sources[].path`` and ``synthesis_path`` are
+relative to the run root (:func:`run_root_of`), with ``/`` separators, where v1
+and v2 wrote absolute machine paths. A consumer that opened them as before would
+resolve a v3 path against its own working directory, so the version moves;
+:meth:`ResearchSidecar.resolved_paths` reads all three.
 
 Emission is gated: :func:`missing_required_fields` names what a merged document
 still lacks, and :meth:`ResearchSidecar.require_complete` raises rather than let
@@ -28,7 +33,9 @@ a hollow artifact ship.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -51,14 +58,40 @@ SOURCE_CHECK = Literal['confirmed', 'contradicted', 'shared_unsupported', 'not_c
 CHECK_KIND = Literal['repo_exists', 'metric', 'license', 'url_resolves']
 
 #: The schema version the runner writes today. Older versions still validate.
-SIDECAR_VERSION = 2
+SIDECAR_VERSION = 3
 
 #: Runner-authored fields a written sidecar must carry to be usable at all.
 REQUIRED_ON_WRITE: tuple[str, ...] = ('question', 'generated_at', 'sources')
 
+#: The first version whose ``sources[].path`` and ``synthesis_path`` are relative
+#: to the run root (T4b). Earlier versions recorded the paths as written.
+RELATIVE_PATHS_SINCE = 3
+
 
 class SidecarContractError(ValueError):
     """A merged sidecar is missing a field the agent contract requires."""
+
+
+def run_root_of(sidecar_path: Path) -> Path:
+    """Return the run root a sidecar's paths are relative to (v3 on).
+
+    The sidecar sits in the run's synthesis directory, one level below the run
+    root, in both layouts (ADR-0006): ``outputs/<batch>/synthesis/`` under
+    ``batch``, where the run root is the run's ``outputs_dir``, and
+    ``<data root>/research-outputs-synthesis/`` under ``legacy``, where it is the
+    data root. The synthesis document sits beside the sidecar, so its path gives
+    the same answer. Pure path arithmetic.
+    """
+    return sidecar_path.parent.parent
+
+
+@dataclass(frozen=True, slots=True)
+class SidecarPaths:
+    """A sidecar's recorded file paths, resolved against a run root."""
+
+    synthesis: Path | None
+    #: ``(label, path)`` for each ``sources[]`` entry, in the sidecar's order.
+    sources: tuple[tuple[str, Path], ...]
 
 
 class SidecarOutcome(StrEnum):
@@ -193,7 +226,7 @@ class SourceRef(SidecarModel):
     """One research brief that fed the synthesis (runner-authored)."""
 
     label: str  # e.g. 'claude', 'openrouter:gpt-5-exa'
-    path: str
+    path: str  # relative to the run root from v3, e.g. 'openrouter/01-slug/openai.md'
     model_id: str | None = None
     bytes: int | None = None
 
@@ -255,14 +288,14 @@ class Provenance(SidecarModel):
 
 
 class ResearchSidecar(SidecarModel):
-    """The versioned epistemic sidecar (v1).
+    """The versioned epistemic sidecar (v3).
 
     ``from_model_json`` validates only the model-authored zone (identity and
     provenance are runner-filled afterward), so the model may omit those; the
     runner sets them before the final write.
     """
 
-    sidecar_version: Literal[1, 2] = SIDECAR_VERSION
+    sidecar_version: Literal[1, 2, 3] = SIDECAR_VERSION
 
     # runner-authored identity
     # The question the run answered, verbatim from the run manifest. Without it
@@ -272,7 +305,7 @@ class ResearchSidecar(SidecarModel):
     topic_id: str | None = None
     slug: str | None = None
     batch_name: str | None = None
-    synthesis_path: str | None = None
+    synthesis_path: str | None = None  # relative to the run root from v3
     generated_at: str | None = None  # ISO 8601 UTC, stamped by the runner
     sources: list[SourceRef] = Field(default_factory=list)
 
@@ -302,6 +335,26 @@ class ResearchSidecar(SidecarModel):
     def to_json(self) -> str:
         """Serialize the merged document for the final on-disk write."""
         return self.model_dump_json(indent=2)
+
+    def resolved_paths(self, run_root: Path) -> SidecarPaths:
+        """Return ``synthesis_path`` and every ``sources[].path`` as usable paths.
+
+        From v3 the runner records both relative to the run root, with ``/``
+        separators, so they are joined onto ``run_root`` — wherever the run
+        directory sits now (:func:`run_root_of` finds it from the sidecar's own
+        path). v1 and v2 recorded the paths as written, absolute in practice,
+        and are returned unchanged: a relative value there was relative to the
+        writer's working directory, not to the run root. Pure: touches no file.
+        """
+        relative = self.sidecar_version >= RELATIVE_PATHS_SINCE
+
+        def resolve(value: str) -> Path:
+            return run_root / value if relative else Path(value)
+
+        return SidecarPaths(
+            synthesis=None if self.synthesis_path is None else resolve(self.synthesis_path),
+            sources=tuple((s.label, resolve(s.path)) for s in self.sources),
+        )
 
     def require_complete(self) -> None:
         """Raise unless every :data:`REQUIRED_ON_WRITE` field is populated.

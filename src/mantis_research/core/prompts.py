@@ -111,7 +111,7 @@ Read each of them with the Read tool as well: `source_citations` is an inventory
 Write ONLY valid JSON to {sidecar_path} with the Write tool — no prose, no markdown fences, no code block. Emit exactly this shape (these are the model-authored fields; the runner fills run identity and provenance separately, so do NOT include them):
 
 {{
-  "sidecar_version": 2,
+  "sidecar_version": 3,
   "claims": [
     {{"id": "c1", "text": "<a load-bearing claim, verbatim from the synthesis>", "section": "<section/paragraph ref, or null>", "support": "direct|indirect|none"}}
   ],

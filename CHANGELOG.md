@@ -181,6 +181,34 @@ releases (starting with 0.1.0).
   one it only recalls, and marks anything it cannot verify either way
   "Not found". A test pins the sentence. Whether briefs carry fewer wrong
   figures is checked on the next paid run.
+- **Sidecar paths are relative to the run root, and `sidecar_version` is 3.**
+  `sources[].path` and `synthesis_path` held absolute machine paths. A frozen
+  sidecar copied to another directory or machine named files that were not
+  there, and a consumer had to rewrite the paths by hand before the sources
+  opened (MANT-B16). The runner now records both relative to the run root, with
+  `/` separators, for example `openrouter/01-slug/openai.md` and
+  `synthesis/01-slug.md`. The run root is the directory two levels above the
+  sidecar file: the run's `outputs_dir` under the `batch` layout, and the data
+  root under `legacy`. The field names and types are unchanged but their
+  meaning is not, so the version moves from 2 to 3 under the schema's own rule
+  for an incompatible change. `core/sidecar.py` adds two pure helpers:
+  `run_root_of(sidecar_path)`, and `ResearchSidecar.resolved_paths(run_root)`,
+  which joins v3 paths onto a run root and returns v1 and v2 paths unchanged.
+  Versions 1 and 2 still validate. The sidecar prompt's example shows version 3;
+  the runner stamps the version either way. ADR-0003 gains an amendment that
+  also records the alternative not taken: additive `rel_path` fields with no
+  bump. The entries above that say `sidecar_version` stays 2 are still additive
+  on their own, but this release writes 3.
+  **For callers:** a sidecar written from now on carries `sidecar_version: 3`.
+  A consumer that opens `sources[].path` or `synthesis_path` must join it onto
+  the directory two levels above the sidecar file (for an MCP or
+  `mantis research` run, the run's `outputs_dir`), or call
+  `ResearchSidecar.resolved_paths(run_root_of(sidecar_path))`. Opened as it is,
+  a relative path resolves against the consumer's own working directory and
+  names the wrong file or none. Branch on `sidecar_version`: 1 and 2 keep
+  absolute paths. The 0.5.1 schema accepts only versions 1 and 2, so a consumer
+  that validates with it rejects a v3 sidecar. The MCP result's inline sidecar
+  projection carries no paths and is unchanged.
 
 ### Fixed
 

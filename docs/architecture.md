@@ -173,7 +173,7 @@ Configs may pin model ids or opt into the auto-latest policy
 
 Each synthesis writes `<stem>.sidecar.json` next to the brief — the
 agent-consumable contract ([ADR-0003](adr/0003-epistemic-sidecar-artifact.md),
-schema `core/sidecar.py`, `sidecar_version: 2`). Authorship is split by who
+schema `core/sidecar.py`, `sidecar_version: 3`). Authorship is split by who
 knows what: the synthesis model writes the epistemic fields (claims,
 divergences, verification queue, agreements worth verifying, coverage notes);
 the runner fills the question, the rest of the identity, sources, and

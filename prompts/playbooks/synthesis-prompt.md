@@ -235,7 +235,7 @@ in, renames the merged document onto `<stem>.sidecar.json` and removes the
 draft. The model never writes the published path, so a reader keyed on that
 file's presence cannot meet a half-made sidecar with `sources: []` and
 `provenance: {}` — which is what it used to meet. The schema is
-`core/sidecar.py` (`ResearchSidecar`, `sidecar_version: 2`), with two authorship
+`core/sidecar.py` (`ResearchSidecar`, `sidecar_version: 3`), with two authorship
 zones:
 
 - **model-authored** — `claims`, `divergences`, `verification_queue`,

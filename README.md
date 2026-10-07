@@ -169,13 +169,16 @@ under the data root. Details:
 
 Each synthesis writes `<stem>.sidecar.json` next to the markdown brief — the
 agent-consumable contract ([ADR-0003](docs/adr/0003-epistemic-sidecar-artifact.md),
-schema in `core/sidecar.py`, `sidecar_version: 2`):
+schema in `core/sidecar.py`, `sidecar_version: 3`):
 
 - **model-authored** — `claims`, `divergences`, `verification_queue`,
   `agreements_worth_verifying`, `coverage_notes`.
 - **runner-authored** — the `question` verbatim, the rest of the run identity,
   `sources`, and `provenance` (durations, token/cost), merged in after the
-  model's JSON validates.
+  model's JSON validates. `sources[].path` and `synthesis_path` are relative to
+  the run root, the directory two levels above the sidecar, so a copied run
+  directory still resolves them (`ResearchSidecar.resolved_paths`). Versions 1
+  and 2 recorded absolute paths.
 
 The write is gated: a merged sidecar missing `question`, `generated_at` or a
 non-empty `sources` is recorded as a failed sidecar instead of shipping. Without

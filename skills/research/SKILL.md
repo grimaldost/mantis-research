@@ -147,7 +147,10 @@ The **complete** sidecar is always on disk at `outputs.sidecar` — including fi
 not projected inline: `question` (the question this sidecar answers, verbatim —
 so a sidecar you froze months ago is still citable on its own), `sources[]`
 (`{ label, path, model_id, bytes }` per brief, so you can see which model
-produced which brief), `source_citations[]` (the full per-substrate citation
+produced which brief; from `sidecar_version` 3, `path` and the top-level
+`synthesis_path` are relative to the run's `outputs_dir`, the directory two
+levels above the sidecar file, so join them onto it before opening; version 2
+sidecars hold absolute paths), `source_citations[]` (the full per-substrate citation
 inventory `source_overlaps` is computed from) and `provenance` (durations,
 token/cost totals). Read it when you need the full lists or per-source
 attribution.

@@ -30,6 +30,7 @@ from mantis_research.core.sidecar import (
     SidecarOutcome,
     SourceRef,
     derive_source_overlaps,
+    run_root_of,
 )
 from mantis_research.core.stage import AttemptResult
 from mantis_research.core.state import OpenRouterResearchState
@@ -636,6 +637,10 @@ class SynthesisStage:
             dirs.state('openrouter'), topic.id, topic.slug
         )
         model_by_subslug = {s.subslug: s.model for s in or_state.subsessions}
+        # Paths are recorded relative to the run root (v3, T4b), so a sidecar
+        # copied to another directory or machine still resolves them. Every
+        # brief and the synthesis are built from that root by `RunDirs`.
+        run_root = run_root_of(synthesis_path)
 
         def _source_ref(label: str, path: Path) -> SourceRef:
             # The label is the resolved list's, the one the sidecar prompt
@@ -647,7 +652,7 @@ class SynthesisStage:
             stage, _, subslug = label.partition(':')
             return SourceRef(
                 label=label,
-                path=path.as_posix(),
+                path=path.relative_to(run_root).as_posix(),
                 model_id=model_by_subslug.get(subslug) if stage == 'openrouter' else None,
                 bytes=path.stat().st_size,
             )
@@ -670,7 +675,7 @@ class SynthesisStage:
                 'topic_id': topic.id,
                 'slug': topic.slug,
                 'batch_name': dirs.batch_name,
-                'synthesis_path': synthesis_path.as_posix(),
+                'synthesis_path': synthesis_path.relative_to(run_root).as_posix(),
                 'generated_at': datetime.now(UTC).isoformat(),
                 'sources': sources,
                 # Overlap membership is recomputed from the model's citation

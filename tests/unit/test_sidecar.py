@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import get_args
 
 import pytest
@@ -22,6 +23,7 @@ from mantis_research.core.sidecar import (
     derive_source_overlaps,
     missing_required_fields,
     project_for_agent,
+    run_root_of,
 )
 from mantis_research.core.state import SubsessionResult
 
@@ -109,15 +111,27 @@ class TestRequiredFieldsOnWrite:
 
 
 class TestValidation:
-    def test_current_version_is_two(self) -> None:
-        # Additive bump (I4): `question` plus the typed provenance fields.
-        assert SIDECAR_VERSION == 2
-        assert ResearchSidecar().sidecar_version == 2
+    def test_current_version_is_three(self) -> None:
+        # v2 was additive (I4): `question` plus the typed provenance fields. v3
+        # changes what `sources[].path` and `synthesis_path` mean — relative to
+        # the run root, no longer absolute (T4b) — so the version moves.
+        assert SIDECAR_VERSION == 3
+        assert ResearchSidecar().sidecar_version == 3
 
     def test_version_one_still_loads(self) -> None:
         # I6 — sidecars written before the bump stay readable.
         sc = ResearchSidecar.from_model_json(json.dumps(_FULL_MODEL_DOC))
         assert sc.sidecar_version == 1
+
+    def test_version_two_with_absolute_paths_still_loads(self) -> None:
+        doc = {
+            'sidecar_version': 2,
+            'synthesis_path': '/data/outputs/r/synthesis/01-t.md',
+            'sources': [{'label': 'openrouter:openai', 'path': '/data/outputs/r/o/openai.md'}],
+        }
+        sc = ResearchSidecar.from_model_json(json.dumps(doc))
+        assert sc.sidecar_version == 2
+        assert sc.sources[0].path == '/data/outputs/r/o/openai.md'
 
     def test_wrong_version_rejected(self) -> None:
         with pytest.raises(ValidationError):
@@ -133,6 +147,59 @@ class TestValidation:
         doc = {'sidecar_version': 1, 'claimz': []}
         with pytest.raises(ValidationError):
             ResearchSidecar.from_model_json(json.dumps(doc))
+
+
+class TestResolvedPaths:
+    """T4b — a sidecar's file paths resolve wherever its run directory now sits.
+
+    v1 and v2 recorded absolute machine paths, so a frozen sidecar copied to
+    another machine had to be normalised by hand before its sources opened. v3
+    records them relative to the run root; the resolver joins them back on.
+    """
+
+    def _v3(self) -> ResearchSidecar:
+        return ResearchSidecar(
+            synthesis_path='synthesis/01-t.md',
+            sources=[
+                SourceRef(label='openrouter:openai', path='openrouter/01-t/openai.md'),
+                SourceRef(label='gemini', path='gemini/01-t.md'),
+            ],
+        )
+
+    def test_run_root_is_two_levels_above_the_sidecar(self, tmp_path: Path) -> None:
+        sidecar = tmp_path / 'outputs' / 'run' / 'synthesis' / '01-t.sidecar.json'
+        assert run_root_of(sidecar) == tmp_path / 'outputs' / 'run'
+
+    def test_relative_paths_join_the_given_run_root(self, tmp_path: Path) -> None:
+        resolved = self._v3().resolved_paths(tmp_path)
+        assert resolved.synthesis == tmp_path / 'synthesis' / '01-t.md'
+        assert resolved.sources == (
+            ('openrouter:openai', tmp_path / 'openrouter' / '01-t' / 'openai.md'),
+            ('gemini', tmp_path / 'gemini' / '01-t.md'),
+        )
+
+    def test_an_absolute_v2_path_passes_through(self, tmp_path: Path) -> None:
+        written = tmp_path / 'old' / 'synthesis' / '01-t.md'
+        brief = tmp_path / 'old' / 'openrouter' / '01-t' / 'openai.md'
+        sc = ResearchSidecar(
+            sidecar_version=2,
+            synthesis_path=written.as_posix(),
+            sources=[SourceRef(label='openrouter:openai', path=brief.as_posix())],
+        )
+        resolved = sc.resolved_paths(tmp_path / 'elsewhere')
+        assert resolved.synthesis == written
+        assert resolved.sources == (('openrouter:openai', brief),)
+
+    def test_a_v2_path_is_never_joined_even_when_relative(self, tmp_path: Path) -> None:
+        # Before v3 a relative value was relative to the writer's working
+        # directory, not the run root, so joining it would invent a location.
+        sc = ResearchSidecar(
+            sidecar_version=2, sources=[SourceRef(label='claude', path='outputs/01-t.md')]
+        )
+        assert sc.resolved_paths(tmp_path).sources == (('claude', Path('outputs/01-t.md')),)
+
+    def test_an_absent_synthesis_path_stays_absent(self, tmp_path: Path) -> None:
+        assert ResearchSidecar().resolved_paths(tmp_path).synthesis is None
 
 
 class TestSourceProvenance:

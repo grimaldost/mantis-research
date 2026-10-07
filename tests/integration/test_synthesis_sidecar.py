@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -30,6 +31,7 @@ from mantis_research.core.sidecar import (
     ResearchSidecar,
     SidecarOutcome,
     project_for_agent,
+    run_root_of,
 )
 from mantis_research.core.stage import RunContext
 from mantis_research.core.state import SynthesisState
@@ -150,6 +152,40 @@ async def _run(adapter: ScriptedAdapter, cfg: BatchConfig, tmp_path: Path, state
         dry_run=False,
     )
     return await stage.run_attempt(cfg.topics[0], state, ctx)
+
+
+async def _run_openrouter_batch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Run one topic over two OpenRouter briefs under a batch layout at ``tmp_path/sc``.
+
+    Returns the published sidecar's path; the run root is ``tmp_path/sc``.
+    """
+    monkeypatch.setattr('mantis_research.core.paths.outputs_root', lambda: tmp_path)
+    or_out = tmp_path / 'sc' / 'openrouter' / '01-t'
+    for subslug in ('openai', 'deepseek'):
+        _write(or_out / f'{subslug}.md', f'{subslug} brief')
+    cfg = load_batch_config(
+        {
+            'schema_version': 2,
+            'batch_name': 'sc',
+            'runner': {'layout': 'batch'},
+            'models': {
+                'claude': {'model': 'claude-opus-4-7', 'effort': 'max'},
+                'primary': 'openrouter:openai',
+            },
+            'topics': [
+                {'id': '1', 'slug': 't', 'title': 'T', 'stages': {'claude': {'prompt': ''}}}
+            ],
+        }
+    )
+    sidecar_path = tmp_path / 'sc' / 'synthesis' / '01-t.sidecar.json'
+    adapter = ScriptedAdapter(
+        tmp_path / 'sc' / 'synthesis' / '01-t.md',
+        sidecar_path,
+        tmp_path / 'sc' / 'journals' / '01-t-journal.md',
+    )
+    result = await _run(adapter, cfg, tmp_path, SynthesisState(id='1', slug='t'))
+    assert result.success
+    return sidecar_path
 
 
 class TestSidecarEmission:
@@ -463,15 +499,80 @@ class TestSidecarEmission:
         )
         result = await _run(adapter, cfg, tmp_path, SynthesisState(id='1', slug='t'))
         assert result.success
-        sources = ResearchSidecar.from_model_json(sidecar_path.read_text(encoding='utf-8')).sources
+        sc = ResearchSidecar.from_model_json(sidecar_path.read_text(encoding='utf-8'))
+        sources = sc.resolved_paths(run_root_of(sidecar_path)).sources
         listed = re.findall(r'^- \[([^\]]+)\] (\S+)$', adapter.sidecar_prompts[0], re.MULTILINE)
-        assert sorted(listed) == sorted((s.label, s.path) for s in sources)
+        assert sorted(listed) == sorted((label, p.as_posix()) for label, p in sources)
         assert {label for label, _ in listed} == {
             'openrouter:openai',
             'openrouter:deepseek',
             'openrouter:google',
         }
         assert tmp_path / 'sc' / 'openrouter' in adapter.sidecar_options[0].add_dirs
+
+    async def test_paths_are_recorded_relative_to_the_run_root(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # T4b: absolute machine paths had to be normalised by hand when a frozen
+        # sidecar moved machines. The run root is outputs/<batch>/ here.
+        sidecar_path = await _run_openrouter_batch(monkeypatch, tmp_path)
+        sc = ResearchSidecar.from_model_json(sidecar_path.read_text(encoding='utf-8'))
+        assert sc.synthesis_path == 'synthesis/01-t.md'
+        assert sorted(s.path for s in sc.sources) == [
+            'openrouter/01-t/deepseek.md',
+            'openrouter/01-t/openai.md',
+        ]
+
+    async def test_a_moved_run_directory_still_resolves_every_path(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # The acceptance for T4b: move the whole run directory somewhere else —
+        # the original is gone — and every recorded path still opens.
+        sidecar_path = await _run_openrouter_batch(monkeypatch, tmp_path)
+        moved_root = tmp_path / 'elsewhere' / 'sc'
+        shutil.move(tmp_path / 'sc', moved_root)
+        moved_sidecar = moved_root / sidecar_path.relative_to(tmp_path / 'sc')
+        sc = ResearchSidecar.from_model_json(moved_sidecar.read_text(encoding='utf-8'))
+        resolved = sc.resolved_paths(run_root_of(moved_sidecar))
+        recorded = [resolved.synthesis, *(p for _, p in resolved.sources)]
+        assert len(recorded) == 3
+        for path in recorded:
+            assert path is not None
+            assert path.is_file()
+            assert moved_root in path.parents
+
+    async def test_legacy_layout_paths_are_relative_to_the_data_root(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # Under the flat legacy layout the stage directories sit side by side at
+        # the data root, which is two levels above the sidecar there too.
+        monkeypatch.setattr('mantis_research.core.paths.data_root', lambda: tmp_path)
+        for stage_dir in ('research-outputs', 'research-outputs-gemini'):
+            _write(tmp_path / stage_dir / '01-t.md', f'{stage_dir} brief')
+        cfg = load_batch_config(
+            {
+                'schema_version': 2,
+                'batch_name': 'sc',
+                'runner': {'layout': 'legacy'},
+                'models': {'claude': {'model': 'claude-opus-4-7', 'effort': 'max'}},
+                'topics': [
+                    {'id': '1', 'slug': 't', 'title': 'T', 'stages': {'claude': {'prompt': 'p'}}}
+                ],
+            }
+        )
+        synthesis_dir = tmp_path / 'research-outputs-synthesis'
+        sidecar_path = synthesis_dir / '01-t.sidecar.json'
+        adapter = ScriptedAdapter(
+            synthesis_dir / '01-t.md', sidecar_path, tmp_path / 'journals' / '01-t-journal.md'
+        )
+        result = await _run(adapter, cfg, tmp_path, SynthesisState(id='1', slug='t'))
+        assert result.success
+        sc = ResearchSidecar.from_model_json(sidecar_path.read_text(encoding='utf-8'))
+        assert sc.synthesis_path == 'research-outputs-synthesis/01-t.md'
+        assert [(s.label, s.path) for s in sc.sources] == [
+            ('claude', 'research-outputs/01-t.md'),
+            ('gemini', 'research-outputs-gemini/01-t.md'),
+        ]
 
     async def test_sidecar_turn_can_read_claude_and_gemini_briefs(
         self, paths, tmp_path: Path
