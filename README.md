@@ -203,7 +203,7 @@ run stages explicitly — the full operator guide is
 uv run python -m mantis_research run openrouter    config/<batch>.json
 uv run python -m mantis_research run synthesis     config/<batch>.json
 uv run python -m mantis_research run falsification config/<batch>.json
-uv run python -m mantis_research status            config/<batch>.json
+uv run python -m mantis_research monitor --snapshot config/<batch>.json
 uv run python -m mantis_research monitor synthesis
 ```
 
@@ -246,7 +246,7 @@ src/mantis_research/
     ├── adapters/  # provider drivers (claude_cli, gemini_cli, openrouter_http)
     ├── stages/    # one Stage per pipeline phase (Protocol-typed)
     ├── orchestrator.py  # generic asyncio.TaskGroup runner
-    └── cli/       # typer entry points (run / research / status / monitor)
+    └── cli/       # typer entry points (run / research / monitor / version)
 ```
 
 Core purity (no I/O in `core/`) is machine-enforced by

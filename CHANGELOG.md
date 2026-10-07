@@ -7,6 +7,17 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The README names only commands that exist (docs).** Its batch section taught
+  `mantis status <config>`, which ADR-0010 folded into
+  `mantis monitor --snapshot <config>` in 0.2.0, and the layout trees in the
+  README and `docs/architecture.md` still listed `status` among the CLI's
+  commands. Both now name `monitor --snapshot` and the commands the app
+  registers. A new test, `tests/unit/test_doc_claims.py`, looks up every
+  `mantis <command>` and `run <stage>` the README names, and both layout lists,
+  in the typer app. No behaviour change.
+
 ## [0.6.0] - 2026-10-07
 
 ### Added
