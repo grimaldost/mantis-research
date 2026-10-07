@@ -38,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
@@ -67,6 +68,13 @@ _UNKNOWN_SIDECAR: dict[str, Any] = {'status': 'not_run', 'error': None}
 #: `run_named` after building its config and before dispatching any stage, so
 #: this bounds config validation, not research.
 _NAMING_TIMEOUT_S = 30.0
+
+#: How many times a refused read of a run record is tried, and the pause between
+#: tries. The record is rewritten while a run is polled, and on Windows a read
+#: that lands while ``replace`` swaps the file in raises ``PermissionError``; the
+#: swap takes milliseconds.
+_RECORD_READ_ATTEMPTS = 5
+_RECORD_READ_PAUSE_S = 0.05
 
 log = structlog.get_logger(__name__)
 
@@ -217,13 +225,32 @@ def _progress_bridge(ctx: Any, loop: asyncio.AbstractEventLoop) -> ProgressCallb
     return deliver
 
 
-def _project(record: dict[str, Any]) -> dict[str, Any]:
+def _artifacts_on_disk(run_dir: Path) -> dict[str, list[str]]:
+    """What a run has already written, read off the disk rather than its record.
+
+    The record is rewritten at each stage transition, but a write can be lost to
+    a reader holding the file, and a run started by a version that wrote the
+    record only at its start and end says nothing until it finishes. The files
+    themselves are the evidence a poller needs either way (T1e).
+    """
+    synthesis = run_dir / 'synthesis'
+    return {
+        'briefs': sorted(str(p) for p in (run_dir / 'openrouter').glob('**/*.md')),
+        'synthesis': sorted(str(p) for p in synthesis.glob('*.md')),
+        'sidecar': sorted(str(p) for p in synthesis.glob('*.sidecar.json')),
+    }
+
+
+def _project(record: dict[str, Any], run_dir: Path) -> dict[str, Any]:
     """Describe a run from its record, without judging it.
 
     Deliberately not :func:`_agent_result`: that raises when a live run owed a
     sidecar and has none, which is right for the call that was supposed to
     deliver one and wrong for a caller asking how a run went. Polling must
     answer the question, not hand back an exception to interpret.
+
+    A run that has not finished also reports the ``artifacts`` already on disk
+    under ``run_dir``, so a lagging record cannot hide them.
     """
     status = str(record.get('status', ''))
     if status == 'dispatching':
@@ -241,11 +268,16 @@ def _project(record: dict[str, Any]) -> dict[str, Any]:
         'question': record.get('question'),
         'assurance': record.get('assurance'),
         'ok': record.get('ok'),
+        # Mid-run each entry carries `state`, and `exit_code` stays null until
+        # the stage is done; a finished record carries `exit_code` alone.
         'stages': record.get('stages') or {},
+        'current_stage': record.get('current_stage'),
         'sidecar': record.get('sidecar') or _UNKNOWN_SIDECAR,
         'cost': record.get('cost') or {},
         'outputs': record.get('outputs') or {},
     }
+    if status == 'dispatching':
+        projection['artifacts'] = _artifacts_on_disk(run_dir)
     if record.get('error'):
         projection['error'] = record['error']
     return projection
@@ -268,11 +300,18 @@ async def research_status(
     Returns its state (``running`` / ``finished`` / ``abandoned`` / ``unknown``;
     a run that ended on an exception is ``finished`` with ``ok`` false and an
     ``error`` string), per-stage exit codes, cost so far and output paths, plus ``data_root``: the
-    directory this server writes runs under (``<data_root>/outputs/<run>``). A
-    finished run's full epistemic result is fetched by calling ``research`` again
-    with ``resume=<outputs_dir>``, which skips the stages already done.
+    directory this server writes runs under (``<data_root>/outputs/<run>``). While
+    a run is in flight, each ``stages`` entry carries ``state`` (``running`` /
+    ``waiting`` / ``done``) and its ``exit_code`` is null until the stage is done;
+    ``current_stage`` names the stage most recently started, and ``artifacts``
+    lists the briefs, syntheses and sidecars already on disk. A finished run's
+    full epistemic result is fetched by calling ``research`` again with
+    ``resume=<outputs_dir>``, which skips the stages already done.
     """
-    return {**_status(outputs_dir), 'data_root': str(paths.data_root())}
+    # Off the loop: the read can pause for a writer, and the artifact listing
+    # walks the run directory.
+    status = await asyncio.to_thread(_status, outputs_dir)
+    return {**status, 'data_root': str(paths.data_root())}
 
 
 def _status(outputs_dir: str) -> dict[str, Any]:
@@ -288,10 +327,25 @@ def _status(outputs_dir: str) -> dict[str, Any]:
             ),
         }
     try:
-        record = json.loads(record_path.read_text(encoding='utf-8'))
+        record = _read_record(record_path)
     except (OSError, ValueError) as exc:
         return {'state': 'unknown', 'outputs_dir': outputs_dir, 'detail': str(exc)}
-    return _project(record)
+    return _project(record, record_path.parent)
+
+
+def _read_record(record_path: Path) -> dict[str, Any]:
+    """Read a run record, retrying a read refused while a writer swaps it in."""
+    attempt = 1
+    while True:
+        try:
+            record: dict[str, Any] = json.loads(record_path.read_text(encoding='utf-8'))
+        except PermissionError:
+            if attempt >= _RECORD_READ_ATTEMPTS:
+                raise
+            attempt += 1
+            time.sleep(_RECORD_READ_PAUSE_S)
+        else:
+            return record
 
 
 def _detach(

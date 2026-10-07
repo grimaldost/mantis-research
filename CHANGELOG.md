@@ -66,6 +66,33 @@ releases (starting with 0.1.0).
   before collecting. `resume` re-enters a failed run like any record that is not
   `dispatching`. A record can now carry `status: "failed"` beside `complete` and
   `validated`.
+- **`research_status` shows a live run's progress instead of `stages={}`.**
+  `run_research` wrote `run.json` before its first stage and after its last, so a
+  poller saw `stages={}` and `sidecar.status: "not_run"` for the whole life of a
+  healthy run. In the field on 2026-09-27, 10 of 11 collectors polling detached
+  runs saw nothing change for 45 minutes while briefs, syntheses and sidecars
+  landed on disk, and gave up with `ok=false`. The record is now rewritten as the
+  run moves: when a stage starts or finishes, when a research substrate's brief
+  is written, and when a stage starts or stops waiting (queued for the local
+  seat, or in a rate-limit backoff). The seat repeats its wait every 5 s; only
+  the change into `waiting` is written. Each `stages` entry carries `state`
+  (`running`, `waiting` or `done`), `started_at`, `exit_code` (`null` until the
+  stage is done) and, once done, `finished_at`; the research stage also lists
+  `substrates_done`, and the record names `current_stage`. These writes are
+  best-effort: when Windows still refuses the `replace` after the usual retries
+  because a poller holds the record open, the write is skipped and the next
+  transition writes the whole state again. On the other side, `research_status`
+  retries a read that Windows refuses while the record is being replaced, rather
+  than answering `unknown`, which a poll meeting a write otherwise did (25 of 577
+  polls under continuous writes). While the record says `dispatching`,
+  `research_status` also returns an `artifacts` block read from the run
+  directory itself — `briefs` (`openrouter/**/*.md`), `synthesis`
+  (`synthesis/*.md`) and `sidecar` (`synthesis/*.sidecar.json`) — so a record
+  that lags, or one written by an earlier version, still shows what is on disk.
+  **For callers:** `stages` entries now exist mid-run with `exit_code: null`, so
+  a collector must read an entry's `state` rather than take its presence as a
+  finished stage. `current_stage` and `artifacts` are additive, and a finished
+  record's `stages` keep their `{ exit_code }` shape.
 
 ## [0.5.1] - 2026-09-13
 

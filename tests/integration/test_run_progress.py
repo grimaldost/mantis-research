@@ -12,18 +12,20 @@ was silence under long work.
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from mantis_research.core.progress import RunEvent, emit
+from mantis_research.interface import research_service
 from mantis_research.interface.mcp.server import research
 from mantis_research.interface.orchestrator import Orchestrator
 from mantis_research.interface.research_service import run_research
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
-    from mantis_research.core.progress import RunEvent
+    from mantis_research.core.progress import ProgressCallback
 
 
 @pytest.fixture
@@ -95,6 +97,148 @@ class TestStageBoundaries:
             on_event=explode,
         )
         assert manifest['ok'] is True
+
+
+def _record(rooted: Path, batch: str) -> dict[str, Any]:
+    return json.loads((rooted / 'outputs_root' / batch / 'run.json').read_text(encoding='utf-8'))
+
+
+class TestTheRecordFollowsTheRun:
+    """`run.json` is rewritten at each transition, not only at the start and end (T1e)."""
+
+    def test_each_transition_is_on_disk_before_the_caller_hears_of_it(self, rooted: Path) -> None:
+        seen: list[tuple[RunEvent, dict[str, Any]]] = []
+
+        def listen(event: RunEvent) -> None:
+            seen.append((event, _record(rooted, 'b')))
+
+        run_research(
+            'q',
+            assurance='fast',
+            substrates=['openai', 'deepseek'],
+            batch_name='b',
+            dry_run=True,
+            log_level='CRITICAL',
+            on_event=listen,
+        )
+
+        first_brief = next(
+            rec for e, rec in seen if e.kind == 'substrate_done' and e.data['substrate'] == 'openai'
+        )
+        assert first_brief['current_stage'] == 'openrouter'
+        assert first_brief['stages']['openrouter']['state'] == 'running'
+        assert first_brief['stages']['openrouter']['substrates_done'] == ['openai']
+
+        synthesis_start = next(
+            rec for e, rec in seen if e.kind == 'stage_start' and e.data['stage'] == 'synthesis'
+        )
+        assert synthesis_start['status'] == 'dispatching'
+        assert synthesis_start['current_stage'] == 'synthesis'
+        research_stage = synthesis_start['stages']['openrouter']
+        assert research_stage['state'] == 'done'
+        assert research_stage['exit_code'] == 0
+        assert research_stage['substrates_done'] == ['openai', 'deepseek']
+        assert research_stage['finished_at']
+        synthesis_stage = synthesis_start['stages']['synthesis']
+        assert synthesis_stage['state'] == 'running'
+        assert synthesis_stage['started_at']
+        assert synthesis_stage['exit_code'] is None
+        assert 'finished_at' not in synthesis_stage
+
+        assert seen[-1][0].kind == 'run_done'
+        assert seen[-1][1]['status'] == 'validated'
+
+    def test_the_seat_wait_is_written_once_however_often_it_is_reported(
+        self, rooted: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # The seat reports its wait every 5 s; one write marks the start of the
+        # wait, and the child's first sign of life marks its end.
+        def fake(
+            stage: str, cfg: Any, *, on_event: ProgressCallback | None = None, **_: Any
+        ) -> int:
+            if stage == 'synthesis':
+                for _ in range(3):
+                    emit(on_event, RunEvent(kind='waiting', message='waiting for the seat'))
+                emit(on_event, RunEvent(kind='thinking', message='synthesis is working'))
+            return 0
+
+        written: list[str] = []
+        real_write = research_service._write_run_record
+
+        def counting(dirs: Any, record: dict[str, Any]) -> Path:
+            synthesis = (record.get('stages') or {}).get('synthesis') or {}
+            if record.get('status') == 'dispatching' and 'state' in synthesis:
+                written.append(synthesis['state'])
+            return real_write(dirs, record)
+
+        monkeypatch.setattr('mantis_research.interface.cli.dispatch.dispatch_stage_config', fake)
+        monkeypatch.setattr(research_service, '_write_run_record', counting)
+        run_research('q', assurance='fast', batch_name='seat', log_level='CRITICAL')
+
+        assert written == ['running', 'waiting', 'running', 'done']
+
+    def test_a_blocked_progress_write_neither_fails_the_run_nor_drops_an_event(
+        self, rooted: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # On Windows `replace` fails while a poller has run.json open. A progress
+        # write is a courtesy: losing one must cost neither the run nor the
+        # caller's event.
+        polled = {'held': False}
+
+        def fake(
+            stage: str, cfg: Any, *, on_event: ProgressCallback | None = None, **_: Any
+        ) -> int:
+            if stage == 'synthesis':
+                polled['held'] = True
+                emit(on_event, RunEvent(kind='waiting', message='waiting for the seat'))
+                emit(on_event, RunEvent(kind='thinking', message='synthesis is working'))
+                polled['held'] = False
+            return 0
+
+        real_replace = Path.replace
+
+        def held_open(self: Path, target: Any) -> Any:
+            if polled['held'] and Path(target).name == 'run.json':
+                raise PermissionError(13, 'in use')
+            return real_replace(self, target)
+
+        monkeypatch.setattr('mantis_research.interface.cli.dispatch.dispatch_stage_config', fake)
+        monkeypatch.setattr(Path, 'replace', held_open)
+        monkeypatch.setattr(research_service, '_RECORD_RETRY_PAUSE_S', 0.0)
+        kinds: list[str] = []
+
+        def listen(event: RunEvent) -> None:
+            kinds.append(event.kind)
+
+        manifest = run_research(
+            'q', assurance='fast', batch_name='held', log_level='CRITICAL', on_event=listen
+        )
+
+        assert manifest['stages'] == {'openrouter': {'exit_code': 0}, 'synthesis': {'exit_code': 0}}
+        assert 'waiting' in kinds
+        assert 'thinking' in kinds
+        assert _record(rooted, 'held')['status'] == 'complete'
+        assert not list((rooted / 'outputs_root' / 'held').glob('*.tmp'))
+
+    def test_an_event_after_the_run_ended_cannot_reopen_its_record(
+        self, rooted: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A late event from a stage's own machinery must not rewrite a terminal
+        # record back to `dispatching`.
+        kept: dict[str, ProgressCallback] = {}
+
+        def fake(
+            stage: str, cfg: Any, *, on_event: ProgressCallback | None = None, **_: Any
+        ) -> int:
+            if on_event is not None:
+                kept['sink'] = on_event
+            return 0
+
+        monkeypatch.setattr('mantis_research.interface.cli.dispatch.dispatch_stage_config', fake)
+        run_research('q', assurance='fast', batch_name='late', log_level='CRITICAL')
+        kept['sink'](RunEvent(kind='waiting', message='a straggler'))
+
+        assert _record(rooted, 'late')['status'] == 'complete'
 
 
 class TestBackoffHeartbeat:

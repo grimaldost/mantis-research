@@ -160,6 +160,18 @@ says how to get it back. Separately, no internal wait
 exceeds half `runner.caller_idle_budget_seconds` (default 1500 s), so a
 rate-limited substrate cannot sit past your window.
 
+**Reading a poll.** While a run is in flight, `research_status` answers `state:
+"running"` and its `stages` map fills in as the run goes. Each entry carries
+`state` — `running`, `waiting` (queued for the local Claude seat, or backing off
+after a rate limit; the run is alive) or `done` — plus `started_at`, and
+`exit_code`, which stays `null` until that stage is done (`finished_at` is added
+then). The research stage also lists `substrates_done`, and `current_stage` names
+the stage most recently started. **A stage listed in `stages` is not necessarily
+finished: read its `state`.** `artifacts` lists the `briefs`, `synthesis` and
+`sidecar` files already on disk, read from the run directory rather than the
+record, so a record that lags still shows them. Once `state` is `finished`, each
+`stages` entry carries just its `exit_code`, and `ok` says how the run went.
+
 Use `dry_run: true` first — it validates the pipeline offline and for free, and
 records itself as `validated` rather than as a completed run.
 

@@ -20,6 +20,7 @@ import json
 import os
 import re
 import secrets
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -48,9 +49,14 @@ log = structlog.get_logger(__name__)
 #: Longest ``error`` string a failed record carries.
 _ERROR_CHARS = 500
 
-#: The run-level record, written before dispatch and rewritten at the end. Its
-#: presence is what turns an abandoned call into an identified run.
+#: The run-level record, written before dispatch, rewritten at each stage
+#: transition and again at the end. Its presence is what turns an abandoned call
+#: into an identified run.
 RUN_RECORD_NAME = 'run.json'
+
+#: Serialises every write of a run record in this process, so the stage loop's
+#: writes and the progress writes never interleave their read-merge-replace.
+_RECORD_LOCK = threading.Lock()
 
 #: Stages driven by the machine's single authenticated ``claude`` CLI, and so by
 #: the local seat this deployment is built around (ADR-0009, local-first). Any
@@ -417,23 +423,120 @@ def _write_run_record(dirs: RunDirs, record: dict[str, Any]) -> Path:
     root = dirs.root()
     root.mkdir(parents=True, exist_ok=True)
     path = root / RUN_RECORD_NAME
-    prior: list[Any] = []
-    if path.exists():
+    with _RECORD_LOCK:
+        prior: list[Any] = []
+        if path.exists():
+            try:
+                prior = json.loads(path.read_text(encoding='utf-8')).get('history') or []
+            except (OSError, ValueError):
+                prior = []
+        merged = {**record, 'history': [*prior, *record.get('history', [])]}
+        # A name per writer, not a fixed one: a second writer (a resume racing a
+        # dying worker) would otherwise truncate the file the first is replacing.
+        tmp = path.with_name(f'{RUN_RECORD_NAME}.{os.getpid()}.{secrets.token_hex(4)}.tmp')
+        tmp.write_text(json.dumps(merged, indent=2), encoding='utf-8')
         try:
-            prior = json.loads(path.read_text(encoding='utf-8')).get('history') or []
-        except (OSError, ValueError):
-            prior = []
-    merged = {**record, 'history': [*prior, *record.get('history', [])]}
-    # A name per writer, not a fixed one: a second writer (a resume racing a
-    # dying worker) would otherwise truncate the file the first is replacing.
-    tmp = path.with_name(f'{RUN_RECORD_NAME}.{os.getpid()}.{secrets.token_hex(4)}.tmp')
-    tmp.write_text(json.dumps(merged, indent=2), encoding='utf-8')
-    try:
-        _replace_with_retry(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
+            _replace_with_retry(tmp, path)
+        except BaseException:
+            tmp.unlink(missing_ok=True)
+            raise
     return path
+
+
+class _StageRecorder:
+    """Keep ``run.json`` in step with a run while it is in flight (T1e).
+
+    The record used to be written before the first stage and after the last,
+    so a poller saw ``stages={}`` for the whole life of a healthy run: on
+    2026-09-27, 10 of 11 collectors gave up on runs whose briefs, syntheses
+    and sidecars were already on disk. This wraps the caller's ``on_event`` and
+    rewrites the record on each event that changes what a poller should see —
+    a stage starting or finishing, a substrate brief landing, a wait starting
+    or ending — before passing the event on.
+
+    Each ``stages`` entry carries ``state`` (``running``, ``waiting`` or
+    ``done``), ``started_at`` and ``exit_code`` (``None`` until the stage is
+    done), plus ``finished_at`` once it is; the research stage also lists
+    ``substrates_done``. The seat reports its wait every few seconds, so only
+    the move into ``waiting`` is written, and the next sign of work (a child's
+    output, a substrate starting) moves it back to ``running``.
+
+    These writes are best-effort: on Windows ``replace`` fails while a poller
+    holds the record open, and the next transition writes the whole state
+    again. :meth:`close` stops them before the terminal write, so a late event
+    cannot turn a finished record back into a running one.
+    """
+
+    def __init__(
+        self,
+        dirs: RunDirs,
+        base: Mapping[str, Any],
+        forward: ProgressCallback | None,
+    ) -> None:
+        self._dirs = dirs
+        # `base` carries no `history`: `_write_run_record` carries the record's
+        # history forward on every write, so passing it again would duplicate it.
+        self._base = dict(base)
+        self._forward = forward
+        self._stages: dict[str, dict[str, Any]] = {}
+        self._current: str | None = None
+        self._closed = False
+        self._lock = threading.Lock()
+
+    def __call__(self, event: RunEvent) -> None:
+        try:
+            with self._lock:
+                if not self._closed and self._apply(event):
+                    self._write()
+        finally:
+            emit(self._forward, event)
+
+    def close(self) -> None:
+        """Stop writing; any write already under way finishes first."""
+        with self._lock:
+            self._closed = True
+
+    def _apply(self, event: RunEvent) -> bool:
+        """Fold one event into the stage map; True when the record should change."""
+        if event.kind == 'stage_start':
+            stage = str(event.data.get('stage'))
+            self._stages[stage] = {'state': 'running', 'started_at': _now_iso(), 'exit_code': None}
+            self._current = stage
+            return True
+        if event.kind == 'stage_done':
+            entry = self._stages.get(str(event.data.get('stage')))
+            if entry is None:
+                return False
+            entry.update(
+                state='done', exit_code=event.data.get('exit_code'), finished_at=_now_iso()
+            )
+            return True
+        entry = self._stages.get(self._current) if self._current is not None else None
+        if entry is None or entry['state'] == 'done':
+            return False
+        if event.kind == 'waiting':
+            if entry['state'] == 'waiting':
+                return False
+            entry['state'] = 'waiting'
+            return True
+        if event.kind not in ('substrate_start', 'substrate_done', 'thinking'):
+            return False
+        changed = entry['state'] == 'waiting'
+        entry['state'] = 'running'
+        if event.kind == 'substrate_done' and event.data.get('status', 'done') == 'done':
+            done: list[Any] = entry.setdefault('substrates_done', [])
+            substrate = event.data.get('substrate')
+            if substrate not in done:
+                done.append(substrate)
+                changed = True
+        return changed
+
+    def _write(self) -> None:
+        record = {**self._base, 'current_stage': self._current, 'stages': self._stages}
+        try:
+            _write_run_record(self._dirs, record)
+        except OSError as exc:
+            log.debug('run record progress write skipped', error=str(exc))
 
 
 #: How many times a blocked ``replace`` is tried, and the pause between tries. On
@@ -631,7 +734,9 @@ def run_research(
     about. The first is always ``run_named``, emitted after the config is built
     and *before* any stage is dispatched, alongside a run record on disk — so a
     call the caller abandons still leaves a run it can name, rather than an
-    orphan directory it cannot match to a question.
+    orphan directory it cannot match to a question. Each later transition is
+    written into that record before ``on_event`` hears of it
+    (:class:`_StageRecorder`).
     """
     # Lazy import: importing cli.dispatch runs cli/__init__, which imports
     # research_cmd -> cli.research -> back to this module. Deferring dispatch to
@@ -684,20 +789,21 @@ def run_research(
         'dry_run': dry_run,
     }
     started_at = _now_iso()
-    _write_run_record(
-        dirs,
-        {
-            **identity,
-            'status': 'dispatching',
-            'started_at': started_at,
-            # Written in so a later run can read it back and tell an owner that
-            # is still working from one that is gone (MANT-B08).
-            'owner_pid': os.getpid(),
-            'history': _resume_history or [],
-        },
-    )
+    dispatching = {
+        **identity,
+        'status': 'dispatching',
+        'started_at': started_at,
+        # Written in so a later run can read it back and tell an owner that
+        # is still working from one that is gone (MANT-B08).
+        'owner_pid': os.getpid(),
+    }
+    # The resume history goes in once; later writes carry it forward.
+    _write_run_record(dirs, {**dispatching, 'history': _resume_history or []})
+    # From here every event goes through the recorder, which rewrites the
+    # record at each transition before the caller hears of it (T1e).
+    recorder = _StageRecorder(dirs, dispatching, on_event)
     emit(
-        on_event,
+        recorder,
         RunEvent(
             kind='run_named',
             message=f'run {name} dispatching {len(stages)} stage(s) into {dirs.root()}',
@@ -715,7 +821,7 @@ def run_research(
     try:
         for index, stage in enumerate(stages, start=1):
             emit(
-                on_event,
+                recorder,
                 RunEvent(
                     kind='stage_start',
                     message=f'{stage} starting',
@@ -725,11 +831,11 @@ def run_research(
                 ),
             )
             rc = dispatch_stage_config(
-                stage, cfg, dry_run=dry_run, log_level=log_level, on_event=on_event
+                stage, cfg, dry_run=dry_run, log_level=log_level, on_event=recorder
             )
             results[stage] = rc
             emit(
-                on_event,
+                recorder,
                 RunEvent(
                     kind='stage_done',
                     message=f'{stage} finished (exit {rc})',
@@ -756,8 +862,10 @@ def run_research(
         # wrote none of them, so it says what it actually did: every path in the
         # record is a destination, and only a real run turns them into evidence.
         status = 'validated' if dry_run else 'complete'
+        recorder.close()
         _write_run_record(dirs, {**manifest, 'status': status, 'finished_at': _now_iso()})
     except BaseException as exc:
+        recorder.close()
         _write_failed_record(
             dirs,
             identity,
@@ -768,7 +876,7 @@ def run_research(
         raise
 
     emit(
-        on_event,
+        recorder,
         RunEvent(
             kind='run_done',
             message=f'run {name} complete (ok={manifest["ok"]})',

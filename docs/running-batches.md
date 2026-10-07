@@ -225,7 +225,13 @@ two digits), with per-substrate research briefs at
 A request-level run (`mantis research`, the MCP `research` tool) also writes
 `outputs/<batch_name>/run.json` **before it dispatches anything**: the question
 and its slug, the batch name, the assurance tier, the substrate set and
-`status: "dispatching"`. When the run finishes it is rewritten with the final
+`status: "dispatching"`. While the run is in flight the record is rewritten at
+each transition (a stage starting or finishing, a research substrate's brief
+landing, a stage starting or ending a wait for the seat) with a `stages` map and
+a `current_stage`. Each entry carries `state` (`running`, `waiting` or `done`),
+`started_at`, `exit_code` (`null` until the stage is done) and `finished_at`.
+These writes are best-effort, and the MCP status tool also lists the artifacts
+already on disk. When the run finishes it is rewritten with the final
 manifest and `status: "complete"` (or `"validated"` for a dry run). A run that ends on an
 exception is rewritten too, with `status: "failed"`, `ok: false`, the stages that
 finished and an `error` string, and the status tool reports it as finished with
