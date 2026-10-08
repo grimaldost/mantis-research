@@ -129,7 +129,11 @@ The agent calls the `research` tool (`question`, `assurance`, optional
 and gets back the run manifest plus the sidecar's `claims` / `divergences` /
 `verification_queue` (bounded to the MCP result-size budget), with synthesis and
 briefs referenced by path. The
-manifest reports two outcomes, not one: `ok` is the stages, and a `sidecar`
+manifest names the web-search index each brief read (`search_engines`; the
+default substrates read three different ones) and measures how far the briefs'
+cited pages overlap (`retrieval_overlap`;
+[ADR-0012](docs/adr/0012-one-search-index-per-substrate.md)). It
+reports two outcomes, not one: `ok` is the stages, and a `sidecar`
 block (`{ status, error }`) is the epistemic contract's own result
 ([ADR-0011](docs/adr/0011-two-outcomes-per-synthesis-run.md)). Because the
 server runs locally, its synthesis stages inherit your authenticated `claude`

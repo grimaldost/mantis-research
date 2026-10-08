@@ -33,13 +33,13 @@
             "subslug": "deepseek",
             "model": "auto:deepseek",
             "web_search": true,
-            "web_search_engine": "exa"
+            "web_search_engine": "parallel"
           },
           {
             "subslug": "google",
             "model": "auto:google",
             "web_search": true,
-            "web_search_engine": "exa"
+            "web_search_engine": "native"
           },
           {
             "subslug": "perplexity",
@@ -72,7 +72,7 @@
             "subslug": "deepseek",
             "model": "auto:deepseek",
             "web_search": true,
-            "web_search_engine": "exa"
+            "web_search_engine": "parallel"
           }
         ],
         "journal": {

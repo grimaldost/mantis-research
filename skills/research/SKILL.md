@@ -95,6 +95,18 @@ the sidecar's epistemic content merged in at the top level.
   across the OpenRouter substrates (`available: false` with zeroed totals if the
   cost state was unreadable).
 - `stages` — `{ <stage>: { exit_code } }` for each stage that ran.
+- `search_engines` — `{ <substrate>: engine }`: which web-search index each brief
+  read. `native` is the provider's own search; `parallel`, `exa` and `perplexity`
+  are OpenRouter engines; `null` means web search was off for that substrate or, on a resumed run that began before this field existed, that the engine of an already-finished substrate is unknown (`mantis research` always turns web search on, so there a `null` means unknown). The
+  default substrates are set up to read three different indexes; whether their
+  briefs actually drew on different pages is what `retrieval_overlap` shows. With
+  more non-native substrates than engines two share an index, and the run logs a
+  warning naming them.
+- `retrieval_overlap` — `null` for a dry run or when fewer than two briefs are on
+  disk, otherwise `{ pairs: [{ a, b, jaccard }], max }`: the Jaccard overlap of
+  the pages each pair of briefs cites (rounded to 3 places). A pair near 1.0 read
+  the same sources whatever the engines were, so treat their agreement as one
+  confirmation.
 - `outputs` — file **paths**: `briefs` (one per substrate), `synthesis`,
   `sidecar`, plus `falsification` / `evaluation` when those ran. The synthesis and
   briefs are referenced by path, never inlined — read those files for full text.

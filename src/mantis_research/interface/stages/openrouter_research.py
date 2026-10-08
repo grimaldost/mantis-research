@@ -88,9 +88,9 @@ class OpenRouterResearchStage:
     ) -> AttemptResult:
         topic_id = topic.id
         slug = topic.slug
-        # Subsessions carry dynamic provider knobs (web_search_engine,
-        # temperature, …) beyond the declared fields, so dump the typed
-        # subsession list to dicts and keep the per-entry logic dict-based.
+        # Subsessions carry dynamic provider knobs (temperature, …) beyond the
+        # declared fields, so dump the typed subsession list to dicts and keep
+        # the per-entry logic dict-based.
         entries = [e.model_dump() for e in topic.stages.openrouter]
         if not entries:
             return AttemptResult.fail(error='no openrouter entries on this topic')
@@ -169,10 +169,9 @@ class OpenRouterResearchStage:
                 ),
             )
 
-            # web_search_engine: 'native' for providers that have it
-            # (Anthropic / OpenAI / xAI / Perplexity), 'exa' for everyone
-            # else (DeepSeek, Mistral, Qwen, vanilla open-source models).
-            engine = entry.get('web_search_engine', 'native')
+            # `web_search_engine` is a declared field, so an entry that omits
+            # it dumps as None: fall back to 'native' on None, not on absence.
+            engine = entry.get('web_search_engine') or 'native'
             options = OpenRouterHttpOptions(
                 model=resolution.model_id,
                 web_search=bool(entry.get('web_search', False)),

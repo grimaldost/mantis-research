@@ -150,6 +150,47 @@ async def test_research_tool_projects_sidecar_and_paths(
     assert result['outputs']['synthesis'] == str(tmp_path / '01-q.md')
 
 
+async def test_research_tool_result_carries_the_search_engines_and_overlap(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # ADR-0012: a caller deciding how far to trust "the models agree" needs to
+    # know which index each brief read and how much their cited pages overlap.
+    engines = {'openai': 'native', 'deepseek': 'parallel', 'google': 'native'}
+    overlap = {'pairs': [{'a': 'openai', 'b': 'google', 'jaccard': 0.5}], 'max': 0.5}
+
+    def fake_run_research(question: str, **_: Any) -> dict[str, Any]:
+        return {
+            'ok': True,
+            'dry_run': True,
+            'question': question,
+            'assurance': 'fast',
+            'cost': {'available': True, 'cost_usd': 0.0},
+            'stages': {'openrouter': {'exit_code': 0}},
+            'outputs': {'briefs': [], 'synthesis': 's', 'sidecar': str(tmp_path / 'none')},
+            'search_engines': engines,
+            'retrieval_overlap': overlap,
+        }
+
+    monkeypatch.setattr('mantis_research.interface.mcp.server.run_research', fake_run_research)
+    result = await research('q', dry_run=True)
+    assert result['search_engines'] == engines
+    assert result['retrieval_overlap'] == overlap
+
+
+async def test_research_tool_dry_run_reports_engines_and_a_null_overlap(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    for fn in ('state_root', 'outputs_root', 'transcripts_root', 'logs_root'):
+        monkeypatch.setattr(f'mantis_research.core.paths.{fn}', lambda fn=fn: tmp_path / fn)
+    result = await research('test q', assurance='fast', dry_run=True)
+    assert result['search_engines'] == {
+        'openai': 'native',
+        'deepseek': 'parallel',
+        'google': 'native',
+    }
+    assert result['retrieval_overlap'] is None
+
+
 async def test_research_tool_runs_in_live_loop_without_asyncio_error(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

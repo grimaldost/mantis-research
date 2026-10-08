@@ -116,6 +116,8 @@ class FrontierSpec:
 #: ``gpt-6`` or ``gemini-4``), update that row's ``require`` tokens and
 #: ``pinned`` id. Demote tokens exclude non-frontier tiers (image / mini /
 #: nano / flash / lite / fast / free / distil / a vendor's smaller-param SKUs).
+#: A variant suffix that no vendor's flagship should resolve to goes in
+#: ``EXCLUDED_VARIANTS`` instead, once, rather than in every vendor's demote list.
 OPENROUTER_FRONTIER: dict[str, FrontierSpec] = {
     'openai': FrontierSpec(
         pinned='openai/gpt-5.5-pro',
@@ -175,6 +177,14 @@ OPENROUTER_FRONTIER: dict[str, FrontierSpec] = {
 }
 
 
+#: Id substrings that exclude a catalog entry for every vendor. A ``:batch``
+#: variant shares its base model's ``created`` (the live catalog on 2026-10-08
+#: listed ``google/gemini-3.1-pro-preview`` and its ``:batch`` twin at the same
+#: instant), so the pick between them would depend on catalog order, and a
+#: ``:batch`` endpoint has no native search tools.
+EXCLUDED_VARIANTS: tuple[str, ...] = (':batch',)
+
+
 def vendor_of(model_id: str) -> str | None:
     """Return the OpenRouter vendor prefix of a model id, or None.
 
@@ -209,6 +219,8 @@ def select_openrouter_frontier(
         if not isinstance(raw_id, str) or vendor_of(raw_id) != vendor:
             continue
         path = raw_id.partition('/')[2].lower()
+        if any(tok in path for tok in EXCLUDED_VARIANTS):
+            continue
         if not all(tok in path for tok in spec.require):
             continue
         if any(tok in path for tok in spec.demote):

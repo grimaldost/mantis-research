@@ -67,3 +67,24 @@ def test_list_content_response_is_coerced_not_crashed() -> None:
     assert result.success
     assert result.output == 'part one part two'
     assert result.model_used == 'openai/gpt-5.5-pro'
+
+
+@pytest.mark.parametrize('engine', ['native', 'exa', 'parallel', 'perplexity', 'firecrawl'])
+def test_web_plugin_payload_carries_the_chosen_engine(engine: str) -> None:
+    body = OpenRouterHttpAdapter(api_key='sk-test')._build_body(
+        'q',
+        openrouter_http.OpenRouterHttpOptions(
+            model='deepseek/deepseek-v4-pro',
+            web_search=True,
+            web_search_engine=engine,  # type: ignore[arg-type]
+        ),
+    )
+    assert body['plugins'][0]['id'] == 'web'
+    assert body['plugins'][0]['engine'] == engine
+
+
+def test_no_web_plugin_when_search_is_off() -> None:
+    body = OpenRouterHttpAdapter(api_key='sk-test')._build_body(
+        'q', openrouter_http.OpenRouterHttpOptions(model='openai/gpt-5.5', web_search=False)
+    )
+    assert 'plugins' not in body

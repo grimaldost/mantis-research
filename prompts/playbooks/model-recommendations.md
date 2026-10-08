@@ -46,6 +46,32 @@ Full per-model verdicts and topic-class fit in the [Frontier-substrate audit sec
 
 ---
 
+## Search engine per substrate (2026-10-08)
+
+The "+Exa" in the templates above predates this rule. Give each substrate a
+different web-search index, or the cross-check is one source read twice.
+
+- On 2026-10-07, 16 research-tier runs sent DeepSeek and Google through
+  OpenRouter's `exa` engine. In 10 of the 16 they cited exactly the same pages.
+- A vendor with native search (`openai`, `perplexity`, `anthropic`, `x-ai`,
+  `google`) uses it: `web_search_engine: "native"`. `auto:google` resolves to a
+  Gemini 3.x model, which has native Google Search.
+- Every other vendor takes a different OpenRouter engine, in this order:
+  `parallel` ($0.005 per request), `exa` ($0.007), `perplexity` ($0.005). Skip
+  `perplexity` when the Perplexity vendor is also a substrate.
+- The default `openai`, `deepseek`, `google` therefore reads three indexes:
+  OpenAI's, Parallel's and Google's. A fourth non-native substrate (Qwen,
+  Mistral, Kimi, MiniMax) can take `exa`; past three engines two substrates must
+  share one, and `mantis research` says so in its log.
+- Read `retrieval_overlap` on the result: a pair near 1.0 shared its retrieval
+  whatever the engines were.
+
+`mantis research` applies this itself. Hand-written configs name the engine per
+entry; the prices and the full list are in
+[`docs/batch-config.md`](../../docs/batch-config.md#search-engines).
+
+---
+
 ## Substrate inventory and what each contributes
 
 ### Tier 1 — verified working on this account

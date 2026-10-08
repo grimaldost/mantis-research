@@ -157,6 +157,11 @@ def _agent_result(manifest: dict[str, Any]) -> dict[str, Any]:
         # The run's second outcome (ADR-0011). Absent on run records written
         # before the field, which a resume still reads: unknown, not fine.
         'sidecar': manifest.get('sidecar') or _UNKNOWN_SIDECAR,
+        # Which web-search index each brief read, and how much the briefs' cited
+        # pages overlap (ADR-0012). Briefs that cite the same pages are one source
+        # read twice. Absent on a manifest built before either field.
+        'search_engines': manifest.get('search_engines'),
+        'retrieval_overlap': manifest.get('retrieval_overlap'),
     }
     sidecar_path = Path(manifest['outputs']['sidecar'])
     # A live run that owed a sidecar and has none produced no answer. Which runs

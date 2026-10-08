@@ -132,6 +132,23 @@ class TestStageConfigs:
                 reasoning_effort='very-high',  # type: ignore[arg-type]
             )
 
+    @pytest.mark.parametrize('engine', ['native', 'exa', 'parallel', 'perplexity', 'firecrawl'])
+    def test_openrouter_accepts_each_search_engine(self, engine: str) -> None:
+        ss = OpenRouterSubsessionConfig.model_validate(
+            {'model': 'openai/gpt-5.5', 'prompt': 'x', 'web_search_engine': engine}
+        )
+        assert ss.web_search_engine == engine
+
+    def test_openrouter_search_engine_defaults_to_none(self) -> None:
+        ss = OpenRouterSubsessionConfig(model='openai/gpt-5.5', prompt='x')
+        assert ss.web_search_engine is None
+
+    def test_openrouter_rejects_an_unknown_search_engine(self) -> None:
+        with pytest.raises(ValidationError, match='web_search_engine'):
+            OpenRouterSubsessionConfig.model_validate(
+                {'model': 'openai/gpt-5.5', 'prompt': 'x', 'web_search_engine': 'bing'}
+            )
+
     def test_topic_stages_with_only_claude(self) -> None:
         ts = TopicStages.model_validate({'claude': {'prompt': 'p'}})
         assert ts.claude.prompt == 'p'
