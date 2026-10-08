@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from mantis_research.core.citations import sources_section
 from mantis_research.core.model_policy import resolve_openrouter_model
 from mantis_research.core.paths import topic_nn
 from mantis_research.core.progress import RunEvent, emit
@@ -286,8 +287,12 @@ class OpenRouterResearchStage:
                     error='empty content',
                     model=model,
                 )
+            # A search may cite pages only as response annotations (Google's
+            # native search links nothing in its text): list the ones the text
+            # does not link, so every brief carries its sources as links.
+            content += sources_section(getattr(result, 'citations', ()), content)
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            out_path.write_text(content + '\n', encoding='utf-8')
+            out_path.write_text(content.rstrip('\n') + '\n', encoding='utf-8')
             size = out_path.stat().st_size
         else:
             size = 0
