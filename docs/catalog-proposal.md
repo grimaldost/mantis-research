@@ -10,9 +10,18 @@ catalogue. The key source is the stack-radar repository
 
 ## 1. Exit criteria
 
-This is a pre-registration for the owner's open decision on the cross-provider
-check (keep or drop it: several non-Claude research briefs cross-checked
-against each other). It is not the decision.
+The owner decided the rule on 2026-10-08 for the cross-provider check (several
+non-Claude research briefs cross-checked against each other, kept or retired).
+The rule, as decided:
+
+> For each batch of at least 8 questions costing at most US$0.40 each, keep the
+> cross-provider check when at least 1 in 4 questions yields a weighty source
+> found only by a non-Claude brief and confirmed on opening, or a changed
+> decision. Unconfirmed citations from those briefs count as cost. Retire the
+> check after two batches below the threshold.
+
+Open point: the number of providers in the check (two or three) is decided
+after the per-model search engines are fixed. They were fixed in 0.7.0.
 
 What the radar does with it. This entry is at `ring = "own"`. `radar_lib.py`
 accepts `[pilot_exit]` on an own-ring entry and validates it (it requires
@@ -24,46 +33,66 @@ the block is a dated record. The numeric thresholds (`min_sessions_with_use`,
 block below leaves the thresholds out and keeps the three keys the validator
 requires.
 
-Context. On 2026-10-07, 16 research-tier questions changed 0 verdicts. The
-review flagged 50 suspected fabrications, almost all of them
-mischaracterisations of real sources rather than invented ones. In 10 of the
-16 runs, two of the three default substrates cited exactly the same pages
-because both read one search index. The release that adds `search_engines`
-(0.7.0) fixes that: each default substrate reads its own index, `run.json`
-records a `search_engines` map (substrate to engine, null when web search is
-off or the engine is unknown), and the manifest records a pairwise
-`retrieval_overlap` Jaccard. The 10-question count therefore starts at the
-first run whose record shows it: only runs whose `run.json` carries a
-`search_engines` map with no null engine count. Records from before the change
-have no such key, so they do not count.
+How a question is scored. For each question, open every citation in the
+non-Claude briefs and class it: confirmed, does not support the statement,
+dead, or blocked. A find counts only if all of these hold: the source is absent
+from the Claude side's sources, by URL and by title; it is confirmed on opening;
+it is an authoritative kind of source (official documentation, a specification
+or changelog, a paper or standard, an engineering write-up with data, or a
+maintainer-authored repository); and it bears on a load-bearing answer (it
+contradicts the answer, adds a fact the answer lacked, or independently
+corroborates a claim that rested on one source or none). Every proposed find
+goes to an independent refuter and counts only if upheld. Citations classed
+other than confirmed are the cost side of the rule.
+
+Baseline. The batch of 2026-10-07 (mantis 0.6.1, research tier, 16 questions at
+US$0.26-0.37 each) was scored with this procedure on 2026-10-08, after it ran.
+Aggregate result:
+
+- 13 of 16 questions met the find criterion (Wilson 95% interval 0.57-0.93).
+- 0 questions changed a decision.
+- 43 of 341 brief citations were not confirmed on opening: 13 did not support
+  the statement, 5 were dead, 25 were blocked.
+- Upheld finds were cited by the openai brief in 10 questions, google in 4 and
+  deepseek in 3. On 0.6.1 deepseek and google shared one search index.
+
+That batch was not pre-registered before it ran, so whether it counts as one of
+the rule's batches is the owner's call. From 0.7.0 on, each default substrate
+reads its own search index and `run.json` records the `search_engines` map
+(substrate to engine, null when web search is off or the engine is unknown).
+From 0.7.1, a brief also lists the citations a native search returns only as
+API annotations (Google's does; on 0.7.0 the google brief carried no links), so
+the manifest's pairwise `retrieval_overlap` covers every brief. Later batches
+therefore record what the first one could not.
 
 ```toml
-# Pre-registration for the owner's open decision on the cross-provider check.
-# Recorded, not evaluated by `radar field` on ring = "own". The decision is made
-# by hand: count the next 10 questions run at a cross-checked tier whose run.json
-# carries a search_engines map with no null engine, from the run records
-# (<outputs_dir>/run.json), not from radar session counts.
-# On 2026-10-07: 16 questions, 0 changed verdicts, 50 suspected fabrications
-# (mostly mischaracterised real sources).
+# The owner's decided rule for the cross-provider check (2026-10-08). Recorded,
+# not evaluated by `radar field` on ring = "own". The decision is made by hand,
+# batch by batch, from the run records (<outputs_dir>/run.json) and the scoring
+# procedure in docs/catalog-proposal.md, not from radar session counts.
+# Baseline, scored retroactively on 2026-10-08 (the 2026-10-07 batch, mantis
+# 0.6.1; not pre-registered, so whether it counts is the owner's call): 13 of 16
+# questions met the find criterion, 0 changed decisions, 43 of 341 brief
+# citations unconfirmed on opening.
 [pilot_exit]
 review_after_days = 60
-adopt_if = "keep the cross-provider check: over the first 10 questions at a cross-checked tier whose run.json carries a search_engines map with no null engine, counted by hand from run records, at least 1 confirmed error or changed decision was caught only by a non-Claude brief (cite the run), with the unconfirmed citations those briefs introduced reported as cost alongside."
-decline_if = "drop the cross-provider check: over the first 10 questions at a cross-checked tier whose run.json carries a search_engines map with no null engine, counted by hand from run records, no confirmed error or changed decision was caught only by a non-Claude brief; the cross-check then reduces to the Claude brief plus its own verification queue."
+adopt_if = "keep the cross-provider check: in a batch of at least 8 questions costing at most US$0.40 each, at least 1 in 4 questions yields a weighty source found only by a non-Claude brief and confirmed on opening, or a changed decision. Unconfirmed citations from those briefs count as cost."
+decline_if = "retire the cross-provider check after two batches (each of at least 8 questions costing at most US$0.40 each) below that threshold."
 ```
 
 Choices:
 
 - No `min_sessions_with_use`. The radar's `sessions_with_use` counts any
   session that matches the entry: `research_status` polls, the `mantis` CLI
-  including dry runs, and the skill. It does not track the 10-question window,
-  so a threshold on it would measure something else.
-- `review_after_days = 60` is a calendar backstop only. At the observed rate
-  the 10 questions may not arrive in 60 days; if so the review reports the
-  count so far and extends, rather than deciding on fewer.
-- `decline_if` is the exact complement of `adopt_if`, so one count decides the
-  outcome and not a judgement afterwards. A suspected or unconfirmed catch is
-  not a catch: note it beside the count, and count the unconfirmed citations
-  it introduced as cost.
+  including dry runs, and the skill. It does not track batches or questions, so
+  a threshold on it would measure something else.
+- `review_after_days = 60` is a calendar backstop only. If a qualifying batch
+  has not been scored by then, the review reports what exists and extends,
+  rather than deciding on fewer than 8 questions.
+- `decline_if` is not the complement of `adopt_if`: one batch below the
+  threshold neither keeps nor retires the check. Retirement needs two such
+  batches. A suspected or unconfirmed find is not a find: note it beside the
+  count, and count the unconfirmed citations as cost.
 
 ## 2. Error rate and what it can measure
 
