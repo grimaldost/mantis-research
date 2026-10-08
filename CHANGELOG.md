@@ -7,6 +7,24 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A blocking `research` call sends progress for every run event, and a
+  keepalive while the run is silent.** Claude Code aborts a tool call after
+  1800 s with no progress notification, and only progress resets that clock; a
+  log notification does not. Of 15 `research` tool errors between 2026-07-26 and
+  2026-09-26, 14 were that abort. The server sent progress only for events whose
+  step advanced, so `thinking`, seat `waiting`, backoff and per-substrate events
+  reached the client as log lines alone, and a phase that emitted nothing sent
+  nothing. Every event now goes out as progress too: a step that advances is
+  sent as itself, and anything else as a value strictly between the last step
+  and the next, so values keep increasing and `total` is still the stage count.
+  No value passes `total`, and only the run's end reaches it. While a blocking
+  call waits, a keepalive progress notification (`still running: <last event>
+  (<elapsed> s)`) goes out every 60 s. This covers the `research` tier, which
+  blocks unless `detach=true` is passed, and `detach=false` on any tier. A
+  detached call is unchanged: it returns at once.
+
 ## [0.6.1] - 2026-10-07
 
 ### Fixed

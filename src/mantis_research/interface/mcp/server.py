@@ -25,12 +25,16 @@ FM-B):
   tool's input schema (``Tool.context_kwarg``), so it never reaches the agent as
   an argument to supply.
 
-Progress is reported over that context. The SDK requires each progress value to be
-strictly greater than the last one sent on the same token, and the run emits
-repeated steps (``run_named`` and ``stage_start`` share one), so the bridge drops
-a step that does not advance. Before it, the whole multi-stage run hid
-behind one ``to_thread`` await and the client saw silence from call to return —
-which a client cannot distinguish from a hang, and answers by giving up.
+Progress is reported over that context. A client gives up on a call that sends
+no progress notification for its idle limit, and only progress resets that clock
+(a log notification does not), so a blocking call sends every run event as
+progress and adds a keepalive tick while the run is silent
+(:class:`_ProgressChannel`). The SDK requires each value to be strictly greater
+than the last one sent on the same token, while the run's steps repeat and most
+events carry none; the channel sends those as fractions between two steps.
+Before 0.2.0 the whole multi-stage run hid behind one ``to_thread`` await and the
+client saw silence from call to return — which a client cannot distinguish from
+a hang, and answers by giving up.
 """
 
 from __future__ import annotations
@@ -74,6 +78,11 @@ _UNKNOWN_SIDECAR: dict[str, Any] = {'status': 'not_run', 'error': None}
 #: `run_named` after building its config and before dispatching any stage, so
 #: this bounds config validation, not research.
 _NAMING_TIMEOUT_S = 30.0
+
+#: How often a blocking call sends a keepalive progress notification while the
+#: run is silent. Claude Code aborts a tool call after 1800 s without a progress
+#: notification (checked every 30 s); a log notification does not count.
+_KEEPALIVE_S = 60.0
 
 #: How many times a refused read of a run record is tried, and the pause between
 #: tries. The record is rewritten while a run is polled, and on Windows a read
@@ -195,47 +204,157 @@ def _run_and_assemble(
     return _agent_result(manifest)
 
 
-async def _deliver(ctx: Any, event: RunEvent, *, report_progress: bool) -> None:
-    """Push one run event down the MCP channel (progress + log).
+class _ProgressChannel:
+    """The progress one blocking call sends, owned by that call, on its loop.
 
-    ``report_progress`` is the bridge's verdict on whether this event advances the
-    run; the log line goes out either way."""
-    # Both are sent: `report_progress` is the mechanism defined for this, but it
-    # no-ops when the client sent no progress token, and a log notification
-    # reaches that client anyway. Between them the caller always hears something.
-    # `ctx.info` is deprecated in mcp 2.x (the logging capability is going away,
-    # SEP-2577) but is still delivered, and it is the only channel a client with
-    # no progress token hears; drop it when the SDK does.
-    if report_progress:
-        await ctx.report_progress(progress=event.step, total=event.total, message=event.message)
-    await ctx.info(event.message)
+    A client gives up on a tool call that sends no progress notification for its
+    idle limit (1800 s in Claude Code), and only a progress notification resets
+    that clock: a log notification does not. So every run event goes out as
+    progress, and so does a keepalive tick while the run says nothing.
 
+    The SDK requires each value to be strictly greater than the last one sent on
+    the token, while the run's steps repeat (a stage's start and its
+    predecessor's finish share one) and most events carry no step at all. A step
+    that exceeds the last whole step sent is sent as itself, so the client's
+    scale still reads ``step / total``. Anything else (a repeated step, an event
+    without one, a keepalive tick) is sent as ``last + k / (k + 1)`` for the
+    k-th such send since that step: strictly between the last whole step and the
+    next, so the values keep increasing and the next real step still advances.
 
-def _progress_bridge(ctx: Any, loop: asyncio.AbstractEventLoop) -> ProgressCallback:
-    """Adapt the synchronous run-event callback onto the MCP session's loop.
+    No value exceeds ``total``, and ``total`` itself is sent once, by
+    ``run_done``. The last stage's finish carries ``step == total`` too, and
+    ticks arrive while that stage runs, so until ``run_done`` a step is held at
+    ``total - 1`` and those sends fall in the band below ``total``. A run that
+    raises never sends ``run_done`` and so never reaches ``total``: it did not
+    finish. After ``total`` the call is ending, and the channel sends no more
+    progress; an event's log line still goes out.
 
-    ``run_research`` is synchronous and runs in a worker thread (FM-1), while the
-    MCP session belongs to the event loop that spawned it — so an event has to
-    be handed back across that boundary rather than awaited in place.
-    ``run_coroutine_threadsafe`` is that hand-off; the future is deliberately not
-    awaited, since the run must not block on its audience.
-
-    Progress must strictly increase, but the run's steps repeat (a stage's start
-    and its predecessor's finish share one), so the highest step sent so far is
-    kept here and an event that does not exceed it is logged without a progress
-    notification. Events arrive from the one worker thread, in order.
+    Values are computed under a lock on the loop, in the order the sends take
+    it, so what the client receives is in the order it was computed.
     """
-    last_step: float = -1.0
 
-    def deliver(event: RunEvent) -> None:
-        nonlocal last_step
-        advances = False
-        if event.step is not None and event.total and event.step > last_step:
-            advances = True
-            last_step = event.step
-        asyncio.run_coroutine_threadsafe(_deliver(ctx, event, report_progress=advances), loop)
+    def __init__(self, ctx: Any) -> None:
+        self._ctx = ctx
+        self._lock = asyncio.Lock()
+        self._step: int | None = None
+        self._since_step = 0
+        self._total: int | None = None
+        self._last_message = ''
+        self._finished = False
 
-    return deliver
+    def _next_value(self, step: int | None, *, final: bool = False) -> float | None:
+        """The value for the next send, or ``None`` once ``total`` has been sent."""
+        if self._finished:
+            return None
+        if final:
+            self._finished = True
+            if self._total is not None:
+                return float(self._total)
+        elif step is not None and self._total is not None:
+            step = min(step, self._total - 1)
+        if step is not None and (self._step is None or step > self._step):
+            self._step = step
+            self._since_step = 0
+            return float(step)
+        if self._step is None:
+            # Nothing sent yet: the first send anchors the scale at zero.
+            self._step = 0
+            return 0.0
+        self._since_step += 1
+        k = self._since_step
+        return self._step + k / (k + 1)
+
+    async def _send(self, value: float | None, message: str) -> None:
+        # `report_progress` no-ops when the client sent no progress token. A
+        # client that is gone must not fail the call: the run is the job.
+        if value is None:
+            return
+        try:
+            await self._ctx.report_progress(progress=value, total=self._total, message=message)
+        except Exception:
+            log.debug('progress notification not delivered', exc_info=True)
+
+    async def event(self, event: RunEvent) -> None:
+        """Send one run event as progress, and as a log line as before."""
+        async with self._lock:
+            if event.total:
+                self._total = event.total
+            self._last_message = event.message
+            value = self._next_value(event.step, final=event.kind == 'run_done')
+            await self._send(value, event.message)
+            # `ctx.info` is deprecated in mcp 2.x (the logging capability is going
+            # away, SEP-2577) but is still delivered, and it is the only channel a
+            # client with no progress token hears; drop it when the SDK does.
+            try:
+                await self._ctx.info(event.message)
+            except Exception:
+                log.debug('log notification not delivered', exc_info=True)
+
+    async def keepalive(self, elapsed_s: float) -> None:
+        """Send a tick that says the run is still going and what it last said."""
+        async with self._lock:
+            last = self._last_message or 'the run has not reported yet'
+            message = f'still running: {last} ({elapsed_s:.0f} s)'
+            await self._send(self._next_value(None), message)
+
+    def callback(self, loop: asyncio.AbstractEventLoop) -> ProgressCallback:
+        """Adapt the synchronous run-event callback onto the session's loop.
+
+        ``run_research`` is synchronous and runs in a worker thread (FM-1), while
+        the MCP session belongs to the event loop that spawned it, so an event is
+        handed back across that boundary rather than awaited in place.
+        ``run_coroutine_threadsafe`` is that hand-off; the future is deliberately
+        not awaited, since the run must not block on its audience.
+        """
+
+        def deliver(event: RunEvent) -> None:
+            asyncio.run_coroutine_threadsafe(self.event(event), loop)
+
+        return deliver
+
+
+async def _blocking_call(ctx: Any, question: str, **options: Any) -> dict[str, Any]:
+    """Run the pipeline off the loop and keep the call alive until it returns.
+
+    Every :data:`_KEEPALIVE_S` seconds without a result a keepalive tick goes
+    out on the call's progress channel. Run events reach the client as they
+    happen, but a phase can emit nothing at all (a sidecar turn, a hung child,
+    an OpenRouter call waiting on its timeout), and the client counts that
+    silence toward its idle limit. The interval is read on every tick, so a test
+    can shorten it.
+
+    A cancelled call leaves the run working, as a client that gave up does:
+    the worker is not cancelled, and its outcome is retrieved when it ends, so
+    a later failure is logged here rather than reported by asyncio as a task
+    exception nobody retrieved.
+    """
+    loop = asyncio.get_running_loop()
+    channel = _ProgressChannel(ctx) if ctx is not None else None
+    on_event = channel.callback(loop) if channel is not None else None
+    task = asyncio.create_task(
+        asyncio.to_thread(_run_and_assemble, question, on_event=on_event, **options)
+    )
+    started = time.monotonic()
+    try:
+        while True:
+            timeout = _KEEPALIVE_S if channel is not None else None
+            done, _ = await asyncio.wait({task}, timeout=timeout)
+            if done:
+                return task.result()
+            if channel is not None:
+                await channel.keepalive(time.monotonic() - started)
+    except asyncio.CancelledError:
+        task.add_done_callback(_retrieve_outcome)
+        raise
+
+
+def _retrieve_outcome(task: asyncio.Task[Any]) -> None:
+    """Read the outcome of a worker whose call was cancelled, and log a failure."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.debug('run of a cancelled call ended with an error', exc_info=exc)
 
 
 def _artifacts_on_disk(run_dir: Path) -> dict[str, list[str]]:
@@ -699,7 +818,7 @@ async def research(
     """
     # dispatch_stage_config nests asyncio.run per stage, so the synchronous
     # pipeline must run OFF this event loop or it raises RuntimeError (FM-1).
-    # The bridge is built here, on the loop, and closes over it: the worker
+    # The progress channel is built on the loop, in `_blocking_call`: the worker
     # thread hands events back rather than touching the session directly.
     # Off the loop: on a resume the decision reads the run's record.
     if await asyncio.to_thread(
@@ -715,9 +834,8 @@ async def research(
             name=name,
             resume=resume,
         )
-    bridge = _progress_bridge(ctx, asyncio.get_running_loop()) if ctx is not None else None
-    return await asyncio.to_thread(
-        _run_and_assemble,
+    return await _blocking_call(
+        ctx,
         question,
         assurance=assurance,
         substrates=substrates,
@@ -726,7 +844,6 @@ async def research(
         dry_run=dry_run,
         name=name,
         resume=resume,
-        on_event=bridge,
     )
 
 
