@@ -26,6 +26,7 @@ This page says where everything else lives.
 | [running-batches.md](running-batches.md) | Operator guide for batch mode: environment, operating loop, resume semantics, where files land. |
 | [batch-config.md](batch-config.md) | Reference for the v2 batch-config JSON schema. |
 | [mcp-troubleshooting.md](mcp-troubleshooting.md) | The `research` tool's field error classes, the client's idle limit, and environment checks. |
+| [catalog-proposal.md](catalog-proposal.md) | Proposed text for this tool's tool-catalogue entry: exit criteria and an opportunity matcher. |
 | [adr/](adr/README.md) | Architecture decision records (immutable; indexed in that README). |
 | [specs/](specs/README.md) | Execution specs for governed multi-PR changes (immutable records). |
 | [method/](method/README.md) | Tool-agnostic templates for the development method (ADR, spec, DoR, DoD, review checklist). |
