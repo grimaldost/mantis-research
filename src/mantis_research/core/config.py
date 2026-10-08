@@ -21,6 +21,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from mantis_research.core.retry import DEFAULT_CALLER_IDLE_BUDGET_SECONDS
 
+#: The OpenRouter web-plugin engines a subsession may name. ``native`` uses the
+#: provider's own search where the model has it (docs/batch-config.md lists the
+#: prices and which vendors do); the rest are OpenRouter-side indexes.
+SearchEngine = Literal['native', 'exa', 'parallel', 'perplexity', 'firecrawl']
+
 # ── per-topic stage configs ──────────────────────────────────────────
 
 
@@ -74,6 +79,10 @@ class OpenRouterSubsessionConfig(BaseModel):
     vendor: str | None = None
     prompt: str | None = None  # None → falls back to topic.research_prompt (ADR-0008)
     web_search: bool = False
+    # Which index the web plugin reads when ``web_search`` is on. None sends
+    # 'native', the pre-0.7 default; ``mantis research`` always names one
+    # (core/search_engines.py).
+    web_search_engine: SearchEngine | None = None
     reasoning_effort: Literal['low', 'medium', 'high', 'xhigh'] | None = None
     max_tokens: int | None = None
 

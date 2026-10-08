@@ -24,6 +24,7 @@ re-deriving decisions.
 | [0009](0009-agent-serving-via-mcp-plugin.md) | Agents consume the tool through a local stdio MCP server exposing a `research` tool, packaged as a Claude Code plugin; the MCP contract evolves additively. | Accepted |
 | [0010](0010-one-progress-surface.md) | `mantis status` folds into `mantis monitor --snapshot`: one progress surface, not two shapes of the same question. | Accepted |
 | [0011](0011-two-outcomes-per-synthesis-run.md) | A synthesis attempt reports two outcomes — the synthesis document and the epistemic sidecar — so a failed derived artifact never retracts one that was produced. | Accepted |
+| [0012](0012-one-search-index-per-substrate.md) | Each research substrate reads a different web-search index (native where the vendor has it, otherwise a distinct OpenRouter engine), and the run records the engines and the measured overlap of the briefs' cited pages. | Accepted |
 
 ## Writing a new ADR
 

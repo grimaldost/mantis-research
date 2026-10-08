@@ -35,6 +35,8 @@ from mantis_research.core.logging import configure_logging
 from mantis_research.core.paths import RunDirs, topic_stem
 from mantis_research.core.progress import RunEvent, emit, seat_start_range
 from mantis_research.core.prompts import RESEARCH_REQUEST
+from mantis_research.core.retrieval_overlap import extract_urls, pairwise_jaccard
+from mantis_research.core.search_engines import assign_search_engines, shared_indexes
 from mantis_research.core.sidecar import SidecarOutcome
 from mantis_research.core.state import OpenRouterResearchState, SynthesisState
 from mantis_research.interface.seat import process_is_alive, seat_queue
@@ -42,6 +44,7 @@ from mantis_research.interface.seat import process_is_alive, seat_queue
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from mantis_research.core.config import BatchConfig
     from mantis_research.core.progress import ProgressCallback
     from mantis_research.core.stage import SeatProbe
     from mantis_research.interface.seat import SeatQueue
@@ -139,8 +142,9 @@ def require_local_claude_seat(
 # run. Add it explicitly (`--substrates …,perplexity`) with a working Sonar
 # model for real-time-search coverage.
 _DEFAULT_SUBSTRATES = ('openai', 'deepseek', 'google')
-# Providers with a native web-search plugin; everyone else routes through Exa.
-_NATIVE_SEARCH = frozenset({'openai', 'perplexity', 'anthropic', 'x-ai'})
+# Which web-search index each substrate reads is decided in
+# `core/search_engines.py` (ADR-0012): native where the vendor has it, otherwise
+# one distinct OpenRouter engine per vendor.
 
 # assurance tier → the stage sequence to run, in dependency order.
 _TIER_STAGES: dict[str, list[str]] = {
@@ -171,13 +175,72 @@ def _slugify(text: str) -> str:
     return (s[:48] or 'question').rstrip('-')
 
 
-def _substrate_entry(vendor: str) -> dict[str, Any]:
+def _substrate_entry(vendor: str, engine: str) -> dict[str, Any]:
     return {
         'subslug': vendor,
         'model': f'auto:{vendor}',
         'web_search': True,
-        'web_search_engine': 'native' if vendor in _NATIVE_SEARCH else 'exa',
+        'web_search_engine': engine,
     }
+
+
+def _search_engines_of(cfg: BatchConfig) -> dict[str, str | None]:
+    """The web-search engine each research substrate was configured with.
+
+    ``None`` where web search is off for that substrate. An entry that turns it
+    on without naming an engine is sent as ``native`` by the stage, so that is
+    what is recorded. Read off the built config rather than recomputed from the
+    substrate names, so the record says what the payload says.
+    """
+    return {
+        entry.subslug: (entry.web_search_engine or 'native') if entry.web_search else None
+        for entry in cfg.topics[0].stages.openrouter
+    }
+
+
+def _warn_shared_indexes(engines: Mapping[str, str | None]) -> None:
+    """Say so when two substrates still read one web-search index.
+
+    Only possible with more non-native substrates than engines in the pool. Their
+    agreement is then one source read twice, which the caller should hear about
+    before it reads the briefs as independent.
+    """
+    configured = {sub: engine for sub, engine in engines.items() if engine}
+    for group in shared_indexes(configured):
+        log.warning(
+            'substrates share a search index; their agreement is not independent',
+            substrates=list(group),
+        )
+
+
+def _resumed_engines(
+    record: Mapping[str, Any], substrates: Sequence[str], dirs: RunDirs
+) -> tuple[dict[str, str], list[str]]:
+    """The engines a resumed run keeps, and the substrates whose engine is unknown.
+
+    A run that recorded its engines (0.7 on) keeps them for every substrate, so a
+    substrate still to run reads the index its siblings did. A substrate with no
+    recorded engine that the research state already shows as done finished under
+    an engine nobody wrote down: it is reported as unknown, never guessed. Every
+    other substrate takes today's assignment.
+    """
+    recorded = record.get('search_engines')
+    recorded = recorded if isinstance(recorded, dict) else {}
+    keep = {sub: str(recorded[sub]) for sub in substrates if recorded.get(sub)}
+    unknown = [sub for sub in _done_substrates(dirs) if sub in substrates and sub not in keep]
+    return keep, unknown
+
+
+def _done_substrates(dirs: RunDirs) -> list[str]:
+    """The substrates whose research subsession the state records as done."""
+    state_path = dirs.state('openrouter') / '1.json'
+    if not state_path.exists():
+        return []
+    try:
+        state = OpenRouterResearchState.model_validate_json(state_path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return []
+    return [sub.subslug for sub in state.subsessions if sub.status == 'done']
 
 
 def build_config(
@@ -188,9 +251,15 @@ def build_config(
     journal: bool,
     batch_name: str,
     assurance: str,
+    search_engines: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Build the in-memory single-topic batch config for one research request."""
+    """Build the in-memory single-topic batch config for one research request.
+
+    ``search_engines`` pins the engine of the substrates it names (a resumed run
+    keeps what it recorded); the rest take the current assignment.
+    """
     slug = _slugify(question)
+    engines = {**assign_search_engines(substrates).engines, **(search_engines or {})}
     return {
         'schema_version': 2,
         'batch_name': batch_name,
@@ -206,7 +275,7 @@ def build_config(
                     # Path B: Claude does no research (never dispatched); an
                     # explicit empty prompt keeps the config valid.
                     'claude': {'prompt': ''},
-                    'openrouter': [_substrate_entry(v) for v in substrates],
+                    'openrouter': [_substrate_entry(v, engines[v]) for v in substrates],
                     'journal': {'enabled': journal},
                     'falsification': {'enabled': assurance in ('standard', 'high')},
                     'evaluation': {'enabled': assurance == 'high'},
@@ -225,15 +294,19 @@ def _manifest(
     substrates: list[str],
     results: dict[str, int],
     dry_run: bool,
+    search_engines: Mapping[str, str | None] | None,
 ) -> dict[str, Any]:
     dirs = RunDirs('batch', batch_name)
     stem = topic_stem('1', slug)
     or_dir = dirs.output('openrouter') / stem
-    outputs: dict[str, Any] = {
-        'briefs': [str(or_dir / f'{v}.md') for v in substrates],
-        'synthesis': str(dirs.output('synthesis') / f'{stem}.md'),
-        'sidecar': str(dirs.output('synthesis') / f'{stem}.sidecar.json'),
-    }
+    outputs: dict[str, Any] = {'briefs': [str(or_dir / f'{v}.md') for v in substrates]}
+    # A path is listed only for a stage that ran. A research-only tier has no
+    # synthesis stage, so the two paths it used to list could never be filled; a
+    # tier whose research stage failed stopped before synthesis for the same
+    # reason. Falsification and evaluation already followed this rule.
+    if 'synthesis' in results:
+        outputs['synthesis'] = str(dirs.output('synthesis') / f'{stem}.md')
+        outputs['sidecar'] = str(dirs.output('synthesis') / f'{stem}.sidecar.json')
     if 'falsification' in results:
         outputs['falsification'] = str(dirs.output('falsification') / f'{stem}.md')
     if 'evaluation' in results:
@@ -244,6 +317,15 @@ def _manifest(
         'question_slug': slug,
         'batch_name': batch_name,
         'assurance': assurance,
+        # Which index each brief's search read (ADR-0012). A substrate's value
+        # is `null` when web search was off for it, or when the engine is
+        # unknown (a resumed run that began before the field existed, whose
+        # substrate had already finished). The whole key is `null` only for a
+        # finished run recorded before the field existed.
+        'search_engines': dict(search_engines) if search_engines is not None else None,
+        # How much the briefs' cited pages overlap, measured from the briefs on
+        # disk. Two briefs that cite the same pages are one source read twice.
+        'retrieval_overlap': _retrieval_overlap(or_dir, substrates),
         'layout': 'batch',
         'outputs_dir': str(dirs.root()),
         # Every path under ``outputs`` is *where an artifact goes*, not proof one
@@ -265,6 +347,31 @@ def _manifest(
         'sidecar': _read_sidecar_outcome(dirs, list(results), dry_run=dry_run),
         'ok': all(rc == 0 for rc in results.values()),
     }
+
+
+def _retrieval_overlap(brief_dir: Path, substrates: Sequence[str]) -> dict[str, Any] | None:
+    """Jaccard overlap of the pages each brief on disk cites, or None.
+
+    None when fewer than two briefs can be read, which is every dry run and a
+    research stage that stopped early: there is nothing to compare. A substrate
+    whose brief is absent or unreadable is left out rather than counted as
+    citing nothing. The pairs are in substrate order, with the overlap rounded
+    to three places and ``max`` the highest of them. The pure counting is
+    ``core/retrieval_overlap.py``; this is the part that reads the files.
+    """
+    cited: list[tuple[str, frozenset[str]]] = []
+    for substrate in substrates:
+        try:
+            text = (brief_dir / f'{substrate}.md').read_text(encoding='utf-8', errors='replace')
+        except OSError:
+            continue
+        cited.append((substrate, extract_urls(text)))
+    if len(cited) < 2:
+        return None
+    pairs = [
+        {'a': a, 'b': b, 'jaccard': round(score, 3)} for a, b, score in pairwise_jaccard(cited)
+    ]
+    return {'pairs': pairs, 'max': max(pair['jaccard'] for pair in pairs)}
 
 
 def read_run_record(run_dir: Path) -> dict[str, Any]:
@@ -313,7 +420,10 @@ def missing_product(manifest: Mapping[str, Any]) -> str | None:
     # Absent, the flag reads as owed: every tier before it was.
     if not manifest.get('produces_sidecar', True):
         return None
-    if Path(str(manifest['outputs']['sidecar'])).exists():
+    # A manifest that owes a sidecar and lists no path for it (the synthesis stage
+    # never ran) has none, and falls through to the blame below.
+    sidecar_path = (manifest.get('outputs') or {}).get('sidecar')
+    if sidecar_path is not None and Path(str(sidecar_path)).exists():
         return None
     stages: Mapping[str, Mapping[str, Any]] = manifest.get('stages') or {}
     failed = sorted(stage for stage, rc in stages.items() if rc.get('exit_code', 0) != 0)
@@ -816,6 +926,7 @@ def _collect_finished(
             substrates=_recorded_substrates(record),
             results=stages,
             dry_run=False,
+            search_engines=record.get('search_engines'),
         )
     except (KeyError, TypeError, ValueError, AttributeError):
         return None
@@ -897,15 +1008,19 @@ def resume_research(
             }
         )
 
+    substrates = list(record.get('substrates') or []) or None
     return run_research(
         question,
         assurance=str(record.get('assurance') or 'fast'),
-        substrates=list(record.get('substrates') or []) or None,
+        substrates=substrates,
         batch_name=batch_name,
         dry_run=dry_run,
         log_level=log_level,
         on_event=on_event,
         _resume_history=history,
+        _resume_engines=_resumed_engines(
+            record, substrates or list(_DEFAULT_SUBSTRATES), RunDirs('batch', batch_name)
+        ),
     )
 
 
@@ -963,6 +1078,7 @@ def run_research(
     log_level: str = 'INFO',
     on_event: ProgressCallback | None = None,
     _resume_history: list[dict[str, Any]] | None = None,
+    _resume_engines: tuple[Mapping[str, str], Sequence[str]] | None = None,
 ) -> dict[str, Any]:
     """Run one research question end-to-end; return the result manifest dict.
 
@@ -980,6 +1096,10 @@ def run_research(
     orphan directory it cannot match to a question. Each later transition is
     written into that record before ``on_event`` hears of it
     (:class:`_StageRecorder`).
+
+    ``_resume_engines`` is set only by :func:`resume_research`: the engines the
+    run recorded, which the rebuilt config keeps, and the substrates whose engine
+    is unknown and so recorded as ``None``.
     """
     # Lazy import: importing cli.dispatch runs cli/__init__, which imports
     # research_cmd -> cli.research -> back to this module. Deferring dispatch to
@@ -997,6 +1117,7 @@ def run_research(
         raise ValueError(msg)
     primary_ref = primary or f'openrouter:{subs[0]}'
     stages = _TIER_STAGES[assurance]
+    pinned_engines, unknown_engines = _resume_engines or ({}, ())
     # Before anything is minted or dispatched: a tier that cannot deliver its
     # product must say so rather than buy the research half of it. A dry run
     # spends nothing and spawns nothing, so it is exempt for the same reason
@@ -1012,10 +1133,17 @@ def run_research(
         journal=journal,
         batch_name=name,
         assurance=assurance,
+        search_engines=pinned_engines,
     )
     cfg = load_batch_config(cfg_dict)
     slug = cfg.topics[0].slug
+    # What the payload says, except for a substrate that finished under an
+    # engine the earlier record never kept: that one is reported as unknown.
+    search_engines = {**_search_engines_of(cfg), **dict.fromkeys(unknown_engines)}
+    # Before the first log call: until structlog is configured it prints to
+    # stdout, which carries the CLI manifest and the MCP JSON-RPC stream.
     configure_logging(level=log_level)
+    _warn_shared_indexes(search_engines)
 
     # ── name the run, before anything is dispatched ────────────────
     dirs = RunDirs('batch', name)
@@ -1027,6 +1155,9 @@ def run_research(
         'batch_name': name,
         'assurance': assurance,
         'substrates': subs,
+        # In the identity so that every write of the record carries it; each
+        # write replaces the whole document.
+        'search_engines': search_engines,
         'layout': 'batch',
         'outputs_dir': str(dirs.root()),
         'dry_run': dry_run,
@@ -1100,6 +1231,7 @@ def run_research(
             substrates=subs,
             results=results,
             dry_run=dry_run,
+            search_engines=search_engines,
         )
         # `complete` means the artifacts under `outputs` are on disk. A dry run
         # wrote none of them, so it says what it actually did: every path in the

@@ -30,6 +30,8 @@ from mantis_research.interface.transcripts import TranscriptWriter
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from mantis_research.core.config import SearchEngine
+
 log = structlog.get_logger(__name__)
 
 
@@ -39,9 +41,10 @@ class OpenRouterHttpOptions:
 
     model: str  # e.g. 'google/gemini-3.1-pro-preview', 'openai/gpt-5.5'
     web_search: bool = False
-    # native = native search where the provider supports it (Anthropic /
-    # OpenAI / xAI / Perplexity), otherwise OpenRouter routes to Exa.
-    web_search_engine: Literal['native', 'exa'] = 'native'
+    # Which index the web plugin reads. 'native' is the provider's own search
+    # (OpenAI / Anthropic / xAI / Perplexity / Gemini 3.x); the others are
+    # OpenRouter-side engines, each with its own index and price.
+    web_search_engine: SearchEngine = 'native'
     web_search_max_results: int = 5
     reasoning_effort: Literal['low', 'medium', 'high', 'xhigh'] | None = None
     reasoning_max_tokens: int | None = None
@@ -212,7 +215,7 @@ class OpenRouterHttpAdapter:
                 reasoning['max_tokens'] = options.reasoning_max_tokens
             body['reasoning'] = reasoning
 
-        # Web search plugin — native where supported, Exa otherwise.
+        # Web search plugin — the engine is chosen per substrate (core/search_engines.py).
         if options.web_search:
             body['plugins'] = [
                 {

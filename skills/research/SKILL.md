@@ -95,9 +95,23 @@ the sidecar's epistemic content merged in at the top level.
   across the OpenRouter substrates (`available: false` with zeroed totals if the
   cost state was unreadable).
 - `stages` — `{ <stage>: { exit_code } }` for each stage that ran.
-- `outputs` — file **paths**: `briefs` (one per substrate), `synthesis`,
-  `sidecar`, plus `falsification` / `evaluation` when those ran. The synthesis and
-  briefs are referenced by path, never inlined — read those files for full text.
+- `search_engines` — `{ <substrate>: engine }`: which web-search index each brief
+  read. `native` is the provider's own search; `parallel`, `exa` and `perplexity`
+  are OpenRouter engines; `null` means web search was off for that substrate or, on a resumed run that began before this field existed, that the engine of an already-finished substrate is unknown (`mantis research` always turns web search on, so there a `null` means unknown). The
+  default substrates are set up to read three different indexes; whether their
+  briefs actually drew on different pages is what `retrieval_overlap` shows. With
+  more non-native substrates than engines two share an index, and the run logs a
+  warning naming them.
+- `retrieval_overlap` — `null` for a dry run or when fewer than two briefs are on
+  disk, otherwise `{ pairs: [{ a, b, jaccard }], max }`: the Jaccard overlap of
+  the pages each pair of briefs cites (rounded to 3 places). A pair near 1.0 read
+  the same sources whatever the engines were, so treat their agreement as one
+  confirmation.
+- `outputs` — file **paths**: `briefs` (one per substrate), plus `synthesis` and
+  `sidecar` when the synthesis stage ran, and `falsification` / `evaluation` when
+  those ran. A `research`-tier result has only `briefs`: no synthesis or sidecar
+  path, because none is written. The synthesis and briefs are referenced by path,
+  never inlined — read those files for full text.
 - `outputs_dir`, `batch_name` — the run's directory and name, so a call that
   returned a result can be polled or resumed (`resume=<outputs_dir>`) without a
   second lookup. Also present on a resumed result.
@@ -144,7 +158,7 @@ and long free-text is clipped:
   how many items each list dropped by the cap. If `any` is true, read the full
   sidecar.
 
-The **complete** sidecar is always on disk at `outputs.sidecar` — including fields
+The **complete** sidecar is always on disk at `outputs.sidecar` (when present) — including fields
 not projected inline: `question` (the question this sidecar answers, verbatim —
 so a sidecar you froze months ago is still citable on its own), `sources[]`
 (`{ label, path, model_id, bytes }` per brief, so you can see which model

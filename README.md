@@ -89,8 +89,8 @@ The other flags:
 | `--dry-run` | off | Validate the whole pipeline with no model calls. The manifest is marked `"dry_run": true` and writes no state a later real run treats as finished. |
 | `--log-level` | `INFO` | Level for the structured logs on stderr. The batch subcommands have no level flag. |
 
-The manifest lists every output path (briefs, synthesis, sidecar, falsification,
-evaluation), each stage's exit code, and best-effort token/cost totals.
+The manifest lists the output path of every stage that ran (briefs; synthesis and
+sidecar; falsification; evaluation — a `research`-tier run lists only briefs), each stage's exit code, and best-effort token/cost totals.
 `mantis research` itself exits 0 when the manifest is `ok` and the run delivered
 its sidecar, 1 when a stage failed, 2 on a bad argument, and 3 when every stage
 passed but the sidecar it owed is missing (the full table is in
@@ -129,7 +129,11 @@ The agent calls the `research` tool (`question`, `assurance`, optional
 and gets back the run manifest plus the sidecar's `claims` / `divergences` /
 `verification_queue` (bounded to the MCP result-size budget), with synthesis and
 briefs referenced by path. The
-manifest reports two outcomes, not one: `ok` is the stages, and a `sidecar`
+manifest names the web-search index each brief read (`search_engines`; the
+default substrates read three different ones) and measures how far the briefs'
+cited pages overlap (`retrieval_overlap`;
+[ADR-0012](docs/adr/0012-one-search-index-per-substrate.md)). It
+reports two outcomes, not one: `ok` is the stages, and a `sidecar`
 block (`{ status, error }`) is the epistemic contract's own result
 ([ADR-0011](docs/adr/0011-two-outcomes-per-synthesis-run.md)). Because the
 server runs locally, its synthesis stages inherit your authenticated `claude`

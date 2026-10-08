@@ -56,7 +56,8 @@ src/mantis_research/
 │   ├── state.py           #   per-topic state models + atomic save/load
 │   ├── sidecar.py         #   sidecar schema v1 + agent projection
 │   ├── prompts.py         #   packaged default prompt templates
-│   ├── retrieval_overlap.py # cited-URL overlap between briefs (synthesis prompt)
+│   ├── retrieval_overlap.py # cited-URL overlap between briefs (synthesis prompt, manifest)
+│   ├── search_engines.py  #   web-search engine per research substrate
 │   ├── model_policy.py    #   auto-latest model selection (pure part)
 │   ├── paths.py           #   layout resolvers (legacy | batch)
 │   ├── retry.py           #   backoff classification/policy

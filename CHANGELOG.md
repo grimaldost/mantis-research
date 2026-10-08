@@ -17,6 +17,46 @@ releases (starting with 0.1.0).
   the client's MCP logs. The skill now says to collect on `research_status`
   reporting `finished`, not on files appearing in the run directory.
 
+- **A run records which web-search index each brief read.** The manifest,
+  `run.json` and the MCP result carry `search_engines`, a map from substrate to
+  `native`, `parallel`, `exa` or `perplexity` (`null` where web search is off for
+  that substrate). Every write of `run.json` carries it, including the
+  `dispatching` and `failed` records. Records written earlier read it as `null`,
+  meaning unknown. A resume keeps the engines a run recorded, also for substrates
+  still to run; resuming a record from before the field, it marks the substrates
+  already done as `null` and gives the others today's assignment.
+- **A run measures how much its briefs' cited pages overlap.** The manifest,
+  `run.json` and the MCP result carry `retrieval_overlap`: `null` when fewer than
+  two briefs are on disk (every dry run), otherwise the Jaccard overlap of each
+  pair's cited URLs, rounded to three places, and their maximum. It uses the same
+  URL extraction as the synthesis prompt, which until now was the only place the
+  overlap was computed and so never reached the `research` tier. A pair near 1.0
+  read the same sources, so its agreement counts as one confirmation.
+- **`web_search_engine` is a validated config field.** A subsession entry may name
+  `native`, `exa`, `parallel`, `perplexity` or `firecrawl`; any other value now
+  fails validation instead of reaching OpenRouter. An entry that turns web search
+  on without naming one is still sent as `native`.
+
+### Changed
+
+- **The default research substrates read three different search indexes.**
+  DeepSeek and Google both searched through OpenRouter's `exa` engine, and across
+  16 research-tier runs on 2026-10-07 they cited exactly the same pages in 10, so
+  three cross-checks were two. `mantis research` now gives a vendor with native
+  search (`openai`, `perplexity`, `anthropic`, `x-ai` and, new, `google`) its
+  own, and every other vendor the next unused engine of `parallel`, `exa`,
+  `perplexity`. The defaults `openai`, `deepseek`, `google` become `native`,
+  `parallel`, `native`. When more substrates need an engine than the pool holds,
+  two share an index and the run logs a warning naming them. Search costs move:
+  Parallel is $0.005 per request against Exa's $0.007, while Google's native
+  search is $14 per 1,000 queries and a request can issue several. The rule and
+  the prices are in `docs/batch-config.md` and ADR-0012. Hand-written batch
+  configs keep the engine they name; `config/example-batch.json` now uses
+  `parallel` for DeepSeek and `native` for Google.
+  `auto:<vendor>` resolution now skips `:batch` model variants for every vendor:
+  they share the base model's `created` time and have no native search, so the
+  pick between them depended on catalog order.
+
 ### Fixed
 
 - **A blocking `research` call sends progress for every run event, and a
@@ -45,6 +85,19 @@ releases (starting with 0.1.0).
   to poll `research_status` until the run is finished and then resume to
   collect. It is not an error. A run owned by another live process, such as a
   CLI run or a different server, is still refused.
+- **A `research`-tier result no longer lists a synthesis or sidecar path (breaking
+  for callers that read them).** That tier has no synthesis stage, so the
+  `outputs.synthesis` and `outputs.sidecar` paths in its manifest, `run.json` and
+  MCP result pointed at files that are never written, listed beside real brief
+  paths. They are now present only when the run's `stages` include `synthesis`,
+  the rule `falsification` and `evaluation` already followed; a run whose research
+  stage failed and so stopped before synthesis lists neither. The MCP result
+  builder indexed `outputs.sidecar` before its missing-product check and would have
+  raised a `KeyError` on the new shape; it, and `missing_product`, now treat an
+  absent path on a run that owes a sidecar as a missing sidecar. ADR-0009 gains an
+  amendment. **For callers:** test `produces_sidecar` (unchanged) before reading
+  `outputs.sidecar`, and read `outputs.briefs` for a `research`-tier run. Records
+  written earlier still carry the keys and still resume and report status.
 
 ## [0.6.1] - 2026-10-07
 

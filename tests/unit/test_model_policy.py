@@ -77,6 +77,21 @@ class TestSelectOpenRouterFrontier:
         # qwen is a known vendor but absent from this catalog.
         assert mp.select_openrouter_frontier('qwen', _CATALOG) is None
 
+    @pytest.mark.parametrize('batch_created', [1771509627, 1771509628])
+    def test_batch_variant_is_never_picked(self, batch_created: int) -> None:
+        # A ':batch' entry shares its base model's `created` (live catalog,
+        # 2026-10-08) and has no native search, so listing it first with the
+        # same or a newer `created` must not make it the pick.
+        catalog = [
+            {'id': 'google/gemini-3.1-pro-preview:batch', 'created': batch_created},
+            {'id': 'google/gemini-3.1-pro-preview', 'created': 1771509627},
+        ]
+        assert mp.select_openrouter_frontier('google', catalog) == 'google/gemini-3.1-pro-preview'
+
+    def test_only_a_batch_variant_means_no_qualifier(self) -> None:
+        catalog = [{'id': 'openai/gpt-5.5-pro:batch', 'created': 1}]
+        assert mp.select_openrouter_frontier('openai', catalog) is None
+
     def test_handles_string_created_timestamps(self) -> None:
         catalog = [
             {'id': 'openai/gpt-5.5', 'created': '200'},

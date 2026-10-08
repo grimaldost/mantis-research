@@ -99,10 +99,52 @@ empty string is a valid, kept prompt) or omit `prompt` and provide
 | `vendor` | `null` | Vendor for the auto policy when `model` doesn't encode it. Ignored for pinned ids. |
 | `prompt` | `null` | This subsession's research prompt; `null` inherits `research_prompt`. |
 | `web_search` | `false` | Attach OpenRouter's web plugin. (Sonar models: leave `false` — their search is built in; see the playbook's substrate quirks.) |
-| `web_search_engine` | `'native'` | `'native'` where the provider supports it (OpenAI / Anthropic / xAI / Perplexity), otherwise OpenRouter routes to `'exa'`. |
+| `web_search_engine` | `null` (sent as `'native'`) | Which index the web plugin reads: `'native'`, `'exa'`, `'parallel'`, `'perplexity'` or `'firecrawl'`. Any other value fails validation. `mantis research` always sets it, giving each substrate its own index where it can; see [Search engines](#search-engines). |
 | `web_search_max_results` | `5` | Search-result budget per call. |
 | `reasoning_effort` | `null` | `'low'` \| `'medium'` \| `'high'` \| `'xhigh'` where the model supports it. |
 | `max_tokens` | `null` | Response cap. |
+
+#### Search engines
+
+`web_search_engine` picks the index a substrate's web search reads. Two briefs
+that cite the same pages are one source read twice, so a batch that wants
+cross-model checking should give each substrate its own index
+([ADR-0012](adr/0012-one-search-index-per-substrate.md)).
+
+| Value | Reads | Price per search request (as of 2026-10-08) |
+|---|---|---|
+| `native` | The model provider's own search, where the model has it. Needs a model with native search: the OpenAI, Anthropic, xAI and Perplexity models, and Gemini 3.x (`auto:google` resolves to one). DeepSeek has none on any OpenRouter endpoint, and Gemini 2.5 and `:batch` variants have none. With the plugin, `native` on a model without native search may error. | Passed through from the provider. For Gemini 3.x that is Google Search grounding, $14 per 1,000 search queries after a 5,000/month free allowance; whether OpenRouter passes the allowance through is not documented, and one request may issue several queries. |
+| `exa` | Exa. | $0.007 in the default `auto` mode, up to 10 results included. |
+| `parallel` | Parallel. | $0.005 in the default `basic` mode, up to 10 results included. |
+| `perplexity` | Perplexity. | $0.005. |
+| `firecrawl` | Firecrawl. | Not billed by OpenRouter: bring-your-own-key, on Firecrawl credits (27 credits for 5 results). |
+
+Prices and the engine list are from OpenRouter's
+[web search documentation](https://openrouter.ai/docs/guides/features/plugins/web-search).
+Google's native search does not support domain filters. Results come back in the
+same `url_citation` annotation shape for every engine. On the regional endpoint
+`us.openrouter.ai` only `exa` runs.
+
+**What `mantis research` assigns.** It builds its substrate entries itself, with
+[`core/search_engines.py`](../src/mantis_research/core/search_engines.py):
+
+- A substrate whose vendor has native search (`openai`, `perplexity`,
+  `anthropic`, `x-ai`, `google`) gets `native`.
+- Every other vendor gets the next engine from the pool `parallel`, `exa`,
+  `perplexity` that is not already assigned in the run. The `perplexity` engine
+  is skipped when the `perplexity` vendor is also a substrate, since that
+  vendor already reads Perplexity's index.
+- When there are more such vendors than engines the pool wraps around, two
+  substrates then share an index, and the run logs a warning naming them.
+
+The default substrates `openai`, `deepseek` and `google` therefore get `native`,
+`parallel` and `native`; `deepseek`, `qwen`, `openai` get `parallel`, `exa` and
+`native`. The assignment is recorded as `search_engines` in the manifest,
+`run.json` and the MCP result (a substrate with web search off is `null`, and so is one whose engine is unknown: a resumed run that began before the field existed, for a substrate that had already finished), and
+`retrieval_overlap` reports how far the finished briefs' cited pages overlap.
+
+A hand-written batch config is not touched: it keeps whatever it names, and an
+entry with `web_search: true` and no engine is sent as `native`.
 
 Avoid `auto:perplexity`:
 [`interface/research_service.py`](../src/mantis_research/interface/research_service.py)
@@ -163,8 +205,8 @@ no `research_prompt` fails at load time, naming the topic and subsession.
         "claude": { "prompt": "" },
         "openrouter": [
           { "subslug": "openai", "model": "auto:openai", "web_search": true },
-          { "subslug": "deepseek", "model": "auto:deepseek", "web_search": true, "web_search_engine": "exa" },
-          { "subslug": "google", "model": "auto:google", "web_search": true, "web_search_engine": "exa" }
+          { "subslug": "deepseek", "model": "auto:deepseek", "web_search": true, "web_search_engine": "parallel" },
+          { "subslug": "google", "model": "auto:google", "web_search": true, "web_search_engine": "native" }
         ],
         "journal": { "enabled": false }
       }
