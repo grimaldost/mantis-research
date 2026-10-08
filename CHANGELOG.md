@@ -7,6 +7,8 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-08
+
 ### Fixed
 
 - **Briefs keep the sources a search returns only as annotations.** Google's
