@@ -10,6 +10,8 @@ an SDK major bump that changes any of that fails here rather than in the field.
 from __future__ import annotations
 
 import json
+import os
+import threading
 import time
 from itertools import pairwise
 from pathlib import Path
@@ -103,3 +105,62 @@ async def test_a_silent_blocking_call_keeps_sending_progress(
     messages = [message or '' for _, _, message in stamps]
     assert [m for m in messages if m.startswith('thinking')] == [f'thinking {i}' for i in range(3)]
     assert any(m.startswith('still running: openrouter starting') for m in messages)
+
+
+async def test_a_resume_of_a_run_this_server_holds_answers_with_its_handle(
+    monkeypatch: pytest.MonkeyPatch, rooted: Path
+) -> None:
+    # In the field (0.4.0) a resume of a run the same server was still running
+    # came back as "still owned by a live process", with no next step. The
+    # owner is this server, so the answer is the run's handle.
+    run_dir = rooted / 'outputs_root' / 'held-run'
+    run_dir.mkdir(parents=True)
+    identity = {
+        'question': 'q',
+        'question_slug': 'q',
+        'batch_name': 'held-run',
+        'assurance': 'fast',
+        'substrates': ['openai'],
+        'layout': 'batch',
+        'outputs_dir': str(run_dir),
+        'dry_run': False,
+    }
+    release = threading.Event()
+
+    def held(question: str, *, resume: str = '', on_event: Any = None, **_: Any) -> dict[str, Any]:
+        if resume:
+            msg = f'run held-run is still owned by a live process (pid {os.getpid()})'
+            raise ValueError(msg)
+        record = {
+            **identity,
+            'status': 'dispatching',
+            'owner_pid': os.getpid(),
+            'current_stage': 'synthesis',
+            'stages': {'openrouter': {'state': 'done', 'exit_code': 0}},
+        }
+        (run_dir / 'run.json').write_text(json.dumps(record), encoding='utf-8')
+        on_event(RunEvent(kind='run_named', message='named', step=0, total=2, data=identity))
+        release.wait(timeout=20)
+        return {'ok': True}
+
+    monkeypatch.setattr(server, '_run_and_assemble', held)
+    try:
+        async with Client(build_server(), log_level='info') as client:
+            handle = await client.call_tool('research', {'question': 'q', 'detach': True})
+            assert not handle.is_error
+            again = await client.call_tool('research', {'question': 'q', 'resume': str(run_dir)})
+    finally:
+        release.set()
+
+    assert not again.is_error, again.content
+    answer = again.structured_content or {}
+    assert answer['state'] == 'running'
+    assert Path(answer['outputs_dir']) == run_dir
+    assert answer['batch_name'] == 'held-run'
+    assert answer['current_stage'] == 'synthesis'
+    assert 'research_status' in answer['note']
+    # Once the worker returns, the run is no longer held.
+    for thread in threading.enumerate():
+        if thread.name == 'mantis-research-run':
+            thread.join(timeout=10)
+    assert not server._HELD_RUNS

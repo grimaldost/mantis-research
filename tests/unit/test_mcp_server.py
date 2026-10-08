@@ -5,16 +5,22 @@ from __future__ import annotations
 import asyncio
 import gc
 import json
+import os
+import subprocess
+import sys
 import threading
 from itertools import pairwise
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from mantis_research.core.progress import RunEvent
 from mantis_research.interface.mcp import server
 from mantis_research.interface.mcp.server import _ProgressChannel, build_server, research
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 #: The input schemas both tools published before the SDK major port. The port is
 #: meant to change how the server is built, not what an agent is shown.
@@ -398,3 +404,62 @@ async def test_a_cancelled_call_still_retrieves_its_worker_outcome(
     finally:
         loop.set_exception_handler(previous)
     assert [c.get('message') for c in reported] == []
+
+
+def test_a_run_is_released_when_its_worker_raises(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    run_dir = tmp_path / 'some-run'
+    seen: list[bool] = []
+
+    def failing(question: str, *, on_event: Any = None, **_: Any) -> dict[str, Any]:
+        data = {'outputs_dir': str(run_dir), 'batch_name': 'some-run'}
+        on_event(RunEvent(kind='run_named', message='named', step=0, total=1, data=data))
+        seen.append(run_dir.resolve() in server._HELD_RUNS)
+        msg = 'stage failed'
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(server, '_run_and_assemble', failing)
+    with pytest.raises(RuntimeError, match='stage failed'):
+        server._run_held('q', on_event=None)
+    assert seen == [True]
+    assert run_dir.resolve() not in server._HELD_RUNS
+
+
+@pytest.fixture
+def live_child() -> Iterator[int]:
+    """The pid of a live process that is not this one, for as long as the test runs."""
+    proc = subprocess.Popen(
+        [sys.executable, '-c', 'import sys; sys.stdin.read()'], stdin=subprocess.PIPE
+    )
+    try:
+        yield proc.pid
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+@pytest.mark.parametrize('owner', ['this process', 'another process'])
+async def test_a_live_run_this_server_does_not_hold_keeps_the_refusal(
+    owner: str, request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Only the runs this server holds answer with a handle. A dispatching record
+    # whose owner is alive and that this server does not hold keeps the refusal,
+    # so two owners never run over one state tree, whether the owner is this
+    # process or another one.
+    owner_pid = os.getpid() if owner == 'this process' else request.getfixturevalue('live_child')
+    for fn in ('state_root', 'outputs_root', 'transcripts_root', 'logs_root'):
+        monkeypatch.setattr(f'mantis_research.core.paths.{fn}', lambda fn=fn: tmp_path / fn)
+    run_dir = tmp_path / 'outputs_root' / 'elsewhere'
+    run_dir.mkdir(parents=True)
+    record = {
+        'question': 'q',
+        'batch_name': 'elsewhere',
+        'assurance': 'research',
+        'outputs_dir': str(run_dir),
+        'status': 'dispatching',
+        'owner_pid': owner_pid,
+    }
+    (run_dir / 'run.json').write_text(json.dumps(record), encoding='utf-8')
+    with pytest.raises(ValueError, match=rf'still owned by a live process \(pid {owner_pid}\)'):
+        await research('q', resume=str(run_dir), detach=False)

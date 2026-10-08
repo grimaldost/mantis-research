@@ -24,6 +24,17 @@ releases (starting with 0.1.0).
   (<elapsed> s)`) goes out every 60 s. This covers the `research` tier, which
   blocks unless `detach=true` is passed, and `detach=false` on any tier. A
   detached call is unchanged: it returns at once.
+- **A resume of a run this server is still running answers with the run's
+  handle.** `research(resume=<outputs_dir>)` on a run the same server process
+  was executing in a worker thread failed with `run X is still owned by a live
+  process (pid N)`: the record's owner was the server itself, and the caller was
+  given no next step. The server now keeps the runs its worker threads hold, from
+  the run's `run_named` event until the worker returns, and a resume of one of
+  them returns `state: "running"` with the run's identity (`outputs_dir`,
+  `batch_name`), its `current_stage` and `stages` from the record, and a `note`
+  to poll `research_status` until the run is finished and then resume to
+  collect. It is not an error. A run owned by another live process, such as a
+  CLI run or a different server, is still refused.
 
 ## [0.6.1] - 2026-10-07
 

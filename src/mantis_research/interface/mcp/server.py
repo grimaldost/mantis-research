@@ -204,6 +204,78 @@ def _run_and_assemble(
     return _agent_result(manifest)
 
 
+#: The runs this server process's worker threads are executing, keyed by the
+#: resolved output directory, each with the identity its ``run_named`` event
+#: carried. A resume of one of them answers with its handle: the record's
+#: ``owner_pid`` is this process, so the resume itself would refuse it as owned
+#: by a live process, and the caller would be told nothing it could act on.
+_HELD_RUNS: dict[Path, dict[str, Any]] = {}
+_HELD_RUNS_LOCK = threading.Lock()
+
+
+def _run_held(
+    question: str, *, on_event: ProgressCallback | None, **options: Any
+) -> dict[str, Any]:
+    """Call :func:`_run_and_assemble` with the run held for as long as it executes.
+
+    The run is held from its ``run_named`` event, which names its directory
+    before any stage is dispatched, until this call returns or raises. Runs in
+    the worker thread, so a blocking call whose client gave up still releases
+    the run when the work ends rather than when the call does.
+    """
+    held: list[tuple[Path, dict[str, Any]]] = []
+
+    def note(event: RunEvent) -> None:
+        if event.kind == 'run_named' and not held and event.data.get('outputs_dir'):
+            key = Path(str(event.data['outputs_dir'])).resolve()
+            identity = dict(event.data)
+            with _HELD_RUNS_LOCK:
+                _HELD_RUNS[key] = identity
+            held.append((key, identity))
+        if on_event is not None:
+            on_event(event)
+
+    try:
+        return _run_and_assemble(question, on_event=note, **options)
+    finally:
+        with _HELD_RUNS_LOCK:
+            for key, identity in held:
+                if _HELD_RUNS.get(key) is identity:
+                    del _HELD_RUNS[key]
+
+
+def _held_answer(resume: str) -> dict[str, Any] | None:
+    """The handle for a resume of a run this server still holds, or ``None``.
+
+    ``None`` for any directory this server is not running, including one that
+    does not resolve: the resume then takes its usual path and gives its usual
+    answer or refusal. A run owned by another live process keeps that refusal;
+    only this process can know a run is its own.
+    """
+    try:
+        resolved = resolve_resume_dir(Path(resume))
+    except (OSError, ValueError):
+        return None
+    with _HELD_RUNS_LOCK:
+        identity = _HELD_RUNS.get(resolved)
+    if identity is None:
+        return None
+    status = _status(str(resolved))
+    projection = status if status.get('state') != 'unknown' else {}
+    return {
+        **projection,
+        **identity,
+        'state': 'running',
+        'data_root': str(paths.data_root()),
+        'note': (
+            'this server is still running this run, so it was not resumed. Poll '
+            '`research_status` with this outputs_dir until its state is '
+            '"finished", then call `research` with resume=<outputs_dir> to '
+            'collect the result.'
+        ),
+    }
+
+
 class _ProgressChannel:
     """The progress one blocking call sends, owned by that call, on its loop.
 
@@ -331,9 +403,7 @@ async def _blocking_call(ctx: Any, question: str, **options: Any) -> dict[str, A
     loop = asyncio.get_running_loop()
     channel = _ProgressChannel(ctx) if ctx is not None else None
     on_event = channel.callback(loop) if channel is not None else None
-    task = asyncio.create_task(
-        asyncio.to_thread(_run_and_assemble, question, on_event=on_event, **options)
-    )
+    task = asyncio.create_task(asyncio.to_thread(_run_held, question, on_event=on_event, **options))
     started = time.monotonic()
     try:
         while True:
@@ -616,7 +686,7 @@ def _detach(
 
     def work() -> None:
         try:
-            result = _run_and_assemble(
+            result = _run_held(
                 question,
                 assurance=assurance,
                 substrates=substrates,
@@ -799,7 +869,9 @@ async def research(
       - ``resume`` re-enters an interrupted run by its output directory instead
         of starting a new one; completed stages are skipped and the question and
         settings are read from that run's own record. On a finished run it is
-        the collect call, and returns the result.
+        the collect call, and returns the result. On a run this server is still
+        running it returns that run's handle (``state`` ``running``) and a
+        ``note``: poll ``research_status`` until it is finished, then resume.
       - ``detach`` returns the run's identity at once (``state``,
         ``outputs_dir``, ``batch_name``) instead of the result. Unset, it is
         chosen by tier: a run that uses the local Claude seat detaches, and a
@@ -821,6 +893,12 @@ async def research(
     # The progress channel is built on the loop, in `_blocking_call`: the worker
     # thread hands events back rather than touching the session directly.
     # Off the loop: on a resume the decision reads the run's record.
+    if resume:
+        # Before the detach decision: a run this server is still executing is
+        # neither collected nor re-run, whatever `detach` says.
+        held = await asyncio.to_thread(_held_answer, resume)
+        if held is not None:
+            return held
     if await asyncio.to_thread(
         _should_detach, detach, assurance=assurance, dry_run=dry_run, resume=resume
     ):
