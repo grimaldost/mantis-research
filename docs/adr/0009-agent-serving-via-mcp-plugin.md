@@ -97,6 +97,32 @@ distribution layer over it.
   separate governed change (a [keel](https://github.com/grimaldost/keel) spec), where the tool schema, result shape,
   error mapping, and dry-run/timeout behavior are pinned and pre-mortemed.
 
+## Amendment (2026-10-08): a research-tier result lists no synthesis or sidecar path
+
+The Consequences above say the tool's result shape evolves additively. This
+amendment records a second deliberate exception.
+
+Before it, the manifest's `outputs` always carried `synthesis` and `sidecar`
+beside `briefs`, whatever the tier. A `research`-tier run has no synthesis stage
+and never writes either file, so both paths pointed at nothing. After it, those
+two keys are present only when the run's `stages` include `synthesis`, the rule
+`falsification` and `evaluation` already followed. The same holds in `run.json`,
+the manifest `mantis research` prints and the MCP `research` result, and in a
+run whose research stage failed and so stopped before synthesis. Removing a key
+is not an additive change: a caller that reads `outputs.sidecar` unconditionally
+now gets nothing back for a `research`-tier run.
+
+Those callers were reading a path that could never be opened, and the field
+evidence for the change is the same shape as ADR-0003's: a destination listed
+beside real brief paths reads as a product. `produces_sidecar` keeps its meaning
+and is the flag to test first. Records written before the change still carry the
+keys and still resume and report status; a resume rebuilds the manifest from the
+stages, so a collected `research`-tier run drops them. In the server,
+`_agent_result` and `missing_product` treat an absent sidecar path on a run that
+owes a sidecar as a missing one. The CHANGELOG marks the change as breaking with
+a **For callers:** note, and the skill states that a `research`-tier result has
+only `briefs`.
+
 ## Amendment (2026-10-07): a plain call to a seat tier returns a handle
 
 The Consequences above say the tool's schema and result shape evolve additively.

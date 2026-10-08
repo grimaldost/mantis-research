@@ -299,11 +299,14 @@ def _manifest(
     dirs = RunDirs('batch', batch_name)
     stem = topic_stem('1', slug)
     or_dir = dirs.output('openrouter') / stem
-    outputs: dict[str, Any] = {
-        'briefs': [str(or_dir / f'{v}.md') for v in substrates],
-        'synthesis': str(dirs.output('synthesis') / f'{stem}.md'),
-        'sidecar': str(dirs.output('synthesis') / f'{stem}.sidecar.json'),
-    }
+    outputs: dict[str, Any] = {'briefs': [str(or_dir / f'{v}.md') for v in substrates]}
+    # A path is listed only for a stage that ran. A research-only tier has no
+    # synthesis stage, so the two paths it used to list could never be filled; a
+    # tier whose research stage failed stopped before synthesis for the same
+    # reason. Falsification and evaluation already followed this rule.
+    if 'synthesis' in results:
+        outputs['synthesis'] = str(dirs.output('synthesis') / f'{stem}.md')
+        outputs['sidecar'] = str(dirs.output('synthesis') / f'{stem}.sidecar.json')
     if 'falsification' in results:
         outputs['falsification'] = str(dirs.output('falsification') / f'{stem}.md')
     if 'evaluation' in results:
@@ -417,7 +420,10 @@ def missing_product(manifest: Mapping[str, Any]) -> str | None:
     # Absent, the flag reads as owed: every tier before it was.
     if not manifest.get('produces_sidecar', True):
         return None
-    if Path(str(manifest['outputs']['sidecar'])).exists():
+    # A manifest that owes a sidecar and lists no path for it (the synthesis stage
+    # never ran) has none, and falls through to the blame below.
+    sidecar_path = (manifest.get('outputs') or {}).get('sidecar')
+    if sidecar_path is not None and Path(str(sidecar_path)).exists():
         return None
     stages: Mapping[str, Mapping[str, Any]] = manifest.get('stages') or {}
     failed = sorted(stage for stage, rc in stages.items() if rc.get('exit_code', 0) != 0)

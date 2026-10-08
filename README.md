@@ -89,8 +89,8 @@ The other flags:
 | `--dry-run` | off | Validate the whole pipeline with no model calls. The manifest is marked `"dry_run": true` and writes no state a later real run treats as finished. |
 | `--log-level` | `INFO` | Level for the structured logs on stderr. The batch subcommands have no level flag. |
 
-The manifest lists every output path (briefs, synthesis, sidecar, falsification,
-evaluation), each stage's exit code, and best-effort token/cost totals.
+The manifest lists the output path of every stage that ran (briefs; synthesis and
+sidecar; falsification; evaluation — a `research`-tier run lists only briefs), each stage's exit code, and best-effort token/cost totals.
 `mantis research` itself exits 0 when the manifest is `ok` and the run delivered
 its sidecar, 1 when a stage failed, 2 on a bad argument, and 3 when every stage
 passed but the sidecar it owed is missing (the full table is in

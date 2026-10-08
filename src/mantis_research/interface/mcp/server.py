@@ -106,7 +106,9 @@ class IncompleteRunError(RuntimeError):
     """
 
 
-def _incomplete(manifest: dict[str, Any], sidecar_path: Path, blame: str) -> IncompleteRunError:
+def _incomplete(
+    manifest: dict[str, Any], sidecar_path: Path | None, blame: str
+) -> IncompleteRunError:
     """Build the refusal around the blame line the judgement already produced.
 
     ``blame`` comes from :func:`missing_product`, which is also what the CLI's
@@ -114,8 +116,10 @@ def _incomplete(manifest: dict[str, Any], sidecar_path: Path, blame: str) -> Inc
     is given cannot drift apart.
     """
     outputs_dir = manifest.get('outputs_dir') or manifest.get('batch_name', '')
+    # The manifest lists a sidecar path only once the synthesis stage ran.
+    where = f' at {sidecar_path}' if sidecar_path is not None else ''
     return IncompleteRunError(
-        f'the run produced no epistemic sidecar at {sidecar_path} — {blame}. '
+        f'the run produced no epistemic sidecar{where} — {blame}. '
         f'The sidecar is the product (ADR-0003): research briefs without a '
         f'synthesis and its sidecar are not an answer, so this is reported as a '
         f'failure rather than returned as a partial result. The briefs that were '
@@ -163,7 +167,10 @@ def _agent_result(manifest: dict[str, Any]) -> dict[str, Any]:
         'search_engines': manifest.get('search_engines'),
         'retrieval_overlap': manifest.get('retrieval_overlap'),
     }
-    sidecar_path = Path(manifest['outputs']['sidecar'])
+    # Absent when the synthesis stage never ran: a `research`-tier run lists no
+    # sidecar path, and neither does a run that stopped before synthesis.
+    listed = manifest['outputs'].get('sidecar')
+    sidecar_path = Path(listed) if listed is not None else None
     # A live run that owed a sidecar and has none produced no answer. Which runs
     # those are, and why, is decided once in `missing_product` — the CLI's exit
     # code reads the same call, so the two surfaces cannot disagree about what a
@@ -171,7 +178,7 @@ def _agent_result(manifest: dict[str, Any]) -> dict[str, Any]:
     blame = missing_product(manifest)
     if blame is not None:
         raise _incomplete(manifest, sidecar_path, blame)
-    if sidecar_path.exists():
+    if sidecar_path is not None and sidecar_path.exists():
         sc = ResearchSidecar.from_model_json(sidecar_path.read_text(encoding='utf-8'))
         result['sidecar_available'] = True
         result.update(project_for_agent(sc))

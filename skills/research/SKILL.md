@@ -107,9 +107,11 @@ the sidecar's epistemic content merged in at the top level.
   the pages each pair of briefs cites (rounded to 3 places). A pair near 1.0 read
   the same sources whatever the engines were, so treat their agreement as one
   confirmation.
-- `outputs` — file **paths**: `briefs` (one per substrate), `synthesis`,
-  `sidecar`, plus `falsification` / `evaluation` when those ran. The synthesis and
-  briefs are referenced by path, never inlined — read those files for full text.
+- `outputs` — file **paths**: `briefs` (one per substrate), plus `synthesis` and
+  `sidecar` when the synthesis stage ran, and `falsification` / `evaluation` when
+  those ran. A `research`-tier result has only `briefs`: no synthesis or sidecar
+  path, because none is written. The synthesis and briefs are referenced by path,
+  never inlined — read those files for full text.
 - `outputs_dir`, `batch_name` — the run's directory and name, so a call that
   returned a result can be polled or resumed (`resume=<outputs_dir>`) without a
   second lookup. Also present on a resumed result.
@@ -156,7 +158,7 @@ and long free-text is clipped:
   how many items each list dropped by the cap. If `any` is true, read the full
   sidecar.
 
-The **complete** sidecar is always on disk at `outputs.sidecar` — including fields
+The **complete** sidecar is always on disk at `outputs.sidecar` (when present) — including fields
 not projected inline: `question` (the question this sidecar answers, verbatim —
 so a sidecar you froze months ago is still citable on its own), `sources[]`
 (`{ label, path, model_id, bytes }` per brief, so you can see which model

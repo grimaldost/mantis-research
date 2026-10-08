@@ -85,6 +85,19 @@ releases (starting with 0.1.0).
   to poll `research_status` until the run is finished and then resume to
   collect. It is not an error. A run owned by another live process, such as a
   CLI run or a different server, is still refused.
+- **A `research`-tier result no longer lists a synthesis or sidecar path (breaking
+  for callers that read them).** That tier has no synthesis stage, so the
+  `outputs.synthesis` and `outputs.sidecar` paths in its manifest, `run.json` and
+  MCP result pointed at files that are never written, listed beside real brief
+  paths. They are now present only when the run's `stages` include `synthesis`,
+  the rule `falsification` and `evaluation` already followed; a run whose research
+  stage failed and so stopped before synthesis lists neither. The MCP result
+  builder indexed `outputs.sidecar` before its missing-product check and would have
+  raised a `KeyError` on the new shape; it, and `missing_product`, now treat an
+  absent path on a run that owes a sidecar as a missing sidecar. ADR-0009 gains an
+  amendment. **For callers:** test `produces_sidecar` (unchanged) before reading
+  `outputs.sidecar`, and read `outputs.briefs` for a `research`-tier run. Records
+  written earlier still carry the keys and still resume and report status.
 
 ## [0.6.1] - 2026-10-07
 
