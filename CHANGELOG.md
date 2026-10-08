@@ -7,6 +7,17 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Briefs keep the sources a search returns only as annotations.** Google's
+  native search returned its sources only as API annotations, with redirect
+  links, and wrote no links in its text, so in 0.7.0 the google brief had no
+  source links and its `retrieval_overlap` pairs scored 0.0 with nothing to
+  compare. Briefs now end with a `Sources` section listing the annotation
+  citations the text does not already link, with Google's
+  `grounding-api-redirect` URLs resolved to the real pages. A redirect that
+  cannot be resolved is kept as it is and logged.
+
 ## [0.7.0] - 2026-10-08
 
 ### Added

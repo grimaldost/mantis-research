@@ -122,7 +122,10 @@ cross-model checking should give each substrate its own index
 Prices and the engine list are from OpenRouter's
 [web search documentation](https://openrouter.ai/docs/guides/features/plugins/web-search).
 Google's native search does not support domain filters. Results come back in the
-same `url_citation` annotation shape for every engine. On the regional endpoint
+same `url_citation` annotation shape for every engine; the annotations a brief's
+text does not already link are appended to it as a `Sources` section, with
+Google's `grounding-api-redirect` URLs resolved to the pages they point to. On
+the regional endpoint
 `us.openrouter.ai` only `exa` runs.
 
 **What `mantis research` assigns.** It builds its substrate entries itself, with

@@ -17,13 +17,17 @@ Reference docs:
 
 from __future__ import annotations
 
+import asyncio
+import dataclasses
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, cast
+from urllib.parse import urlsplit
 
 import httpx
 import structlog
 
+from mantis_research.core.citations import Citation, is_grounding_redirect, url_citations
 from mantis_research.core.settings import settings
 from mantis_research.interface.transcripts import TranscriptWriter
 
@@ -33,6 +37,11 @@ if TYPE_CHECKING:
     from mantis_research.core.config import SearchEngine
 
 log = structlog.get_logger(__name__)
+
+# A grounding-redirect lookup is one GET answered by one 302; it must not hold up
+# a brief that has already been paid for. Seconds, for each httpx phase of a lookup
+# and for the whole resolution step.
+_REDIRECT_TIMEOUT_S = 10.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +79,9 @@ class OpenRouterHttpResult:
     finish_reason: str | None = None
     model_used: str | None = None  # may differ from requested if provider fallback fired
     usage: dict[str, Any] | None = None  # tokens in/out/reasoning + cost (floats)
+    # The pages the web search cited, from ``message.annotations``; Google's
+    # grounding redirects are resolved to the real pages where the lookup works.
+    citations: tuple[Citation, ...] = ()
 
 
 class OpenRouterHttpAdapter:
@@ -161,7 +173,12 @@ class OpenRouterHttpAdapter:
             tx.append_line(resp.text)
             tx.finalize(exit_code=0 if resp.is_success else resp.status_code)
 
-        return self._parse_response(resp, options, duration)
+        result = self._parse_response(resp, options, duration)
+        if result.success and result.citations:
+            result = dataclasses.replace(
+                result, citations=await _resolve_grounding_redirects(result.citations)
+            )
+        return result
 
     # ── helpers ────────────────────────────────────────────────────
 
@@ -293,7 +310,75 @@ class OpenRouterHttpAdapter:
             finish_reason=finish_reason,
             model_used=data.get('model') or options.model,
             usage=data.get('usage'),
+            citations=url_citations(msg) if isinstance(msg, dict) else (),
         )
+
+
+async def _resolve_grounding_redirects(citations: tuple[Citation, ...]) -> tuple[Citation, ...]:
+    """Replace each Google grounding redirect with the page it redirects to.
+
+    Google's native search cites ``vertexaisearch.cloud.google.com/
+    grounding-api-redirect/<token>`` URLs, which name no source; each answers a
+    GET with one 302 whose ``Location`` is the real page. The lookups run
+    concurrently, without following the redirect and without the OpenRouter
+    key (they go to Google). A lookup that fails keeps the redirect URL, so the
+    citation is never lost, and the count left unresolved is logged once. The
+    step as a whole is bounded by ``_REDIRECT_TIMEOUT_S``: lookups still running
+    at the deadline are left unresolved, those already done are kept.
+    """
+    targets = [i for i, c in enumerate(citations) if is_grounding_redirect(c.url)]
+    if not targets:
+        return citations
+    resolved: dict[int, str] = {}
+    async with httpx.AsyncClient(timeout=_REDIRECT_TIMEOUT_S, follow_redirects=False) as client:
+
+        async def resolve(index: int) -> None:
+            location = await _redirect_location(client, citations[index].url)
+            if location is not None:
+                resolved[index] = location
+
+        # httpx's timeout bounds each phase (connect, write, read), not the lookup, so
+        # a slow host could take several times it; the deadline bounds the whole step.
+        # On expiry the lookups still running are cancelled and those done are kept.
+        try:
+            async with asyncio.timeout(_REDIRECT_TIMEOUT_S), asyncio.TaskGroup() as group:
+                for index in targets:
+                    group.create_task(resolve(index))
+        except TimeoutError:
+            pass
+    unresolved = len(targets) - len(resolved)
+    if unresolved:
+        log.warning(
+            'grounding redirects left unresolved; the brief cites the redirect URLs',
+            unresolved=unresolved,
+            total=len(targets),
+        )
+    return tuple(
+        dataclasses.replace(c, url=resolved[i]) if i in resolved else c
+        for i, c in enumerate(citations)
+    )
+
+
+async def _redirect_location(client: httpx.AsyncClient, url: str) -> str | None:
+    """The absolute http(s) ``Location`` a redirect answers with, or None.
+
+    Any failure is None: the brief is already paid for, and a lookup that
+    cannot be made must cost it nothing but the resolution.
+    """
+    try:
+        resp = await client.get(url)
+    except Exception:  # any failure keeps the redirect URL
+        return None
+    if not resp.is_redirect:
+        return None
+    location = str(resp.headers.get('location', '')).strip()
+    try:
+        parts = urlsplit(location)
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in {'http', 'https'} or not parts.hostname:
+        return None
+    return location
 
 
 def _coerce_content(content: object) -> str:

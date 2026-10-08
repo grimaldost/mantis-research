@@ -108,6 +108,13 @@ Hand-written batch configs are not rewritten: they keep the engine they name.
 - Different engines are not proof of different evidence: two engines can still
   surface the same pages. `retrieval_overlap` is how that is seen, and the
   assignment should be re-judged against it once enough runs carry the field.
+- A native search may return its citations only as response annotations. In the
+  first paid run on 0.7.0 (2026-10-08) Google cited 11 pages that way, as
+  `grounding-api-redirect` URLs, and linked none in its text, so its brief had
+  no sources and its `retrieval_overlap` pairs scored 0.0 with nothing to
+  compare. mantis now writes the annotation citations a brief does not
+  already link into a `Sources` section at its end, with Google's redirects
+  resolved to the real pages.
 - The new keys are additive on every persisted surface (I4): `search_engines`
   and `retrieval_overlap` are new keys in `run.json`, the manifest and the MCP
   result. Records written before them read `search_engines` as `null`, meaning

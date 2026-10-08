@@ -52,6 +52,14 @@ def normalize_reference(reference: str) -> str:
     return key.rstrip('/')
 
 
+def source_key(url: str) -> str:
+    """The key :func:`extract_urls` gives a linked URL: query and fragment dropped, then folded.
+
+    A tracking parameter or a section anchor does not make another source.
+    """
+    return normalize_reference(_QUERY_OR_FRAGMENT.split(url, maxsplit=1)[0])
+
+
 def extract_urls(markdown: str) -> frozenset[str]:
     """Return the web sources a markdown brief links, one key per source.
 
@@ -64,8 +72,7 @@ def extract_urls(markdown: str) -> frozenset[str]:
     keys: set[str] = set()
     for pattern in (_INLINE_LINK, _AUTOLINK, _REFERENCE_DEFINITION):
         for match in pattern.finditer(markdown):
-            url = _QUERY_OR_FRAGMENT.split(match.group(1), maxsplit=1)[0]
-            key = normalize_reference(url)
+            key = source_key(match.group(1))
             if key:
                 keys.add(key)
     return frozenset(keys)
