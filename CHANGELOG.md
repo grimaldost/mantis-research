@@ -7,6 +7,8 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-08
+
 ### Added
 
 - **`docs/mcp-troubleshooting.md`.** Records the `research` tool's field error
@@ -16,7 +18,6 @@ releases (starting with 0.1.0).
   an owner can run on the machine: the local seat, the plugin's virtualenv and
   the client's MCP logs. The skill now says to collect on `research_status`
   reporting `finished`, not on files appearing in the run directory.
-
 - **A run records which web-search index each brief read.** The manifest,
   `run.json` and the MCP result carry `search_engines`, a map from substrate to
   `native`, `parallel`, `exa` or `perplexity` (`null` where web search is off for
