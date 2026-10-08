@@ -10,6 +10,7 @@ This page says where everything else lives.
 |---|---|
 | Run one research question end to end | [README](../README.md), § Quickstart |
 | Call the tool from an agent (MCP tool / plugin) | [README](../README.md), § Serve to agents, and [skills/research/SKILL.md](../skills/research/SKILL.md) |
+| Find out why a `research` tool call failed | [mcp-troubleshooting.md](mcp-troubleshooting.md) |
 | Run a curated multi-topic batch | [running-batches.md](running-batches.md) |
 | Author or edit a batch config | [batch-config.md](batch-config.md), then [prompts/playbooks/](../prompts/playbooks/README.md) for prompt content |
 | Pick substrates/models for a topic | [model-recommendations.md](../prompts/playbooks/model-recommendations.md) |
@@ -24,6 +25,7 @@ This page says where everything else lives.
 | [architecture.md](architecture.md) | How the pipeline is built: stages, adapters, state, layouts, contracts. |
 | [running-batches.md](running-batches.md) | Operator guide for batch mode: environment, operating loop, resume semantics, where files land. |
 | [batch-config.md](batch-config.md) | Reference for the v2 batch-config JSON schema. |
+| [mcp-troubleshooting.md](mcp-troubleshooting.md) | The `research` tool's field error classes, the client's idle limit, and environment checks. |
 | [adr/](adr/README.md) | Architecture decision records (immutable; indexed in that README). |
 | [specs/](specs/README.md) | Execution specs for governed multi-PR changes (immutable records). |
 | [method/](method/README.md) | Tool-agnostic templates for the development method (ADR, spec, DoR, DoD, review checklist). |

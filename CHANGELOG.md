@@ -7,6 +7,16 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+### Added
+
+- **`docs/mcp-troubleshooting.md`.** Records the `research` tool's field error
+  classes from 2026-07-26 to 2026-09-26 (15 errors in 37 calls, each with the
+  release that fixed it), the client's 1800 s idle limit and what resets it, why
+  a tool error rate measures the transport rather than the run, and the checks
+  an owner can run on the machine: the local seat, the plugin's virtualenv and
+  the client's MCP logs. The skill now says to collect on `research_status`
+  reporting `finished`, not on files appearing in the run directory.
+
 ### Fixed
 
 - **A blocking `research` call sends progress for every run event, and a
