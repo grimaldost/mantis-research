@@ -3,15 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
+import os
+import subprocess
+import sys
+import threading
+from itertools import pairwise
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import pytest
+
 from mantis_research.core.progress import RunEvent
-from mantis_research.interface.mcp.server import _progress_bridge, build_server, research
+from mantis_research.interface.mcp import server
+from mantis_research.interface.mcp.server import _ProgressChannel, build_server, research
 
 if TYPE_CHECKING:
-    import pytest
+    from collections.abc import Iterator
 
 #: The input schemas both tools published before the SDK major port. The port is
 #: meant to change how the server is built, not what an agent is shown.
@@ -231,30 +240,226 @@ async def test_the_tool_description_lists_every_assurance_tier() -> None:
 
 
 class _RecordingContext:
-    """Records what the bridge sends, in place of the SDK's request context."""
+    """Records what the channel sends, in place of the SDK's request context."""
 
     def __init__(self) -> None:
-        self.progress: list[float] = []
+        self.sent: list[tuple[float, float | None, str | None]] = []
         self.logged: list[str] = []
+
+    @property
+    def progress(self) -> list[float]:
+        return [value for value, _, _ in self.sent]
 
     async def report_progress(
         self, progress: float, total: float | None = None, message: str | None = None
     ) -> None:
-        self.progress.append(progress)
+        self.sent.append((progress, total, message))
 
     async def info(self, message: str, **_: Any) -> None:
         self.logged.append(message)
 
 
-async def test_progress_bridge_only_reports_steps_that_advance() -> None:
-    # The run emits steps 0,0,1,1,2,2 (a stage start and the previous stage's
-    # finish share a step) and the SDK requires progress to strictly increase, so
-    # the repeats must be logged but not sent as progress.
+async def _settle() -> None:
+    """Let the sends the worker-side callback scheduled run on this loop."""
+    await asyncio.sleep(0.05)
+
+
+async def test_every_event_reaches_the_client_as_progress() -> None:
+    # Only progress notifications reset a client's idle clock; a log line does
+    # not. So every event is sent as progress, not only the steps that advance:
+    # the run emits steps 0,0,1,1,2,2 (a stage start and the previous stage's
+    # finish share a step) plus events with no step at all.
     ctx = _RecordingContext()
-    bridge = _progress_bridge(ctx, asyncio.get_running_loop())
+    channel = _ProgressChannel(ctx)
+    bridge = channel.callback(asyncio.get_running_loop())
     for step in (0, 0, 1, 1, 2, 2):
         bridge(RunEvent(kind='stage_start', message=f'step {step}', step=step, total=3))
     bridge(RunEvent(kind='waiting', message='no scale'))
-    await asyncio.sleep(0.05)
-    assert ctx.progress == [0, 1, 2]
+    await _settle()
+    values = ctx.progress
+    assert len(values) == 7
+    assert all(b > a for a, b in pairwise(values))
+    # A step that advances is still sent as itself, so the client's scale holds.
+    assert [v for v in values if v == int(v)] == [0, 1, 2]
+    assert [total for _, total, _ in ctx.sent] == [3] * 7
+    assert [message for _, _, message in ctx.sent][-1] == 'no scale'
     assert len(ctx.logged) == 7
+
+
+async def test_an_event_without_a_step_sits_between_two_steps() -> None:
+    ctx = _RecordingContext()
+    channel = _ProgressChannel(ctx)
+    bridge = channel.callback(asyncio.get_running_loop())
+    bridge(RunEvent(kind='stage_start', message='synthesis', step=1, total=3))
+    bridge(RunEvent(kind='thinking', message='thinking'))
+    bridge(RunEvent(kind='thinking', message='thinking'))
+    bridge(RunEvent(kind='stage_done', message='done', step=2, total=3))
+    await _settle()
+    first, second, third, last = ctx.progress
+    assert first == 1
+    assert 1 < second < third < 2
+    assert last == 2
+
+
+async def test_a_keepalive_tick_is_progress_naming_the_last_event() -> None:
+    ctx = _RecordingContext()
+    channel = _ProgressChannel(ctx)
+    await channel.event(
+        RunEvent(kind='stage_start', message='openrouter starting', step=0, total=2)
+    )
+    await channel.keepalive(120.4)
+    await channel.keepalive(180.4)
+    assert ctx.progress[0] == 0
+    assert 0 < ctx.progress[1] < ctx.progress[2] < 1
+    assert ctx.sent[1][1:] == (2, 'still running: openrouter starting (120 s)')
+    # A tick is not an event: it resets the clock and is not logged.
+    assert ctx.logged == ['openrouter starting']
+
+
+async def test_a_keepalive_before_any_event_still_sends_progress() -> None:
+    ctx = _RecordingContext()
+    channel = _ProgressChannel(ctx)
+    await channel.keepalive(60.0)
+    await channel.event(RunEvent(kind='run_named', message='named', step=0, total=2))
+    await channel.event(RunEvent(kind='stage_done', message='done', step=1, total=2))
+    values = ctx.progress
+    assert len(values) == 3
+    assert all(b > a for a, b in pairwise(values))
+    assert values[-1] == 1
+
+
+async def test_progress_never_passes_total_and_total_is_sent_once_by_run_done() -> None:
+    # The last stage's finish shares its step with `run_done` (both `total`), and
+    # ticks arrive while the last stage runs. Only `run_done` reaches `total`;
+    # everything before it sits in the band below, and nothing follows it.
+    ctx = _RecordingContext()
+    channel = _ProgressChannel(ctx)
+    total = 2
+    await channel.event(RunEvent(kind='run_named', message='named', step=0, total=total))
+    await channel.event(RunEvent(kind='stage_start', message='a', step=0, total=total))
+    await channel.keepalive(60.0)
+    await channel.event(RunEvent(kind='stage_done', message='a done', step=1, total=total))
+    await channel.event(RunEvent(kind='stage_start', message='b', step=1, total=total))
+    await channel.keepalive(120.0)
+    await channel.event(RunEvent(kind='thinking', message='thinking'))
+    await channel.event(RunEvent(kind='stage_done', message='b done', step=2, total=total))
+    await channel.keepalive(180.0)
+    await channel.event(RunEvent(kind='run_done', message='done', step=2, total=total))
+    await channel.keepalive(240.0)
+    await channel.event(RunEvent(kind='thinking', message='late'))
+    values = ctx.progress
+    assert all(v <= total for v in values), values
+    assert all(b > a for a, b in pairwise(values)), values
+    assert values[-1] == total
+    assert values.count(total) == 1
+    assert ctx.sent[-1][2] == 'done'
+    # The log line still goes out after the last progress value.
+    assert ctx.logged[-1] == 'late'
+
+
+async def test_a_send_that_fails_does_not_reach_the_run() -> None:
+    class _Gone(_RecordingContext):
+        async def report_progress(
+            self, progress: float, total: float | None = None, message: str | None = None
+        ) -> None:
+            raise ConnectionError('client went away')
+
+    channel = _ProgressChannel(_Gone())
+    await channel.keepalive(60.0)
+    await channel.event(RunEvent(kind='thinking', message='thinking'))
+
+
+async def test_a_cancelled_call_still_retrieves_its_worker_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The run outlives a cancelled call by design. Its later failure must be
+    # retrieved, or asyncio reports "Task exception was never retrieved".
+    release = threading.Event()
+    finished = threading.Event()
+
+    def failing(question: str, *, on_event: Any = None, **_: Any) -> dict[str, Any]:
+        try:
+            release.wait(timeout=10)
+            msg = 'stage failed after the call was cancelled'
+            raise RuntimeError(msg)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(server, '_run_and_assemble', failing)
+    loop = asyncio.get_running_loop()
+    reported: list[dict[str, Any]] = []
+    previous = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: reported.append(context))
+    try:
+        call = asyncio.create_task(server._blocking_call(_RecordingContext(), 'q'))
+        await asyncio.sleep(0.05)
+        call.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await call
+        release.set()
+        await asyncio.to_thread(finished.wait, 10)
+        await asyncio.sleep(0.1)
+        gc.collect()
+        await asyncio.sleep(0)
+    finally:
+        loop.set_exception_handler(previous)
+    assert [c.get('message') for c in reported] == []
+
+
+def test_a_run_is_released_when_its_worker_raises(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    run_dir = tmp_path / 'some-run'
+    seen: list[bool] = []
+
+    def failing(question: str, *, on_event: Any = None, **_: Any) -> dict[str, Any]:
+        data = {'outputs_dir': str(run_dir), 'batch_name': 'some-run'}
+        on_event(RunEvent(kind='run_named', message='named', step=0, total=1, data=data))
+        seen.append(run_dir.resolve() in server._HELD_RUNS)
+        msg = 'stage failed'
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(server, '_run_and_assemble', failing)
+    with pytest.raises(RuntimeError, match='stage failed'):
+        server._run_held('q', on_event=None)
+    assert seen == [True]
+    assert run_dir.resolve() not in server._HELD_RUNS
+
+
+@pytest.fixture
+def live_child() -> Iterator[int]:
+    """The pid of a live process that is not this one, for as long as the test runs."""
+    proc = subprocess.Popen(
+        [sys.executable, '-c', 'import sys; sys.stdin.read()'], stdin=subprocess.PIPE
+    )
+    try:
+        yield proc.pid
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+@pytest.mark.parametrize('owner', ['this process', 'another process'])
+async def test_a_live_run_this_server_does_not_hold_keeps_the_refusal(
+    owner: str, request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Only the runs this server holds answer with a handle. A dispatching record
+    # whose owner is alive and that this server does not hold keeps the refusal,
+    # so two owners never run over one state tree, whether the owner is this
+    # process or another one.
+    owner_pid = os.getpid() if owner == 'this process' else request.getfixturevalue('live_child')
+    for fn in ('state_root', 'outputs_root', 'transcripts_root', 'logs_root'):
+        monkeypatch.setattr(f'mantis_research.core.paths.{fn}', lambda fn=fn: tmp_path / fn)
+    run_dir = tmp_path / 'outputs_root' / 'elsewhere'
+    run_dir.mkdir(parents=True)
+    record = {
+        'question': 'q',
+        'batch_name': 'elsewhere',
+        'assurance': 'research',
+        'outputs_dir': str(run_dir),
+        'status': 'dispatching',
+        'owner_pid': owner_pid,
+    }
+    (run_dir / 'run.json').write_text(json.dumps(record), encoding='utf-8')
+    with pytest.raises(ValueError, match=rf'still owned by a live process \(pid {owner_pid}\)'):
+        await research('q', resume=str(run_dir), detach=False)

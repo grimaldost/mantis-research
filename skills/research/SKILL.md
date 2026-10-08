@@ -193,9 +193,11 @@ delivered (or none owed), is collected: a resume of a run whose `ok` is false
 (`failed`, or a stage that exited non-zero) re-runs the stages left, a resume of
 a run whose `sidecar.status` is `failed` re-enters the synthesis stage for the
 sidecar alone, and both follow `detach` like a new run, so read `ok` and
-`sidecar.status` before collecting. A run left `abandoned` by a server that went
-away is re-entered by the same call, which detaches or blocks by that run's own
-tier. A subagent
+`sidecar.status` before collecting. Collect on `research_status` reporting
+`finished`, never on files appearing in the run directory: a sidecar file from a
+failed attempt can be there before the stage settles. A run left `abandoned` by
+a server that went away is re-entered by the same call, which detaches or blocks
+by that run's own tier. A subagent
 calling this tool keeps the detached default and collects this way; pass
 `detach: true` to detach a `research`-tier run as well.
 

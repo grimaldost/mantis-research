@@ -7,6 +7,45 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+### Added
+
+- **`docs/mcp-troubleshooting.md`.** Records the `research` tool's field error
+  classes from 2026-07-26 to 2026-09-26 (15 errors in 37 calls, each with the
+  release that fixed it), the client's 1800 s idle limit and what resets it, why
+  a tool error rate measures the transport rather than the run, and the checks
+  an owner can run on the machine: the local seat, the plugin's virtualenv and
+  the client's MCP logs. The skill now says to collect on `research_status`
+  reporting `finished`, not on files appearing in the run directory.
+
+### Fixed
+
+- **A blocking `research` call sends progress for every run event, and a
+  keepalive while the run is silent.** Claude Code aborts a tool call after
+  1800 s with no progress notification, and only progress resets that clock; a
+  log notification does not. Of 15 `research` tool errors between 2026-07-26 and
+  2026-09-26, 14 were that abort. The server sent progress only for events whose
+  step advanced, so `thinking`, seat `waiting`, backoff and per-substrate events
+  reached the client as log lines alone, and a phase that emitted nothing sent
+  nothing. Every event now goes out as progress too: a step that advances is
+  sent as itself, and anything else as a value strictly between the last step
+  and the next, so values keep increasing and `total` is still the stage count.
+  No value passes `total`, and only the run's end reaches it. While a blocking
+  call waits, a keepalive progress notification (`still running: <last event>
+  (<elapsed> s)`) goes out every 60 s. This covers the `research` tier, which
+  blocks unless `detach=true` is passed, and `detach=false` on any tier. A
+  detached call is unchanged: it returns at once.
+- **A resume of a run this server is still running answers with the run's
+  handle.** `research(resume=<outputs_dir>)` on a run the same server process
+  was executing in a worker thread failed with `run X is still owned by a live
+  process (pid N)`: the record's owner was the server itself, and the caller was
+  given no next step. The server now keeps the runs its worker threads hold, from
+  the run's `run_named` event until the worker returns, and a resume of one of
+  them returns `state: "running"` with the run's identity (`outputs_dir`,
+  `batch_name`), its `current_stage` and `stages` from the record, and a `note`
+  to poll `research_status` until the run is finished and then resume to
+  collect. It is not an error. A run owned by another live process, such as a
+  CLI run or a different server, is still refused.
+
 ## [0.6.1] - 2026-10-07
 
 ### Fixed
