@@ -297,8 +297,10 @@ def _manifest(
     results: dict[str, int],
     dry_run: bool,
     search_engines: Mapping[str, str | None] | None,
+    errors: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     dirs = RunDirs('batch', batch_name)
+    reasons = errors or {}
     stem = topic_stem('1', slug)
     or_dir = dirs.output('openrouter') / stem
     outputs: dict[str, Any] = {'briefs': [str(or_dir / f'{v}.md') for v in substrates]}
@@ -338,7 +340,12 @@ def _manifest(
         # Whether this run owed an epistemic sidecar at all. A research-only
         # tier does not, and the serving path's refusal needs to know.
         'produces_sidecar': produces_sidecar(list(results)),
-        'stages': {stage: {'exit_code': rc} for stage, rc in results.items()},
+        # A stage that exited non-zero says why (MANT-03): the reason its
+        # topic record gives. Absent for a stage that passed.
+        'stages': {
+            stage: {'exit_code': rc, **({'error': reasons[stage]} if stage in reasons else {})}
+            for stage, rc in results.items()
+        },
         'outputs': outputs,
         'cost': _read_cost(dirs, stem),
         # Two outcomes, not one (ADR-0011). `ok` is the stages: did the run
@@ -700,6 +707,8 @@ class _StageRecorder:
             entry.update(
                 state='done', exit_code=event.data.get('exit_code'), finished_at=_now_iso()
             )
+            if event.data.get('error'):
+                entry['error'] = event.data['error']
             return True
         entry = self._stages.get(self._current) if self._current is not None else None
         if entry is None or entry['state'] == 'done':
@@ -736,8 +745,9 @@ class _StageRecorder:
             log.debug('run record progress write skipped', error=str(exc))
 
 
-#: The timing fields a stage entry keeps in the terminal record.
-_STAGE_TIMINGS = ('started_at', 'seat_acquired_at', 'finished_at')
+#: The fields a stage entry keeps in the terminal record beside its exit code:
+#: its timings, and the reason it failed when it did.
+_STAGE_TIMINGS = ('started_at', 'seat_acquired_at', 'finished_at', 'error')
 
 #: How many recent seat turns the expected-start estimate takes its median over.
 SEAT_SAMPLE_RUNS = 20
@@ -1097,6 +1107,29 @@ def _read_sidecar_outcome(dirs: RunDirs, stages: Sequence[str], *, dry_run: bool
     return {'status': state.sidecar_status.value, 'error': state.sidecar_error}
 
 
+def _stage_reason(dirs: RunDirs, stage: str) -> str | None:
+    """Why a stage exited non-zero, read off its topic record (MANT-03).
+
+    The run record used to say only the exit code, so a failed run had to be
+    diagnosed from directory timestamps. The orchestrator writes every failure,
+    block and give-up into the topic's ``last_error``; this reads it back as
+    ``<status>: <reason>``. ``None`` when no record or no reason can be read.
+    """
+    path = dirs.state(stage) / '1.json'
+    try:
+        record = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    reason = record.get('last_error')
+    if not reason:
+        return None
+    status = record.get('status')
+    text = f'{status}: {reason}' if status else str(reason)
+    return text[:_ERROR_CHARS]
+
+
 def _read_cost(dirs: RunDirs, stem: str) -> dict[str, Any]:
     """Best-effort per-run cost/token totals from the OpenRouter state (§12)."""
     state_path = dirs.state('openrouter') / '1.json'
@@ -1250,6 +1283,7 @@ def run_research(
     )
 
     results: dict[str, int] = {}
+    errors: dict[str, str] = {}
     # Whatever ends this function other than a `return` — a stage that raises, a
     # manifest that cannot be built, an interrupt — must leave the record
     # terminal. Left at `dispatching`, a dead worker inside a live server reads
@@ -1270,14 +1304,23 @@ def run_research(
                 stage, cfg, dry_run=dry_run, log_level=log_level, on_event=recorder
             )
             results[stage] = rc
+            reason = _stage_reason(dirs, stage) if rc != 0 else None
+            if reason is not None:
+                errors[stage] = reason
             emit(
                 recorder,
                 RunEvent(
                     kind='stage_done',
-                    message=f'{stage} finished (exit {rc})',
+                    message=f'{stage} finished (exit {rc})'
+                    + (f': {reason}' if reason is not None else ''),
                     step=index,
                     total=len(stages),
-                    data={'stage': stage, 'exit_code': rc, 'batch_name': name},
+                    data={
+                        'stage': stage,
+                        'exit_code': rc,
+                        'batch_name': name,
+                        **({'error': reason} if reason is not None else {}),
+                    },
                 ),
             )
             # Research and synthesis are load-bearing — stop the pipeline if either
@@ -1294,6 +1337,7 @@ def run_research(
             results=results,
             dry_run=dry_run,
             search_engines=search_engines,
+            errors=errors,
         )
         # `complete` means the artifacts under `outputs` are on disk. A dry run
         # wrote none of them, so it says what it actually did: every path in the

@@ -524,7 +524,8 @@ async def research_status(
 
     Returns its state (``running`` / ``finished`` / ``abandoned`` / ``unknown``;
     a run that ended on an exception is ``finished`` with ``ok`` false and an
-    ``error`` string), per-stage exit codes, cost so far and output paths, plus ``data_root``: the
+    ``error`` string), per-stage exit codes (a stage that exited non-zero also
+    carries an ``error`` naming why), cost so far and output paths, plus ``data_root``: the
     directory this server writes runs under (``<data_root>/outputs/<run>``). While
     a run is in flight, each ``stages`` entry carries ``state`` (``running`` /
     ``waiting`` / ``done``) and its ``exit_code`` is null until the stage is done;

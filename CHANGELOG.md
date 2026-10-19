@@ -33,6 +33,17 @@ releases (starting with 0.1.0).
   read, passed to each as `--add-dir`; the run record keeps them for a resume.
   The data root is now always absolute, so a relative `MANTIS_HOME` still gives
   the children paths that resolve.
+- **The research stage reports done only over the work it owes.** It exited 0
+  with no brief on disk and no cost, and the failure surfaced only downstream.
+  Before it reports done it now checks that every requested substrate has a
+  brief on disk and a recorded cost, and otherwise fails as `research contract
+  unmet`, naming the substrates. A substrate recorded `done` whose brief is gone
+  is bought again when its topic is re-entered, instead of being skipped.
+- **A failed stage says why in `run.json` and `research_status`.** A stage that
+  exits non-zero carries `error` in its `stages` entry: the status and reason
+  its topic record gives, such as `blocked_upstream: missing primary brief
+  (openrouter:openai)`. The record used to say only the exit code. What `ok`,
+  the exit codes and the incomplete-run refusal mean is unchanged.
 
 ## [0.7.1] - 2026-10-08
 

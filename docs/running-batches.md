@@ -246,7 +246,13 @@ These writes are best-effort, and the MCP status tool also lists the artifacts
 already on disk. When the run finishes it is rewritten with the final
 manifest and `status: "complete"` (or `"validated"` for a dry run, which
 writes no record at all where a real run's record already is); each
-`stages` entry keeps its `exit_code` and its timings, without `state`. A run that ends on an
+`stages` entry keeps its `exit_code` and its timings, without `state`, and a
+stage that exited non-zero also keeps `error`: the status and reason its topic
+record gives (`failed: research contract unmet: ...`, `blocked_upstream: ...`).
+The research stage reports done only when every requested substrate has a
+brief on disk and a recorded cost, and fails as `research contract unmet`
+otherwise; a substrate recorded `done` whose brief is gone is bought again
+when its topic is re-entered. A run that ends on an
 exception is rewritten too, with `status: "failed"`, `ok: false`, the stages that
 finished and an `error` string, and the status tool reports it as finished with
 `ok` false. While a run waits for the seat, the status tool adds a `seat` block:

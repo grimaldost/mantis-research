@@ -25,7 +25,7 @@ from mantis_research.core.citations import sources_section
 from mantis_research.core.model_policy import resolve_openrouter_model
 from mantis_research.core.paths import topic_nn
 from mantis_research.core.progress import RunEvent, emit
-from mantis_research.core.retry import detect_rate_limit
+from mantis_research.core.retry import FailureKind, detect_rate_limit
 from mantis_research.core.stage import AttemptResult
 from mantis_research.core.state import SubsessionResult
 from mantis_research.interface.adapters.openrouter_catalog import OpenRouterCatalog
@@ -42,6 +42,10 @@ if TYPE_CHECKING:
     from mantis_research.core.state import OpenRouterResearchState
 
 log = structlog.get_logger(__name__)
+
+#: The name a failure of this stage's output contract carries (MANT-03): the
+#: stage owes one brief on disk and one recorded cost per requested substrate.
+CONTRACT_ERROR = 'research contract unmet'
 
 
 class OpenRouterResearchStage:
@@ -116,7 +120,15 @@ class OpenRouterResearchStage:
         for entry, out_path in zip(entries, output_paths, strict=True):
             subslug = str(entry['subslug'])
             prior = next((s for s in state.subsessions if s.subslug == subslug), None)
-            if prior is not None and prior.status == 'done' and not ctx.dry_run:
+            # `done` is skipped only with its brief on disk: the record alone is
+            # a claim, and a lost brief re-bought is cheaper than a stage that
+            # reports done over nothing (MANT-03).
+            if (
+                prior is not None
+                and prior.status == 'done'
+                and not ctx.dry_run
+                and _brief_on_disk(out_path)
+            ):
                 log.info(
                     'subsession already done, skipping',
                     topic_id=topic_id,
@@ -226,6 +238,12 @@ class OpenRouterResearchStage:
             return AttemptResult.fail(error='rate_limit', error_output=last_raw_output)
         if other_failure_msg:
             return AttemptResult.fail(error=other_failure_msg, error_output=last_raw_output)
+        if not ctx.dry_run:
+            unmet = _unmet_contract(state, entries, output_paths)
+            if unmet is not None:
+                # Deterministic: the same records go back in and the same check
+                # fails, so the retry budget would only spend time.
+                return AttemptResult.fail(error=unmet, failure_kind=FailureKind.PRECONDITION)
         return AttemptResult.ok()
 
     # ── helpers ────────────────────────────────────────────────────
@@ -339,3 +357,44 @@ class OpenRouterResearchStage:
                 state.subsessions[i] = new_record
                 return
         state.subsessions.append(new_record)
+
+
+def _brief_on_disk(path: Path) -> bool:
+    """True when a non-empty brief is at ``path``."""
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+def _unmet_contract(
+    state: OpenRouterResearchState,
+    entries: list[dict[str, Any]],
+    output_paths: list[Path],
+) -> str | None:
+    """Why this stage has not done the work it owes, or None when it has.
+
+    The stage owes one brief on disk and one recorded cost per requested
+    substrate. In the field it reported success with neither: the stage exited
+    0 in 1.7 s with no brief and $0, and the failure surfaced only downstream,
+    as a synthesis with nothing to read. A cost of 0 is a recorded cost (a free
+    model); an absent one is not.
+    """
+    by_subslug = {s.subslug: s for s in state.subsessions}
+    no_brief: list[str] = []
+    no_cost: list[str] = []
+    for entry, out_path in zip(entries, output_paths, strict=True):
+        subslug = str(entry['subslug'])
+        record = by_subslug.get(subslug)
+        if record is None or record.status != 'done' or not _brief_on_disk(out_path):
+            no_brief.append(subslug)
+        elif record.cost_usd is None:
+            no_cost.append(subslug)
+    reasons = []
+    if no_brief:
+        reasons.append(f'no brief on disk for {", ".join(no_brief)}')
+    if no_cost:
+        reasons.append(f'no cost recorded for {", ".join(no_cost)}')
+    if not reasons:
+        return None
+    return f'{CONTRACT_ERROR}: {"; ".join(reasons)}'

@@ -102,7 +102,10 @@ the sidecar's epistemic content merged in at the top level.
 - `cost` — `{ cost_usd, tokens_prompt, tokens_completion, available }`, summed
   across the OpenRouter substrates (`available: false` with zeroed totals if the
   cost state was unreadable).
-- `stages` — `{ <stage>: { exit_code } }` for each stage that ran.
+- `stages` — `{ <stage>: { exit_code } }` for each stage that ran. A stage that
+  exited non-zero also carries `error`, the reason its record gives, for example
+  `failed: research contract unmet: no cost recorded for openai` or
+  `blocked_upstream: missing primary brief (openrouter:openai)`.
 - `search_engines` — `{ <substrate>: engine }`: which web-search index each brief
   read. `native` is the provider's own search; `parallel`, `exa` and `perplexity`
   are OpenRouter engines; `null` means web search was off for that substrate or, on a resumed run that began before this field existed, that the engine of an already-finished substrate is unknown (`mantis research` always turns web search on, so there a `null` means unknown). The
@@ -243,7 +246,8 @@ its `state`.** `artifacts` lists the `briefs`, `synthesis` and `sidecar` files
 already on disk, read from the run directory rather than the record, so a record
 that lags still shows them. Once `state` is `finished`, each `stages` entry
 carries its `exit_code` with `started_at`, `finished_at` and, for a stage that
-took the seat, `seat_acquired_at`; `ok` says how the run went.
+took the seat, `seat_acquired_at`, plus `error` for a stage that exited non-zero;
+`ok` says how the run went.
 
 **Finding a run you lost track of.** `research_status` with no argument lists the
 runs under `data_root`, newest first, as `runs`: each entry is described as a

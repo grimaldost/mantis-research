@@ -62,12 +62,15 @@ class FakeOpenRouter:
 
     ``calls`` records ``(model, dry_run)`` per call. ``usage`` is the usage block
     every live answer carries; set it to ``None`` to model a response without one.
+    A live call to a model named in ``failing`` fails instead.
     """
 
     calls: list[tuple[str, bool]] = field(default_factory=list)
     usage: dict[str, Any] | None = field(
         default_factory=lambda: {'prompt_tokens': 10, 'completion_tokens': 20, 'cost': 0.01}
     )
+    #: Substrings of the model ids whose live calls fail with an HTTP 500.
+    failing: set[str] = field(default_factory=set)
 
     async def preflight(self) -> None:
         return None
@@ -85,6 +88,10 @@ class FakeOpenRouter:
             # What the real adapter returns under a dry run: success, no body.
             return OpenRouterHttpResult(
                 success=True, status_code=0, duration_s=0.0, model_used=options.model
+            )
+        if any(part in options.model for part in self.failing):
+            return OpenRouterHttpResult(
+                success=False, status_code=500, duration_s=0.1, error='http 500'
             )
         return OpenRouterHttpResult(
             success=True,
