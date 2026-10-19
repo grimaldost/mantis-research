@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 import structlog
 
 from mantis_research.core.cli_stream import ClaudeOutputFormat, parse_stream
-from mantis_research.core.paths import seat_lock_path
+from mantis_research.core.paths import child_workdir, seat_lock_path
 from mantis_research.core.retry import FailureKind
 from mantis_research.interface.adapters._subprocess import (
     DEFAULT_CHILD_IDLE_TIMEOUT_S,
@@ -197,6 +197,11 @@ class ClaudeCliAdapter:
         nothing for ``options.idle_timeout_s``, and — when ``options.seat_owner``
         is set — the call holds the machine's single local Claude seat for its
         duration, so a concurrent run queues visibly instead of interleaving.
+
+        The child starts in :func:`child_workdir`, never in this process's
+        working directory, so the caller's project instructions, anchor and
+        memory do not reach it (MANT-02). A directory the child should read is
+        passed in ``options.add_dirs``.
         """
         session_id = options.session_id or str(uuid.uuid4())
         cmd = self._build_cmd(prompt, options, session_id)
@@ -211,6 +216,8 @@ class ClaudeCliAdapter:
                 session_id=session_id,
             )
 
+        workdir = child_workdir()
+        workdir.mkdir(parents=True, exist_ok=True)
         start = time.monotonic()
         async with AsyncExitStack() as stack:
             if options.seat_owner:
@@ -229,6 +236,7 @@ class ClaudeCliAdapter:
                 idle_timeout_s=options.idle_timeout_s,
                 on_event=options.on_event,
                 label=options.name or 'claude',
+                cwd=workdir,
             )
         duration = time.monotonic() - start
         # What the CLI said, split from how it said it. Under stream-json the

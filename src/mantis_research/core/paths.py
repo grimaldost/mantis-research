@@ -91,12 +91,32 @@ def data_root() -> Path:
     Distinct from :func:`project_root`, which config lookup keeps using: a
     plugin's configs ship with its version, its runs must not.
     """
+    # Absolute, because the paths built from it are handed to local-seat
+    # children, which start in a directory of their own (`child_workdir`): a
+    # relative `MANTIS_HOME` would point each child somewhere else.
     return _resolve_data_root(
         Path(__file__).resolve(),
         override=settings.MANTIS_HOME,
         home=Path.home(),
         project_root=project_root(),
-    )
+    ).absolute()
+
+
+def child_workdir() -> Path:
+    """Return the directory every local-seat child starts in (MANT-02).
+
+    Claude Code reads ``CLAUDE.md`` and ``AGENTS.md`` from a session's working
+    directory and every directory above it, and keys its memory, hooks and
+    anchors on it, so a child started in the caller's project was told about
+    that project before it read the prompt. Neither the caller's directory nor
+    the data root will do: the data root is the repository for a checkout and
+    the caller's directory for an installed wheel. A fresh temporary directory
+    per child will not do either, because Claude Code finds the session a
+    ``--resume`` names by the working directory, and the journal and sidecar
+    turns resume the synthesis session. So it is one fixed directory per user,
+    under ``<home>/.mantis``, which holds nothing.
+    """
+    return Path.home() / _USER_DATA_DIR / 'child-cwd'
 
 
 def outputs_root() -> Path:

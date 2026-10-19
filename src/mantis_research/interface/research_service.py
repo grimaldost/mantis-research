@@ -252,18 +252,20 @@ def build_config(
     batch_name: str,
     assurance: str,
     search_engines: Mapping[str, str] | None = None,
+    context_dirs: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Build the in-memory single-topic batch config for one research request.
 
     ``search_engines`` pins the engine of the substrates it names (a resumed run
     keeps what it recorded); the rest take the current assignment.
+    ``context_dirs`` are the directories every local-seat child may read.
     """
     slug = _slugify(question)
     engines = {**assign_search_engines(substrates).engines, **(search_engines or {})}
     return {
         'schema_version': 2,
         'batch_name': batch_name,
-        'runner': {'layout': 'batch'},
+        'runner': {'layout': 'batch', 'context_dirs': list(context_dirs)},
         'models': {'claude': {}, 'primary': primary},
         'topics': [
             {
@@ -295,8 +297,10 @@ def _manifest(
     results: dict[str, int],
     dry_run: bool,
     search_engines: Mapping[str, str | None] | None,
+    errors: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     dirs = RunDirs('batch', batch_name)
+    reasons = errors or {}
     stem = topic_stem('1', slug)
     or_dir = dirs.output('openrouter') / stem
     outputs: dict[str, Any] = {'briefs': [str(or_dir / f'{v}.md') for v in substrates]}
@@ -336,7 +340,12 @@ def _manifest(
         # Whether this run owed an epistemic sidecar at all. A research-only
         # tier does not, and the serving path's refusal needs to know.
         'produces_sidecar': produces_sidecar(list(results)),
-        'stages': {stage: {'exit_code': rc} for stage, rc in results.items()},
+        # A stage that exited non-zero says why (MANT-03): the reason its
+        # topic record gives. Absent for a stage that passed.
+        'stages': {
+            stage: {'exit_code': rc, **({'error': reasons[stage]} if stage in reasons else {})}
+            for stage, rc in results.items()
+        },
         'outputs': outputs,
         'cost': _read_cost(dirs, stem),
         # Two outcomes, not one (ADR-0011). `ok` is the stages: did the run
@@ -449,6 +458,27 @@ def produces_sidecar(stages: Sequence[str]) -> bool:
     return 'synthesis' in stages
 
 
+def resolve_context_dirs(raw: Sequence[str] | None) -> list[str]:
+    """Validate the directories a caller declares for the local-seat children.
+
+    Each must be an existing directory; each is returned absolute, because a
+    child starts in a directory of its own (MANT-02) and the record keeps them
+    for a resume. Raises ``ValueError`` naming the first one that is not.
+    """
+    resolved: list[str] = []
+    for entry in raw or ():
+        if not str(entry).strip():
+            continue
+        path = Path(entry).expanduser()
+        if not path.is_dir():
+            msg = f'context_dirs: {entry!r} is not an existing directory'
+            raise ValueError(msg)
+        absolute = str(path.resolve())
+        if absolute not in resolved:
+            resolved.append(absolute)
+    return resolved
+
+
 def _mint_run_name(question: str) -> str:
     """A run name that is unique by construction, not by luck (MANT-B62).
 
@@ -534,6 +564,25 @@ def _claim_run_root(dirs: RunDirs, question: str) -> None:
                 raise RunNameCollisionError(msg) from None
 
 
+def _holds_a_real_record(dirs: RunDirs) -> bool:
+    """True when the run directory holds a record that a real run wrote.
+
+    A dry run never writes over one (MANT-01): a dry run over a finished run
+    used to rewrite its record as ``validated``, which turned a finished run
+    into one a resume would run again, and over a run still in flight it would
+    replace the live record. An unreadable record counts as real, because it is
+    not the dry run's to replace either.
+    """
+    path = dirs.root() / RUN_RECORD_NAME
+    if not path.exists():
+        return False
+    try:
+        record = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return True
+    return not (isinstance(record, dict) and record.get('dry_run') is True)
+
+
 def _write_run_record(dirs: RunDirs, record: dict[str, Any]) -> Path:
     """Write the run-level record atomically, carrying its history forward.
 
@@ -596,8 +645,13 @@ class _StageRecorder:
         dirs: RunDirs,
         base: Mapping[str, Any],
         forward: ProgressCallback | None,
+        *,
+        persist: bool = True,
     ) -> None:
         self._dirs = dirs
+        # False for a dry run over a real run's record: the stage map is still
+        # kept, for the manifest, but the record on disk is not this run's.
+        self._persist = persist
         # `base` carries no `history`: `_write_run_record` carries the record's
         # history forward on every write, so passing it again would duplicate it.
         self._base = dict(base)
@@ -610,7 +664,7 @@ class _StageRecorder:
     def __call__(self, event: RunEvent) -> None:
         try:
             with self._lock:
-                if not self._closed and self._apply(event):
+                if not self._closed and self._apply(event) and self._persist:
                     self._write()
         finally:
             emit(self._forward, event)
@@ -653,6 +707,8 @@ class _StageRecorder:
             entry.update(
                 state='done', exit_code=event.data.get('exit_code'), finished_at=_now_iso()
             )
+            if event.data.get('error'):
+                entry['error'] = event.data['error']
             return True
         entry = self._stages.get(self._current) if self._current is not None else None
         if entry is None or entry['state'] == 'done':
@@ -689,8 +745,9 @@ class _StageRecorder:
             log.debug('run record progress write skipped', error=str(exc))
 
 
-#: The timing fields a stage entry keeps in the terminal record.
-_STAGE_TIMINGS = ('started_at', 'seat_acquired_at', 'finished_at')
+#: The fields a stage entry keeps in the terminal record beside its exit code:
+#: its timings, and the reason it failed when it did.
+_STAGE_TIMINGS = ('started_at', 'seat_acquired_at', 'finished_at', 'error')
 
 #: How many recent seat turns the expected-start estimate takes its median over.
 SEAT_SAMPLE_RUNS = 20
@@ -1017,6 +1074,7 @@ def resume_research(
         dry_run=dry_run,
         log_level=log_level,
         on_event=on_event,
+        context_dirs=[str(d) for d in record.get('context_dirs') or []],
         _resume_history=history,
         _resume_engines=_resumed_engines(
             record, substrates or list(_DEFAULT_SUBSTRATES), RunDirs('batch', batch_name)
@@ -1049,6 +1107,29 @@ def _read_sidecar_outcome(dirs: RunDirs, stages: Sequence[str], *, dry_run: bool
     return {'status': state.sidecar_status.value, 'error': state.sidecar_error}
 
 
+def _stage_reason(dirs: RunDirs, stage: str) -> str | None:
+    """Why a stage exited non-zero, read off its topic record (MANT-03).
+
+    The run record used to say only the exit code, so a failed run had to be
+    diagnosed from directory timestamps. The orchestrator writes every failure,
+    block and give-up into the topic's ``last_error``; this reads it back as
+    ``<status>: <reason>``. ``None`` when no record or no reason can be read.
+    """
+    path = dirs.state(stage) / '1.json'
+    try:
+        record = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    reason = record.get('last_error')
+    if not reason:
+        return None
+    status = record.get('status')
+    text = f'{status}: {reason}' if status else str(reason)
+    return text[:_ERROR_CHARS]
+
+
 def _read_cost(dirs: RunDirs, stem: str) -> dict[str, Any]:
     """Best-effort per-run cost/token totals from the OpenRouter state (§12)."""
     state_path = dirs.state('openrouter') / '1.json'
@@ -1077,6 +1158,7 @@ def run_research(
     dry_run: bool = False,
     log_level: str = 'INFO',
     on_event: ProgressCallback | None = None,
+    context_dirs: Sequence[str] | None = None,
     _resume_history: list[dict[str, Any]] | None = None,
     _resume_engines: tuple[Mapping[str, str], Sequence[str]] | None = None,
 ) -> dict[str, Any]:
@@ -1100,6 +1182,10 @@ def run_research(
     ``_resume_engines`` is set only by :func:`resume_research`: the engines the
     run recorded, which the rebuilt config keeps, and the substrates whose engine
     is unknown and so recorded as ``None``.
+
+    ``context_dirs`` names directories every local-seat child may read (each is
+    passed as ``--add-dir``). A child starts in a neutral directory, so without
+    them it sees nothing of the caller's project (MANT-02).
     """
     # Lazy import: importing cli.dispatch runs cli/__init__, which imports
     # research_cmd -> cli.research -> back to this module. Deferring dispatch to
@@ -1116,6 +1202,7 @@ def run_research(
         msg = 'no substrates given'
         raise ValueError(msg)
     primary_ref = primary or f'openrouter:{subs[0]}'
+    readable = resolve_context_dirs(context_dirs)
     stages = _TIER_STAGES[assurance]
     pinned_engines, unknown_engines = _resume_engines or ({}, ())
     # Before anything is minted or dispatched: a tier that cannot deliver its
@@ -1134,6 +1221,7 @@ def run_research(
         batch_name=name,
         assurance=assurance,
         search_engines=pinned_engines,
+        context_dirs=readable,
     )
     cfg = load_batch_config(cfg_dict)
     slug = cfg.topics[0].slug
@@ -1149,6 +1237,9 @@ def run_research(
     dirs = RunDirs('batch', name)
     _claim_run_root(dirs, question)
     _journal_request(question, assurance, outcome='accepted', detail=name)
+    # A dry run over a run a real call started leaves its record alone; it
+    # still walks every stage and returns its manifest (MANT-01).
+    persist = not (dry_run and _holds_a_real_record(dirs))
     identity = {
         'question': question,
         'question_slug': slug,
@@ -1161,6 +1252,9 @@ def run_research(
         'layout': 'batch',
         'outputs_dir': str(dirs.root()),
         'dry_run': dry_run,
+        # What the local-seat children may read beyond the run's own
+        # directories; a resume passes them on again.
+        'context_dirs': readable,
     }
     started_at = _now_iso()
     dispatching = {
@@ -1172,10 +1266,11 @@ def run_research(
         'owner_pid': os.getpid(),
     }
     # The resume history goes in once; later writes carry it forward.
-    _write_run_record(dirs, {**dispatching, 'history': _resume_history or []})
+    if persist:
+        _write_run_record(dirs, {**dispatching, 'history': _resume_history or []})
     # From here every event goes through the recorder, which rewrites the
     # record at each transition before the caller hears of it (T1e).
-    recorder = _StageRecorder(dirs, dispatching, on_event)
+    recorder = _StageRecorder(dirs, dispatching, on_event, persist=persist)
     emit(
         recorder,
         RunEvent(
@@ -1188,6 +1283,7 @@ def run_research(
     )
 
     results: dict[str, int] = {}
+    errors: dict[str, str] = {}
     # Whatever ends this function other than a `return` — a stage that raises, a
     # manifest that cannot be built, an interrupt — must leave the record
     # terminal. Left at `dispatching`, a dead worker inside a live server reads
@@ -1208,14 +1304,23 @@ def run_research(
                 stage, cfg, dry_run=dry_run, log_level=log_level, on_event=recorder
             )
             results[stage] = rc
+            reason = _stage_reason(dirs, stage) if rc != 0 else None
+            if reason is not None:
+                errors[stage] = reason
             emit(
                 recorder,
                 RunEvent(
                     kind='stage_done',
-                    message=f'{stage} finished (exit {rc})',
+                    message=f'{stage} finished (exit {rc})'
+                    + (f': {reason}' if reason is not None else ''),
                     step=index,
                     total=len(stages),
-                    data={'stage': stage, 'exit_code': rc, 'batch_name': name},
+                    data={
+                        'stage': stage,
+                        'exit_code': rc,
+                        'batch_name': name,
+                        **({'error': reason} if reason is not None else {}),
+                    },
                 ),
             )
             # Research and synthesis are load-bearing — stop the pipeline if either
@@ -1232,6 +1337,7 @@ def run_research(
             results=results,
             dry_run=dry_run,
             search_engines=search_engines,
+            errors=errors,
         )
         # `complete` means the artifacts under `outputs` are on disk. A dry run
         # wrote none of them, so it says what it actually did: every path in the
@@ -1242,26 +1348,29 @@ def run_research(
         # the run started with: `started_at` orders the run listing, and a
         # resume asks the research stage for `substrates` again. The manifest
         # returned to the caller keeps its shape.
-        _write_run_record(
-            dirs,
-            {
-                **manifest,
-                'substrates': subs,
-                'started_at': started_at,
-                'stages': recorder.finished_stages(results),
-                'status': status,
-                'finished_at': _now_iso(),
-            },
-        )
+        if persist:
+            _write_run_record(
+                dirs,
+                {
+                    **manifest,
+                    'substrates': subs,
+                    'context_dirs': readable,
+                    'started_at': started_at,
+                    'stages': recorder.finished_stages(results),
+                    'status': status,
+                    'finished_at': _now_iso(),
+                },
+            )
     except BaseException as exc:
         recorder.close()
-        _write_failed_record(
-            dirs,
-            identity,
-            stages=recorder.finished_stages(results),
-            started_at=started_at,
-            error=exc,
-        )
+        if persist:
+            _write_failed_record(
+                dirs,
+                identity,
+                stages=recorder.finished_stages(results),
+                started_at=started_at,
+                error=exc,
+            )
         raise
 
     emit(

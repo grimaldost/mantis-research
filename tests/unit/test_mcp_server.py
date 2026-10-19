@@ -63,6 +63,7 @@ async def test_research_tool_schema_documents_every_parameter() -> None:
         'resume',
         'name',
         'detach',
+        'context_dirs',
     }
     assert set(props) == expected
     for name in expected:

@@ -73,9 +73,14 @@ Per-stage flags:
 - `--parallel/-p <n>` — override `runner.max_parallel_topics` for this run.
 - `--dry-run` — no model calls, no preflight; exercises the whole
   orchestration path. The per-topic state a dry run writes is marked
-  `"dry_run": true` and is disregarded by every later run: a dry run cannot
-  leave a topic looking finished, so running the same command for real after
-  it re-executes the stage rather than skipping it.
+  `"dry_run": true`, and a real run that finds such a record starts that topic
+  from a fresh one: a dry run cannot leave a topic, or a substrate inside it,
+  looking finished, so running the same command for real after it re-executes
+  the stage rather than skipping it. A dry run walks every selected topic,
+  finished ones included, and never writes over a record a real run wrote:
+  over a finished or half-finished batch it leaves the state, `progress.json`
+  and (for `mantis research`) `run.json` as they were, and `--force` does not
+  clear anything under it.
 - `--only <id> --only <id>` — restrict to specific topic ids (repeat the flag
   per id).
 - `--force` — clear the stage's state for the selected topics and re-run them
@@ -131,8 +136,9 @@ status model and the cross-run rules are described in
 
 - **A dry run's `done` is not one of them.** Every record carries `dry_run`,
   which says which kind of run wrote it, and a record a dry run wrote is
-  disregarded whatever its status. `done` is skippable only because it means
-  the artifact is on disk, and a dry run short-circuits every adapter.
+  disregarded whatever its status, including the per-substrate entries inside
+  it. `done` is skippable only because it means the artifact is on disk, and a
+  dry run short-circuits every adapter.
 
 - Within a run, a failing topic retries up to `runner.max_retries_per_stage`
   times. A rate-limited attempt backs off `rate_limit_backoff_minutes`
@@ -238,8 +244,15 @@ a `current_stage`. Each entry carries `state` (`running`, `waiting` or `done`),
 plus `seat_acquired_at` once the stage has taken the local seat.
 These writes are best-effort, and the MCP status tool also lists the artifacts
 already on disk. When the run finishes it is rewritten with the final
-manifest and `status: "complete"` (or `"validated"` for a dry run); each
-`stages` entry keeps its `exit_code` and its timings, without `state`. A run that ends on an
+manifest and `status: "complete"` (or `"validated"` for a dry run, which
+writes no record at all where a real run's record already is); each
+`stages` entry keeps its `exit_code` and its timings, without `state`, and a
+stage that exited non-zero also keeps `error`: the status and reason its topic
+record gives (`failed: research contract unmet: ...`, `blocked_upstream: ...`).
+The research stage reports done only when every requested substrate has a
+brief on disk and a recorded cost, and fails as `research contract unmet`
+otherwise; a substrate recorded `done` whose brief is gone is bought again
+when its topic is re-entered. A run that ends on an
 exception is rewritten too, with `status: "failed"`, `ok: false`, the stages that
 finished and an `error` string, and the status tool reports it as finished with
 `ok` false. While a run waits for the seat, the status tool adds a `seat` block:

@@ -7,6 +7,44 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A real run after a same-name dry run runs every substrate.** In 0.7.1 a
+  `research(dry_run=true, name=X)` followed by `research(name=X)` returned a
+  run whose research stage exited 0 in under two seconds with no briefs and no
+  cost, and whose synthesis then failed. The topic record said a dry run wrote
+  it, but the per-substrate entries inside it said `done`, and the research
+  stage skips a `done` substrate. A real run that finds a dry run's record now
+  starts that topic from a fresh one.
+- **A dry run over a run a real call started changes none of its records.** A
+  dry-run `resume` of a finished run rewrote its `run.json` as `validated`, and
+  its stages found every topic settled and did nothing. A dry run now starts
+  each topic from a fresh record and walks every stage, and where a real run's
+  record is on disk (`run.json`, the stage state, `progress.json`) it writes
+  nothing over it; `--force` with `--dry-run` no longer clears state either.
+- **Local `claude` turns no longer start in the calling project.** The
+  synthesis, sidecar, falsification and other local-seat children inherited the
+  MCP server's working directory, so in a real run the synthesis child read the
+  calling project's CLAUDE.md, AGENTS.md, memory index and session anchor. Every
+  child now starts in `~/.mantis/child-cwd`, one fixed empty directory, so that
+  the journal and sidecar turns can still `--resume` the synthesis session. A
+  new opt-in `context_dirs` parameter on the `research` tool (and
+  `runner.context_dirs` in a batch config) names directories the children may
+  read, passed to each as `--add-dir`; the run record keeps them for a resume.
+  The data root is now always absolute, so a relative `MANTIS_HOME` still gives
+  the children paths that resolve.
+- **The research stage reports done only over the work it owes.** It exited 0
+  with no brief on disk and no cost, and the failure surfaced only downstream.
+  Before it reports done it now checks that every requested substrate has a
+  brief on disk and a recorded cost, and otherwise fails as `research contract
+  unmet`, naming the substrates. A substrate recorded `done` whose brief is gone
+  is bought again when its topic is re-entered, instead of being skipped.
+- **A failed stage says why in `run.json` and `research_status`.** A stage that
+  exits non-zero carries `error` in its `stages` entry: the status and reason
+  its topic record gives, such as `blocked_upstream: missing primary brief
+  (openrouter:openai)`. The record used to say only the exit code. What `ok`,
+  the exit codes and the incomplete-run refusal mean is unchanged.
+
 ## [0.7.1] - 2026-10-08
 
 ### Fixed

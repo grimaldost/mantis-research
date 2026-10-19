@@ -59,7 +59,9 @@ Arguments:
   The result is marked `"dry_run": true` and every path under `outputs` is where
   an artifact *would* go: none of them exist. A dry run leaves no state a later
   real run will mistake for finished work, so the same call for real afterwards
-  runs the whole pipeline.
+  runs the whole pipeline. A dry run under the name of a run a real call
+  started, or with `resume` on one, walks every stage as a dry run and leaves
+  that run's records as they were.
 - `resume` — re-enter a run that was interrupted, instead of starting a new one.
   Pass its output directory (the `outputs_dir` of the run you lost, e.g.
   `outputs/research-my-question-20260811T101500Z`). Stages that already finished
@@ -69,6 +71,12 @@ Arguments:
   a finished run, it is the **collect** call: it returns that run's result in
   the same call, whatever `detach` says. A failed run is re-run instead, and a
   run whose sidecar failed has its sidecar retried.
+- `context_dirs` — directories the local Claude turns (synthesis, sidecar,
+  falsification, evaluation) may read, as absolute paths: for example the
+  project the question is about. Those turns start in an empty directory of
+  their own (`~/.mantis/child-cwd`), so without this they see nothing of the
+  calling project, not its CLAUDE.md, AGENTS.md, memory or session anchor. Each
+  directory must exist; a resume keeps the run's own list.
 - `detach` — whether the call returns the run's identity at once instead of the
   result. Leave it unset and the tier decides: a `fast`, `standard` or `high`
   run detaches, because its local-seat turns outlast what a client will hold one
@@ -94,7 +102,10 @@ the sidecar's epistemic content merged in at the top level.
 - `cost` — `{ cost_usd, tokens_prompt, tokens_completion, available }`, summed
   across the OpenRouter substrates (`available: false` with zeroed totals if the
   cost state was unreadable).
-- `stages` — `{ <stage>: { exit_code } }` for each stage that ran.
+- `stages` — `{ <stage>: { exit_code } }` for each stage that ran. A stage that
+  exited non-zero also carries `error`, the reason its record gives, for example
+  `failed: research contract unmet: no cost recorded for openai` or
+  `blocked_upstream: missing primary brief (openrouter:openai)`.
 - `search_engines` — `{ <substrate>: engine }`: which web-search index each brief
   read. `native` is the provider's own search; `parallel`, `exa` and `perplexity`
   are OpenRouter engines; `null` means web search was off for that substrate or, on a resumed run that began before this field existed, that the engine of an already-finished substrate is unknown (`mantis research` always turns web search on, so there a `null` means unknown). The
@@ -235,7 +246,8 @@ its `state`.** `artifacts` lists the `briefs`, `synthesis` and `sidecar` files
 already on disk, read from the run directory rather than the record, so a record
 that lags still shows them. Once `state` is `finished`, each `stages` entry
 carries its `exit_code` with `started_at`, `finished_at` and, for a stage that
-took the seat, `seat_acquired_at`; `ok` says how the run went.
+took the seat, `seat_acquired_at`, plus `error` for a stage that exited non-zero;
+`ok` says how the run went.
 
 **Finding a run you lost track of.** `research_status` with no argument lists the
 runs under `data_root`, newest first, as `runs`: each entry is described as a

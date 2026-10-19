@@ -126,7 +126,7 @@ class JournalPassesStage:
             idle_timeout_s=ctx.child_idle_timeout_s,
             seat_owner=ctx.seat_owner('journal-passes', topic_id),
             on_event=ctx.on_event,
-            add_dirs=(dirs.output('synthesis'), dirs.output('journals')),
+            add_dirs=(dirs.output('synthesis'), dirs.output('journals'), *ctx.context_dirs),
             allowed_tools=('Read', 'Write'),
         )
 

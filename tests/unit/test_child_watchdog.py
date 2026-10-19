@@ -24,6 +24,7 @@ import os
 import signal
 import sys
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -42,8 +43,6 @@ from mantis_research.interface.adapters.claude_cli import (
 from mantis_research.interface.transcripts import TranscriptWriter
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from mantis_research.core.progress import RunEvent
 
 _MUTE_CHILD = 'import time; time.sleep(30)'
@@ -347,3 +346,18 @@ class TestTheSeatIsNotHeldByAChildThatWillNotDie:
         # clean exit, which is the one value that must never be invented here.
         result = await self._unreapable(tmp_path, monkeypatch)
         assert result.exit_code != 0
+
+
+class TestWorkingDirectory:
+    async def test_the_child_starts_in_the_directory_it_is_given(self, tmp_path: Path) -> None:
+        # MANT-02: the runner used to leave the working directory unset, so the
+        # child started wherever the caller did.
+        neutral = tmp_path / 'neutral'
+        neutral.mkdir()
+        result = await _run('import os; print(os.getcwd())', tmp_path, None, cwd=neutral)
+        assert result.exit_code == 0
+        assert _same_directory(result.output.strip(), neutral)
+
+
+def _same_directory(reported: str, expected: Path) -> bool:
+    return Path(reported).resolve() == expected.resolve()

@@ -119,7 +119,7 @@ class FalsificationStage:
             idle_timeout_s=ctx.child_idle_timeout_s,
             seat_owner=ctx.seat_owner('falsification', topic_id),
             on_event=ctx.on_event,
-            add_dirs=(dirs.output('synthesis'), dirs.output('falsification')),
+            add_dirs=(dirs.output('synthesis'), dirs.output('falsification'), *ctx.context_dirs),
             allowed_tools=('WebSearch', 'WebFetch', 'Read', 'Write'),
         )
 

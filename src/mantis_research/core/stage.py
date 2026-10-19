@@ -16,11 +16,10 @@ handling, progress reporting. None of that lives in stages or adapters.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from mantis_research.core.config import BatchConfig, TopicConfig
     from mantis_research.core.progress import ProgressCallback
     from mantis_research.core.retry import FailureKind
@@ -96,6 +95,11 @@ class RunContext:
         """Seconds a spawned child may stay silent before the watchdog kills it."""
         minutes = self.batch.runner.child_idle_timeout_minutes
         return None if minutes is None else float(minutes) * 60.0
+
+    @property
+    def context_dirs(self) -> tuple[Path, ...]:
+        """The directories the run declares for its local-seat children to read."""
+        return tuple(Path(d) for d in self.batch.runner.context_dirs)
 
     def seat_owner(self, stage_name: str, topic_id: str) -> str:
         """A queue-legible name for whoever is holding the local Claude seat.

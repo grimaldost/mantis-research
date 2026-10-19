@@ -83,6 +83,10 @@ class Orchestrator:
             generic_failure_backoff_minutes=config.runner.generic_failure_backoff_minutes,
             caller_idle_budget_seconds=config.runner.caller_idle_budget_seconds,
         )
+        # The topics whose on-disk record a real run wrote, which a dry run must
+        # not overwrite, and the records the dry run holds for them instead.
+        self._real_records: set[str] = set()
+        self._unpersisted: dict[str, TopicState] = {}
 
     # ── public entry point ──────────────────────────────────────
 
@@ -94,11 +98,18 @@ class Orchestrator:
     ) -> int:
         """Execute the batch. Returns 0 on full success, 1 if any failures."""
         topics = self._select_topics(only)
-        if force:
+        # A dry run works on records of its own and never on a real run's (see
+        # `_record_for_this_run`), so it has nothing to clear and nothing to
+        # reap: both would write over the records a real run left.
+        self._real_records = (
+            {t.id for t in topics if self._real_record_exists(t)} if self.dry_run else set()
+        )
+        if force and not self.dry_run:
             self._clear_state(topics)
 
         self.state_dir.mkdir(parents=True, exist_ok=True)
-        self._reap_abandoned(topics)
+        if not self.dry_run:
+            self._reap_abandoned(topics)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.transcript_dir.mkdir(parents=True, exist_ok=True)
 
@@ -157,14 +168,10 @@ class Orchestrator:
         """One topic's full lifecycle. NEVER raises (catches all exceptions)."""
         bound = log.bind(stage=self.stage.name, topic_id=topic.id, slug=topic.slug)
         try:
-            state = self.state_class.load_or_create(self.state_dir, topic.id, topic.slug)
+            state = self._record_for_this_run(topic)
             if state.settled:
                 bound.debug('already DONE — skipping')
                 return
-            # This run now owns the record, so the record says which kind of run
-            # is writing it. A real run clears a marker it inherits from a dry
-            # run, which is how the dry run's DONE stops being load-bearing.
-            state.dry_run = True if self.dry_run else None
 
             if not self.stage.is_enabled(topic, self.config):
                 bound.info('stage disabled for this topic — skipping')
@@ -174,7 +181,7 @@ class Orchestrator:
             if not ready:
                 bound.warning('upstream not ready', reason=reason)
                 state.mark_blocked(reason or 'upstream not ready')
-                state.save(self.state_dir)
+                self._save(state)
                 return
 
             async with sem:
@@ -197,7 +204,7 @@ class Orchestrator:
                 bound.info('stop signal — exiting attempt loop')
                 return
             state.mark_in_flight(owner_pid=os.getpid())
-            state.save(self.state_dir)
+            self._save(state)
 
             try:
                 result = await self.stage.run_attempt(topic, state, ctx)
@@ -212,7 +219,7 @@ class Orchestrator:
 
             if result.success:
                 state.mark_done()
-                state.save(self.state_dir)
+                self._save(state)
                 bound.info('attempt succeeded', attempt=attempt, output_bytes=result.output_bytes)
                 return
 
@@ -232,7 +239,7 @@ class Orchestrator:
                     state.mark_rate_limited(error_msg)
                 else:
                     state.mark_failed(error_msg)
-                state.save(self.state_dir)
+                self._save(state)
                 bound.warning('giving up after final attempt', attempts=attempt)
                 return
 
@@ -243,7 +250,7 @@ class Orchestrator:
                 state.reset_for_retry(error_msg)
             # The next attempt mints its own session (MANT-B59).
             state.clear_session()
-            state.save(self.state_dir)
+            self._save(state)
             await self._stop_aware_sleep(
                 self.retry_policy.backoff_seconds(kind),
                 stop,
@@ -303,7 +310,11 @@ class Orchestrator:
         self._write_progress_snapshot(topics)
 
     def _write_progress_snapshot(self, topics: Sequence[TopicConfig]) -> None:
-        states = [self.state_class.load_or_create(self.state_dir, t.id, t.slug) for t in topics]
+        if self._real_records:
+            # The snapshot sits beside a real run's records and describes them;
+            # a dry run walking over them has no business rewriting it.
+            return
+        states = [self._current(t) for t in topics]
         payload = progress_payload(
             batch_name=self.config.batch_name,
             updated_at_iso=datetime.now(UTC).isoformat(),
@@ -359,11 +370,69 @@ class Orchestrator:
                 log.info('cleared state', topic_id=t.id)
 
     def _is_pending(self, topic: TopicConfig) -> bool:
+        # A dry run walks every topic: it starts each from a fresh record, so
+        # nothing is settled for it, and skipping a finished topic would make
+        # the dry run of a finished run validate nothing at all.
+        if self.dry_run:
+            return True
         state = self.state_class.load_or_create(self.state_dir, topic.id, topic.slug)
         return not state.settled
 
+    # ── whose record this run works on ──
+
+    def _record_for_this_run(self, topic: TopicConfig) -> TopicState:
+        """The record this run works on for ``topic``.
+
+        A dry run's record is only evidence that the orchestration is wired up,
+        and a stage keeps its own bookkeeping inside the record: the research
+        stage marks each substrate ``done`` and skips a ``done`` substrate. So
+        neither kind of run builds on the other's record.
+
+        - A real run that finds a dry run's record starts from a fresh one.
+          Clearing the topic's marker alone was not enough: the substrates
+          inside still said ``done``, and the real run skipped every one of
+          them (MANT-01).
+        - A dry run always starts from a fresh record. Where a real run left
+          one, the dry run's record is held in memory and never written
+          (:meth:`_save`), so a dry run over a finished or half-finished run
+          leaves its records exactly as they were.
+        """
+        if self.dry_run:
+            state = self.state_class(id=topic.id, slug=topic.slug, dry_run=True)
+            if topic.id in self._real_records:
+                self._unpersisted[topic.id] = state
+            return state
+        state = self.state_class.load_or_create(self.state_dir, topic.id, topic.slug)
+        if state.dry_run:
+            return self.state_class(id=topic.id, slug=topic.slug)
+        return state
+
+    def _real_record_exists(self, topic: TopicConfig) -> bool:
+        """True when a real run wrote the record on disk for ``topic``."""
+        if not (self.state_dir / f'{topic.id}.json').exists():
+            return False
+        try:
+            state = self.state_class.load_or_create(self.state_dir, topic.id, topic.slug)
+        except ValueError:
+            # Unreadable, and still not this dry run's to overwrite.
+            return True
+        return not state.dry_run
+
+    def _save(self, state: TopicState) -> None:
+        """Persist ``state``, unless it is a dry run's view of a real run's record."""
+        if self._unpersisted.get(state.id) is state:
+            return
+        state.save(self.state_dir)
+
+    def _current(self, topic: TopicConfig) -> TopicState:
+        """This run's view of a topic's record: the one it holds, else the file."""
+        held = self._unpersisted.get(topic.id)
+        if held is not None:
+            return held
+        return self.state_class.load_or_create(self.state_dir, topic.id, topic.slug)
+
     def _final_summary(self, topics: Sequence[TopicConfig]) -> int:
-        states = [self.state_class.load_or_create(self.state_dir, t.id, t.slug) for t in topics]
+        states = [self._current(t) for t in topics]
         counts: dict[str, int] = {}
         for s in states:
             counts[s.status.value] = counts.get(s.status.value, 0) + 1

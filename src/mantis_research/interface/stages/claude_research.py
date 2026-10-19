@@ -90,7 +90,7 @@ class ClaudeResearchStage:
             # an explicit pin (e.g. 'claude-opus-4-8') passes through unchanged.
             model=resolve_claude_model(models.model),
             effort=models.effort or 'max',
-            add_dirs=(ctx.output_dir,),
+            add_dirs=(ctx.output_dir, *ctx.context_dirs),
             allowed_tools=('WebSearch', 'WebFetch', 'Write', 'Read'),
             append_system_prompt=save_instruction,
             session_id=state.session_id or str(uuid.uuid4()),

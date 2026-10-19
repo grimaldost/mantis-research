@@ -7,6 +7,22 @@
         "title": "Assurance",
         "type": "string"
       },
+      "context_dirs": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "description": "Directories the local Claude turns (synthesis, sidecar, falsification, evaluation) may read, as absolute paths, e.g. the project the question is about. Those turns start in an empty directory of their own, so without this they see nothing of the caller's project: no CLAUDE.md, AGENTS.md, memory or anchor. Each directory must exist. Opt-in, and kept for a resume.",
+        "title": "Context Dirs"
+      },
       "detach": {
         "anyOf": [
           {
