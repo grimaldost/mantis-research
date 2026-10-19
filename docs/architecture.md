@@ -130,11 +130,18 @@ golden-file tests, so old state files keep loading across releases.
 **dry run** wrote does not qualify: a dry run short-circuits every adapter and
 produces nothing. Every record therefore carries `dry_run`, and `TopicState.
 settled` — the query the orchestrator skips on — disregards a `done` a dry run
-wrote. A real run clears the marker it inherits, so the tree self-corrects on
-the next live invocation. The field failure this closes: a dry run left
-`status: "done"` behind, the real run under the same batch name skipped every
-topic, and the manifest reported `exit_code: 0` with brief paths that did not
-exist.
+wrote. A real run that finds a dry run's record starts the topic from a fresh
+one, because a stage keeps its own bookkeeping inside the record (the research
+stage's per-substrate `done`) and clearing the marker alone left that behind.
+The field failures this closes: a dry run left `status: "done"` behind and the
+real run under the same batch name skipped every topic (2026-08-11); then, with
+that fixed, the real run re-entered the topic and skipped every substrate in it
+(MANT-01, 2026-10-11).
+
+The reverse holds too: a dry run starts every topic from a fresh record and
+walks it, and where a real run's record is on disk it keeps its own in memory
+and writes nothing, so a dry run over a finished run neither skips its stages
+nor rewrites its state or its `run.json`.
 
 ## Run layouts
 

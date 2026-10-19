@@ -199,17 +199,29 @@ class TestResume:
         assert seen == ['openrouter', 'synthesis']
         assert len(manifest['outputs']['briefs']) == 2  # both substrates recovered
 
-    def test_resume_appends_a_terminal_record_for_the_abandoned_owner(self, rooted: Path) -> None:
+    def test_resume_appends_a_terminal_record_for_the_abandoned_owner(
+        self, rooted: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # The abandoned attempt gets a record appended, rather than the run
         # being left at its last live state as though work were still under way.
+        monkeypatch.setattr(
+            'mantis_research.interface.cli.dispatch.dispatch_stage_config', lambda *_a, **_k: 0
+        )
         run_dir = _abandoned_run(rooted, owner_pid=_exited_pid())
-        resume_research(run_dir, dry_run=True, log_level='CRITICAL')
+        resume_research(run_dir, log_level='CRITICAL')
         record = json.loads((run_dir / 'run.json').read_text(encoding='utf-8'))
-        # `validated` rather than `complete`: this resume is a dry run, so it
-        # settled the record without writing any of the artifacts it names.
-        assert record['status'] == 'validated'
+        assert record['status'] == 'complete'
         assert [h['status'] for h in record['history']] == ['dead']
         assert 'was gone at resume' in record['history'][0]['note']
+
+    def test_a_dry_run_resume_leaves_the_abandoned_record_alone(self, rooted: Path) -> None:
+        # The record is a real run's, so a dry run walks the stages and writes
+        # nothing over it (MANT-01); the real resume is what records the death.
+        run_dir = _abandoned_run(rooted, owner_pid=_exited_pid())
+        before = (run_dir / 'run.json').read_bytes()
+        manifest = resume_research(run_dir, dry_run=True, log_level='CRITICAL')
+        assert manifest['dry_run'] is True
+        assert (run_dir / 'run.json').read_bytes() == before
 
     def test_a_run_with_a_live_owner_is_refused(self, rooted: Path) -> None:
         # Two owners over one state tree is worse than a lost run.

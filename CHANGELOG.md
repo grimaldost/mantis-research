@@ -7,6 +7,22 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A real run after a same-name dry run runs every substrate.** In 0.7.1 a
+  `research(dry_run=true, name=X)` followed by `research(name=X)` returned a
+  run whose research stage exited 0 in under two seconds with no briefs and no
+  cost, and whose synthesis then failed. The topic record said a dry run wrote
+  it, but the per-substrate entries inside it said `done`, and the research
+  stage skips a `done` substrate. A real run that finds a dry run's record now
+  starts that topic from a fresh one.
+- **A dry run over a run a real call started changes none of its records.** A
+  dry-run `resume` of a finished run rewrote its `run.json` as `validated`, and
+  its stages found every topic settled and did nothing. A dry run now starts
+  each topic from a fresh record and walks every stage, and where a real run's
+  record is on disk (`run.json`, the stage state, `progress.json`) it writes
+  nothing over it; `--force` with `--dry-run` no longer clears state either.
+
 ## [0.7.1] - 2026-10-08
 
 ### Fixed

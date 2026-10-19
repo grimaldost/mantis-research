@@ -534,6 +534,25 @@ def _claim_run_root(dirs: RunDirs, question: str) -> None:
                 raise RunNameCollisionError(msg) from None
 
 
+def _holds_a_real_record(dirs: RunDirs) -> bool:
+    """True when the run directory holds a record that a real run wrote.
+
+    A dry run never writes over one (MANT-01): a dry run over a finished run
+    used to rewrite its record as ``validated``, which turned a finished run
+    into one a resume would run again, and over a run still in flight it would
+    replace the live record. An unreadable record counts as real, because it is
+    not the dry run's to replace either.
+    """
+    path = dirs.root() / RUN_RECORD_NAME
+    if not path.exists():
+        return False
+    try:
+        record = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return True
+    return not (isinstance(record, dict) and record.get('dry_run') is True)
+
+
 def _write_run_record(dirs: RunDirs, record: dict[str, Any]) -> Path:
     """Write the run-level record atomically, carrying its history forward.
 
@@ -596,8 +615,13 @@ class _StageRecorder:
         dirs: RunDirs,
         base: Mapping[str, Any],
         forward: ProgressCallback | None,
+        *,
+        persist: bool = True,
     ) -> None:
         self._dirs = dirs
+        # False for a dry run over a real run's record: the stage map is still
+        # kept, for the manifest, but the record on disk is not this run's.
+        self._persist = persist
         # `base` carries no `history`: `_write_run_record` carries the record's
         # history forward on every write, so passing it again would duplicate it.
         self._base = dict(base)
@@ -610,7 +634,7 @@ class _StageRecorder:
     def __call__(self, event: RunEvent) -> None:
         try:
             with self._lock:
-                if not self._closed and self._apply(event):
+                if not self._closed and self._apply(event) and self._persist:
                     self._write()
         finally:
             emit(self._forward, event)
@@ -1149,6 +1173,9 @@ def run_research(
     dirs = RunDirs('batch', name)
     _claim_run_root(dirs, question)
     _journal_request(question, assurance, outcome='accepted', detail=name)
+    # A dry run over a run a real call started leaves its record alone; it
+    # still walks every stage and returns its manifest (MANT-01).
+    persist = not (dry_run and _holds_a_real_record(dirs))
     identity = {
         'question': question,
         'question_slug': slug,
@@ -1172,10 +1199,11 @@ def run_research(
         'owner_pid': os.getpid(),
     }
     # The resume history goes in once; later writes carry it forward.
-    _write_run_record(dirs, {**dispatching, 'history': _resume_history or []})
+    if persist:
+        _write_run_record(dirs, {**dispatching, 'history': _resume_history or []})
     # From here every event goes through the recorder, which rewrites the
     # record at each transition before the caller hears of it (T1e).
-    recorder = _StageRecorder(dirs, dispatching, on_event)
+    recorder = _StageRecorder(dirs, dispatching, on_event, persist=persist)
     emit(
         recorder,
         RunEvent(
@@ -1242,26 +1270,28 @@ def run_research(
         # the run started with: `started_at` orders the run listing, and a
         # resume asks the research stage for `substrates` again. The manifest
         # returned to the caller keeps its shape.
-        _write_run_record(
-            dirs,
-            {
-                **manifest,
-                'substrates': subs,
-                'started_at': started_at,
-                'stages': recorder.finished_stages(results),
-                'status': status,
-                'finished_at': _now_iso(),
-            },
-        )
+        if persist:
+            _write_run_record(
+                dirs,
+                {
+                    **manifest,
+                    'substrates': subs,
+                    'started_at': started_at,
+                    'stages': recorder.finished_stages(results),
+                    'status': status,
+                    'finished_at': _now_iso(),
+                },
+            )
     except BaseException as exc:
         recorder.close()
-        _write_failed_record(
-            dirs,
-            identity,
-            stages=recorder.finished_stages(results),
-            started_at=started_at,
-            error=exc,
-        )
+        if persist:
+            _write_failed_record(
+                dirs,
+                identity,
+                stages=recorder.finished_stages(results),
+                started_at=started_at,
+                error=exc,
+            )
         raise
 
     emit(

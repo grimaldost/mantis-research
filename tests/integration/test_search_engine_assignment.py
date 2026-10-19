@@ -186,6 +186,14 @@ class TestRecordedEngines:
         assert collected['search_engines'] == pinned
 
 
+def _no_stages(monkeypatch: pytest.MonkeyPatch, *, exit_code: int = 0) -> None:
+    """Stub every stage to exit ``exit_code`` without doing anything."""
+    monkeypatch.setattr(
+        'mantis_research.interface.cli.dispatch.dispatch_stage_config',
+        lambda *_a, **_k: exit_code,
+    )
+
+
 class TestResumeKeepsEngines:
     """A resume rebuilds the config; the record must still say what was used."""
 
@@ -232,11 +240,14 @@ class TestResumeKeepsEngines:
         assert _payload_engines(rooted, 'b') == recorded
 
     def test_a_record_before_the_field_marks_finished_substrates_unknown(
-        self, rooted: Path
+        self, rooted: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # A real resume, with the stages stubbed: a dry run writes nothing over
+        # a real run's record (MANT-01), so only a real one shows what is kept.
+        _no_stages(monkeypatch)
         run_dir = self._interrupted(rooted)
         self._research_state(rooted, {'openai': 'done', 'deepseek': 'failed'})
-        manifest = resume_research(run_dir, dry_run=True, log_level='CRITICAL')
+        manifest = resume_research(run_dir, log_level='CRITICAL')
         # openai finished under an engine nobody wrote down; deepseek re-runs
         # under today's assignment, and the record says so.
         assert manifest['search_engines'] == {'openai': None, 'deepseek': 'parallel'}
@@ -249,14 +260,21 @@ class TestResumeKeepsEngines:
         manifest = resume_research(run_dir, dry_run=True, log_level='CRITICAL')
         assert manifest['search_engines'] == {'openai': 'native', 'deepseek': 'parallel'}
 
-    def test_unknown_stays_unknown_across_a_second_resume(self, rooted: Path) -> None:
+    def test_unknown_stays_unknown_across_a_second_resume(
+        self, rooted: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _no_stages(monkeypatch)
         run_dir = self._interrupted(rooted)
         self._research_state(rooted, {'openai': 'done', 'deepseek': 'failed'})
-        resume_research(run_dir, dry_run=True, log_level='CRITICAL')
+        # The first resume ends with a stage that exited non-zero, so the
+        # second is a resume rather than a collect.
+        _no_stages(monkeypatch, exit_code=1)
+        resume_research(run_dir, log_level='CRITICAL')
         # The first resume wrote openai's engine as null; with openai still
         # recorded done the second must not invent one.
+        _no_stages(monkeypatch)
         self._research_state(rooted, {'openai': 'done', 'deepseek': 'done'})
-        manifest = resume_research(run_dir, dry_run=True, log_level='CRITICAL')
+        manifest = resume_research(run_dir, log_level='CRITICAL')
         assert manifest['search_engines'] == {'openai': None, 'deepseek': 'parallel'}
 
 
