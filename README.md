@@ -276,7 +276,7 @@ uv run python -m pre_commit run --all-files
 `uvx mypy src` when you want the second opinion. Hosted CI runs the same
 battery on every push and pull request, on Ubuntu and Windows; the pre-commit
 hooks are the local first line — which means they have to actually be wired,
-once per clone, with `git config core.hooksPath scripts/git-hooks`.
+once per clone, with `railform arm` (see CONTRIBUTING.md for the command).
 `pre-commit install` is the wrong install here; see
 [CONTRIBUTING.md](CONTRIBUTING.md) for why.)
 
