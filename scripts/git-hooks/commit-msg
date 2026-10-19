@@ -1,10 +1,5 @@
 #!/bin/sh
-# Commit-message gate, wired through the same core.hooksPath install as the
-# pre-commit gate (see scripts/git-hooks/pre-commit for why this goes through
-# `uv run python -m pre_commit` rather than `pre-commit install`).
-#
-# Holds the message to Conventional Commits and rejects AI-attribution
-# trailers. Install (one-off, per clone):
-#     git config core.hooksPath scripts/git-hooks
-set -e
-exec uv run python -m pre_commit run --config .pre-commit-config.yaml --hook-stage commit-msg --commit-msg-filename "$1"
+# Written by railform adopt: the git hooks of this repository moved, and this stub stays for one
+# release so that a clone still armed to this directory fails until it is armed again.
+printf '%s\n' 'railform: the git hooks of this repository moved to .githooks; arm this clone with `railform arm` (or: git config core.hooksPath .githooks)' >&2
+exit 1

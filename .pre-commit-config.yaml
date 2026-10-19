@@ -1,35 +1,64 @@
-# Pre-commit hooks. Local `language: system` hooks drive the project's own
-# uv-pinned tools, so no hook downloads a second copy of ruff and the versions
-# always match the project's. Run all hooks with:
+# Pre-commit hooks. The region between the `railform` markers belongs to
+# `railform adopt` (the commit-message, branch-name, hook-wrapper and private-reference checks and
+# the hygiene hooks, all at the pinned railform commit); `railform adopt --check` fails on any
+# edit of it. Below it, local `language: system` hooks drive the project's own uv-pinned tools,
+# so no hook downloads a second copy of ruff and the versions always match the project's.
+# Run all hooks with:
 #     uv run python -m pre_commit run --all-files
 #
-# (On this machine, bare `.exe` shims are blocked by Application Control — invoke
-# pre-commit via `uv run python -m pre_commit`, not the `pre-commit` shim. That is
-# also why the git hooks are NOT installed with `pre-commit install`: the checked-in
-# `scripts/git-hooks/pre-commit` and `scripts/git-hooks/commit-msg` are wired with
-#     git config core.hooksPath scripts/git-hooks
-# and call this config through `uv run python -m pre_commit`.)
+# (On this machine, bare `.exe` shims are blocked by Application Control, so the git hooks are
+# not installed with `pre-commit install`: the wrappers tracked in `.githooks/` call this config
+# through `uv run --frozen python -m pre_commit`, and each clone is armed once with
+# `railform arm`, which sets `core.hooksPath` to `.githooks`.)
 #
-# Two lanes: the pre-commit stage gates the tree (format, lint, purity, the
-# hermetic suite), the commit-msg stage gates the message (Conventional
-# Commits, no AI-attribution trailers). Stages are explicit on every hook so
+# Two lanes: the pre-commit stage gates the tree (hygiene, format, lint, purity), the
+# commit-msg stage gates the message (Conventional Commits, no AI-attribution trailers). The
+# test suite runs in CI, not at commit time. Stages are explicit on every repository hook so
 # neither lane runs the other's work.
 repos:
+  # >>> railform: owned by `railform adopt`; `railform adopt --check` fails on any edit
+  - repo: https://github.com/grimaldost/railform
+    rev: 65bf54ae6f4ed7bd027fee9e0806d9dfa2df3c48
+    hooks:
+      - id: railform-commit-msg
+      - id: railform-branch-name
+      - id: railform-hooks-check
+        files: '^\.githooks/'
+      - id: railform-private-refs
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: cef0300fd0fc4d2a87a85fa2093c6b283ea36f4b  # frozen: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+        stages: [pre-commit]
+      - id: end-of-file-fixer
+        stages: [pre-commit]
+      - id: check-merge-conflict
+        args: [--assume-in-merge]
+        stages: [pre-commit]
+      - id: check-added-large-files
+        stages: [pre-commit]
+      - id: check-yaml
+        stages: [pre-commit]
+      - id: check-toml
+        stages: [pre-commit]
+      - id: check-json
+        stages: [pre-commit]
+  # <<< railform
   - repo: local
     hooks:
-      # Scoped to `src tests` to match the project's canonical gate command
-      # (CLAUDE.md); `notes/` and `scripts/` helpers are not linted (the latter
-      # is `ALL`-ignored in pyproject anyway).
+      # Over the whole tree, as CI runs them; `scripts/` is `ALL`-ignored for lint in
+      # pyproject.toml, so only its formatting is checked.
       - id: ruff-format
         name: ruff format (check)
-        entry: uv run ruff format --check src tests
+        entry: uv run ruff format --check .
         language: system
         pass_filenames: false
         stages: [pre-commit]
 
       - id: ruff-check
         name: ruff check
-        entry: uv run ruff check src tests
+        entry: uv run ruff check .
         language: system
         pass_filenames: false
         stages: [pre-commit]
@@ -41,39 +70,3 @@ repos:
         pass_filenames: false
         files: ^src/mantis_research/core/.*\.py$
         stages: [pre-commit]
-
-      # The suite is hermetic by construction (autouse fixtures refuse the two
-      # spend seams) and runs in ~17 s, so it is cheap enough for the commit
-      # lane — a commit that breaks tests should not exist, not merely not push.
-      - id: pytest
-        name: pytest (hermetic suite)
-        entry: uv run python -m pytest -q
-        language: system
-        pass_filenames: false
-        stages: [pre-commit]
-
-      - id: no-ai-attribution
-        name: reject AI-attribution lines in commit messages
-        entry: uv run python scripts/check_commit_message.py
-        language: system
-        stages: [commit-msg]
-
-  # Not a project tool, so a remote hook (cloned by pre-commit itself, no .exe
-  # shim involved) does not duplicate anything uv pins.
-  - repo: https://github.com/compilerla/conventional-pre-commit
-    rev: v3.6.0
-    hooks:
-      - id: conventional-pre-commit
-        stages: [commit-msg]
-        args:
-          - feat
-          - fix
-          - docs
-          - style
-          - refactor
-          - perf
-          - test
-          - chore
-          - build
-          - ci
-          - release
