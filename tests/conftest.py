@@ -82,6 +82,22 @@ def _no_live_provider(request: pytest.FixtureRequest, monkeypatch: pytest.Monkey
         monkeypatch.setattr(seam, refuse_spawn)
 
 
+@pytest.fixture(autouse=True)
+def _child_workdir_in_tmp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Start local-seat children in the test's own directory, not under ``~``.
+
+    The adapter creates ``~/.mantis/child-cwd`` before it spawns (MANT-02). A
+    suite that did that would write into the home directory of whoever runs it,
+    and fail where the home directory is read-only. Tests about the location
+    itself call ``paths.child_workdir`` with a home directory of their own.
+    """
+    workdir = tmp_path / 'child-cwd'
+    monkeypatch.setattr(
+        'mantis_research.interface.adapters.claude_cli.child_workdir', lambda: workdir
+    )
+    return workdir
+
+
 @pytest.fixture
 def allow_child_spawn() -> None:
     """Opt out of the spawn ring, for the tests that are about spawning.

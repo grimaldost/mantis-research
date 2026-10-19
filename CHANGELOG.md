@@ -22,6 +22,17 @@ releases (starting with 0.1.0).
   each topic from a fresh record and walks every stage, and where a real run's
   record is on disk (`run.json`, the stage state, `progress.json`) it writes
   nothing over it; `--force` with `--dry-run` no longer clears state either.
+- **Local `claude` turns no longer start in the calling project.** The
+  synthesis, sidecar, falsification and other local-seat children inherited the
+  MCP server's working directory, so in a real run the synthesis child read the
+  calling project's CLAUDE.md, AGENTS.md, memory index and session anchor. Every
+  child now starts in `~/.mantis/child-cwd`, one fixed empty directory, so that
+  the journal and sidecar turns can still `--resume` the synthesis session. A
+  new opt-in `context_dirs` parameter on the `research` tool (and
+  `runner.context_dirs` in a batch config) names directories the children may
+  read, passed to each as `--add-dir`; the run record keeps them for a resume.
+  The data root is now always absolute, so a relative `MANTIS_HOME` still gives
+  the children paths that resolve.
 
 ## [0.7.1] - 2026-10-08
 

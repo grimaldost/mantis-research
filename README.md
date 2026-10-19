@@ -125,7 +125,8 @@ uv run python -m mantis_research.interface.mcp
 ```
 
 The agent calls the `research` tool (`question`, `assurance`, optional
-`substrates` / `primary` / `journal` / `dry_run` / `name` / `resume` / `detach`)
+`substrates` / `primary` / `journal` / `dry_run` / `name` / `resume` / `detach` /
+`context_dirs`)
 and gets back the run manifest plus the sidecar's `claims` / `divergences` /
 `verification_queue` (bounded to the MCP result-size budget), with synthesis and
 briefs referenced by path. The
@@ -137,7 +138,10 @@ reports two outcomes, not one: `ok` is the stages, and a `sidecar`
 block (`{ status, error }`) is the epistemic contract's own result
 ([ADR-0011](docs/adr/0011-two-outcomes-per-synthesis-run.md)). Because the
 server runs locally, its synthesis stages inherit your authenticated `claude`
-seat (see Requirements). The result also names the run's `outputs_dir` and
+seat (see Requirements). They do not inherit the calling project: each local
+`claude` turn starts in `~/.mantis/child-cwd`, so the project's CLAUDE.md,
+AGENTS.md, memory and session anchor stay out of it, and `context_dirs` names
+any directory the turns should be able to read. The result also names the run's `outputs_dir` and
 `batch_name`, to poll or resume it by. A second tool, `research_status`, reports
 how a run is going from its `outputs_dir`; called with no argument it lists the
 runs under the data root, newest first (`state`, `age_s`, `question_slug`,

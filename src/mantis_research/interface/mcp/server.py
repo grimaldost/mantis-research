@@ -197,6 +197,7 @@ def _run_and_assemble(
     dry_run: bool,
     name: str = '',
     resume: str = '',
+    context_dirs: list[str] | None = None,
     on_event: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     """Run the pipeline and assemble the agent result (sync — runs off the loop)."""
@@ -212,6 +213,7 @@ def _run_and_assemble(
             dry_run=dry_run,
             batch_name=name,
             on_event=on_event,
+            context_dirs=context_dirs,
         )
     return _agent_result(manifest)
 
@@ -666,6 +668,7 @@ def _detach(
     dry_run: bool,
     name: str,
     resume: str,
+    context_dirs: list[str] | None = None,
 ) -> dict[str, Any]:
     """Start the run, hand back its identity, and let it work.
 
@@ -707,6 +710,7 @@ def _detach(
                 dry_run=dry_run,
                 name=name,
                 resume=resume,
+                context_dirs=context_dirs,
                 on_event=note,
             )
             if not identity:
@@ -845,6 +849,19 @@ async def research(
             )
         ),
     ] = '',
+    context_dirs: Annotated[
+        list[str] | None,
+        Field(
+            description=(
+                'Directories the local Claude turns (synthesis, sidecar, '
+                'falsification, evaluation) may read, as absolute paths, e.g. the '
+                'project the question is about. Those turns start in an empty '
+                'directory of their own, so without this they see nothing of the '
+                "caller's project: no CLAUDE.md, AGENTS.md, memory or anchor. Each "
+                'directory must exist. Opt-in, and kept for a resume.'
+            )
+        ),
+    ] = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Research a question across multiple models and return a cross-checked result.
@@ -884,6 +901,9 @@ async def research(
         the collect call, and returns the result. On a run this server is still
         running it returns that run's handle (``state`` ``running``) and a
         ``note``: poll ``research_status`` until it is finished, then resume.
+      - ``context_dirs`` names directories the local Claude turns may read.
+        Those turns start in an empty directory of their own, so nothing of the
+        caller's project reaches them unless it is named here.
       - ``detach`` returns the run's identity at once (``state``,
         ``outputs_dir``, ``batch_name``) instead of the result. Unset, it is
         chosen by tier: a run that uses the local Claude seat detaches, and a
@@ -923,6 +943,7 @@ async def research(
             dry_run=dry_run,
             name=name,
             resume=resume,
+            context_dirs=context_dirs,
         )
     return await _blocking_call(
         ctx,
@@ -934,6 +955,7 @@ async def research(
         dry_run=dry_run,
         name=name,
         resume=resume,
+        context_dirs=context_dirs,
     )
 
 

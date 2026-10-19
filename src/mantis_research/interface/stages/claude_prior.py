@@ -80,7 +80,7 @@ class ClaudePriorStage:
             idle_timeout_s=ctx.child_idle_timeout_s,
             seat_owner=ctx.seat_owner('claude-prior', topic_id),
             on_event=ctx.on_event,
-            add_dirs=(output_dir,),
+            add_dirs=(output_dir, *ctx.context_dirs),
             # No web search: the baseline is deliberately from general knowledge.
             allowed_tools=('Write',),
         )

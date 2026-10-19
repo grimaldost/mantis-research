@@ -71,6 +71,12 @@ Arguments:
   a finished run, it is the **collect** call: it returns that run's result in
   the same call, whatever `detach` says. A failed run is re-run instead, and a
   run whose sidecar failed has its sidecar retried.
+- `context_dirs` — directories the local Claude turns (synthesis, sidecar,
+  falsification, evaluation) may read, as absolute paths: for example the
+  project the question is about. Those turns start in an empty directory of
+  their own (`~/.mantis/child-cwd`), so without this they see nothing of the
+  calling project, not its CLAUDE.md, AGENTS.md, memory or session anchor. Each
+  directory must exist; a resume keeps the run's own list.
 - `detach` — whether the call returns the run's identity at once instead of the
   result. Leave it unset and the tier decides: a `fast`, `standard` or `high`
   run detaches, because its local-seat turns outlast what a client will hold one

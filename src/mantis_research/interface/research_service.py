@@ -252,18 +252,20 @@ def build_config(
     batch_name: str,
     assurance: str,
     search_engines: Mapping[str, str] | None = None,
+    context_dirs: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Build the in-memory single-topic batch config for one research request.
 
     ``search_engines`` pins the engine of the substrates it names (a resumed run
     keeps what it recorded); the rest take the current assignment.
+    ``context_dirs`` are the directories every local-seat child may read.
     """
     slug = _slugify(question)
     engines = {**assign_search_engines(substrates).engines, **(search_engines or {})}
     return {
         'schema_version': 2,
         'batch_name': batch_name,
-        'runner': {'layout': 'batch'},
+        'runner': {'layout': 'batch', 'context_dirs': list(context_dirs)},
         'models': {'claude': {}, 'primary': primary},
         'topics': [
             {
@@ -447,6 +449,27 @@ def produces_sidecar(stages: Sequence[str]) -> bool:
     refuses the one tier that works from inside a Claude Code session.
     """
     return 'synthesis' in stages
+
+
+def resolve_context_dirs(raw: Sequence[str] | None) -> list[str]:
+    """Validate the directories a caller declares for the local-seat children.
+
+    Each must be an existing directory; each is returned absolute, because a
+    child starts in a directory of its own (MANT-02) and the record keeps them
+    for a resume. Raises ``ValueError`` naming the first one that is not.
+    """
+    resolved: list[str] = []
+    for entry in raw or ():
+        if not str(entry).strip():
+            continue
+        path = Path(entry).expanduser()
+        if not path.is_dir():
+            msg = f'context_dirs: {entry!r} is not an existing directory'
+            raise ValueError(msg)
+        absolute = str(path.resolve())
+        if absolute not in resolved:
+            resolved.append(absolute)
+    return resolved
 
 
 def _mint_run_name(question: str) -> str:
@@ -1041,6 +1064,7 @@ def resume_research(
         dry_run=dry_run,
         log_level=log_level,
         on_event=on_event,
+        context_dirs=[str(d) for d in record.get('context_dirs') or []],
         _resume_history=history,
         _resume_engines=_resumed_engines(
             record, substrates or list(_DEFAULT_SUBSTRATES), RunDirs('batch', batch_name)
@@ -1101,6 +1125,7 @@ def run_research(
     dry_run: bool = False,
     log_level: str = 'INFO',
     on_event: ProgressCallback | None = None,
+    context_dirs: Sequence[str] | None = None,
     _resume_history: list[dict[str, Any]] | None = None,
     _resume_engines: tuple[Mapping[str, str], Sequence[str]] | None = None,
 ) -> dict[str, Any]:
@@ -1124,6 +1149,10 @@ def run_research(
     ``_resume_engines`` is set only by :func:`resume_research`: the engines the
     run recorded, which the rebuilt config keeps, and the substrates whose engine
     is unknown and so recorded as ``None``.
+
+    ``context_dirs`` names directories every local-seat child may read (each is
+    passed as ``--add-dir``). A child starts in a neutral directory, so without
+    them it sees nothing of the caller's project (MANT-02).
     """
     # Lazy import: importing cli.dispatch runs cli/__init__, which imports
     # research_cmd -> cli.research -> back to this module. Deferring dispatch to
@@ -1140,6 +1169,7 @@ def run_research(
         msg = 'no substrates given'
         raise ValueError(msg)
     primary_ref = primary or f'openrouter:{subs[0]}'
+    readable = resolve_context_dirs(context_dirs)
     stages = _TIER_STAGES[assurance]
     pinned_engines, unknown_engines = _resume_engines or ({}, ())
     # Before anything is minted or dispatched: a tier that cannot deliver its
@@ -1158,6 +1188,7 @@ def run_research(
         batch_name=name,
         assurance=assurance,
         search_engines=pinned_engines,
+        context_dirs=readable,
     )
     cfg = load_batch_config(cfg_dict)
     slug = cfg.topics[0].slug
@@ -1188,6 +1219,9 @@ def run_research(
         'layout': 'batch',
         'outputs_dir': str(dirs.root()),
         'dry_run': dry_run,
+        # What the local-seat children may read beyond the run's own
+        # directories; a resume passes them on again.
+        'context_dirs': readable,
     }
     started_at = _now_iso()
     dispatching = {
@@ -1276,6 +1310,7 @@ def run_research(
                 {
                     **manifest,
                     'substrates': subs,
+                    'context_dirs': readable,
                     'started_at': started_at,
                     'stages': recorder.finished_stages(results),
                     'status': status,

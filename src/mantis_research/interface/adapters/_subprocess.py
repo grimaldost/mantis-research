@@ -22,6 +22,7 @@ from mantis_research.core.progress import RunEvent, emit
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from pathlib import Path
 
     from mantis_research.core.cli_stream import OutputCadence
     from mantis_research.core.progress import ProgressCallback
@@ -81,6 +82,7 @@ async def run_streaming(
     idle_timeout_s: float | None = DEFAULT_CHILD_IDLE_TIMEOUT_S,
     on_event: ProgressCallback | None = None,
     label: str = 'child',
+    cwd: Path | None = None,
 ) -> StreamResult:
     """Run ``cmd``, stream stdout+stderr to transcript, return the outcome.
 
@@ -106,6 +108,10 @@ async def run_streaming(
     :data:`ANNOUNCE_EVERY_S`. A stage that reports nothing between its start and
     its end is indistinguishable from a hang for however long it runs, which is
     the whole reason the caller gives up.
+
+    ``cwd`` is where the child starts. ``None`` inherits this process's working
+    directory, which for a local-seat child is the caller's project: see
+    :func:`mantis_research.core.paths.child_workdir`.
     """
     cadence.validate_watchdog(idle_timeout_s)
     process = await asyncio.create_subprocess_exec(
@@ -118,6 +124,7 @@ async def run_streaming(
         # Declared, not inherited: see STREAM_LINE_LIMIT_BYTES. Without it the
         # reader below raises on the first line past 64 KiB.
         limit=STREAM_LINE_LIMIT_BYTES,
+        cwd=cwd,
     )
     if process.stdout is None:
         msg = 'subprocess stdout pipe missing — should never happen with PIPE config'

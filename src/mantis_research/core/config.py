@@ -222,6 +222,11 @@ class RunnerBlock(BaseModel):
     # directories every committed batch uses; 'batch' scopes state/outputs/
     # transcripts under <batch_name>/ so request-level runs never collide.
     layout: Literal['legacy', 'batch'] = 'legacy'
+    # Directories every local-seat child may read, passed to each as `--add-dir`
+    # (MANT-02). A child starts in a neutral directory, so nothing from the
+    # caller's project reaches it unless it is named here. Additive optional
+    # field (I4); empty on every config written before it.
+    context_dirs: list[str] = Field(default_factory=list)
 
 
 class DefaultPromptsBlock(BaseModel):

@@ -159,6 +159,7 @@ class EvaluationStage:
                 dirs.output('claude'),
                 dirs.output('claude-prior'),
                 eval_dir,
+                *ctx.context_dirs,
             ),
             allowed_tools=('Read', 'Write'),
         )

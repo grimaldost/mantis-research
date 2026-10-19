@@ -279,3 +279,29 @@ class TestLegacyPaths:
             'claude-prior',
         }
         assert expected == set(LEGACY_OUTPUT_DIRS.keys())
+
+
+class TestLocalSeatChildrenStartOutsideTheCaller:
+    """MANT-02: where a local-seat child starts, and the paths it is handed."""
+
+    def test_a_relative_mantis_home_still_gives_absolute_paths(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # A child starts in a directory of its own, so a relative path in its
+        # prompt or its --add-dir would point it somewhere else.
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(settings, 'MANTIS_HOME', 'mantis-data')
+        assert data_root().is_absolute()
+        assert data_root() == tmp_path / 'mantis-data'
+
+    def test_the_child_directory_follows_neither_the_caller_nor_the_data_root(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        home = tmp_path / 'home'
+        monkeypatch.setenv('HOME', str(home))
+        monkeypatch.setenv('USERPROFILE', str(home))
+        project = tmp_path / 'project'
+        project.mkdir()
+        monkeypatch.chdir(project)
+        monkeypatch.setattr(settings, 'MANTIS_HOME', str(project))
+        assert paths.child_workdir() == home / '.mantis' / 'child-cwd'

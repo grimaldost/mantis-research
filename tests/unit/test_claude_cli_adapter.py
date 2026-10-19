@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
@@ -11,9 +11,6 @@ from mantis_research.interface.adapters.claude_cli import (
     ClaudeCliAdapter,
     ClaudeCliOptions,
 )
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 class TestCmdAssembly:
@@ -238,3 +235,76 @@ class TestWhatTheStageIsGivenToClassify:
         adapter = ClaudeCliAdapter(binary='/fake/claude')
         opts = ClaudeCliOptions(model='m', session_id='s-1')
         return await adapter.run('p', opts, tmp_path / 'tx.log')
+
+
+class TestTheChildDoesNotInheritTheCallersProject:
+    """A local-seat child starts in a neutral directory (MANT-02).
+
+    The spawn named no working directory, so the child started wherever the MCP
+    server did: the calling project. In a real run the synthesis child received
+    that project's SessionStart control anchor, its AGENTS.md and its memory
+    index, none of which the question asked for. Claude Code reads CLAUDE.md
+    and AGENTS.md from the working directory and every directory above it, and
+    keys a session's memory and hooks on it, so where the child starts decides
+    what it is told before the prompt.
+    """
+
+    @staticmethod
+    def _project(tmp_path: Path) -> Path:
+        project = tmp_path / 'calling-project'
+        (project / '.claude' / 'anchors').mkdir(parents=True)
+        (project / 'CLAUDE.md').write_text('project instructions', encoding='utf-8')
+        (project / 'AGENTS.md').write_text('agent rules', encoding='utf-8')
+        (project / '.claude' / 'anchors' / 'control.md').write_text('anchor', encoding='utf-8')
+        return project
+
+    @staticmethod
+    async def _spawn_cwds(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, calls: int = 1
+    ) -> list[Path | None]:
+        from mantis_research.interface.adapters._subprocess import StreamResult
+
+        seen: list[Path | None] = []
+
+        async def record(_cmd, transcript, **kw):
+            cwd = kw.get('cwd')
+            seen.append(None if cwd is None else Path(cwd))
+            return StreamResult(exit_code=0, output='', timed_out=False)
+
+        monkeypatch.setattr('mantis_research.interface.adapters.claude_cli.run_streaming', record)
+        adapter = ClaudeCliAdapter(binary='/fake/claude')
+        for i in range(calls):
+            opts = ClaudeCliOptions(model='m', session_id=f's-{i}')
+            await adapter.run('p', opts, tmp_path / f'tx-{i}.log')
+        return seen
+
+    async def test_the_spawn_names_a_directory_outside_the_calling_project(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        project = self._project(tmp_path)
+        monkeypatch.chdir(project)
+        (cwd,) = await self._spawn_cwds(tmp_path, monkeypatch)
+        assert cwd is not None, 'the child inherits the caller working directory'
+        resolved = cwd.resolve()
+        assert resolved != project.resolve()
+        assert project.resolve() not in resolved.parents
+
+    async def test_no_project_instructions_are_visible_from_where_the_child_starts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(self._project(tmp_path))
+        (cwd,) = await self._spawn_cwds(tmp_path, monkeypatch)
+        assert cwd is not None
+        for directory in (cwd.resolve(), *cwd.resolve().parents):
+            for name in ('CLAUDE.md', 'AGENTS.md', 'CLAUDE.local.md'):
+                assert not (directory / name).exists(), f'{directory / name} reaches the child'
+
+    async def test_every_turn_starts_in_the_same_directory(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Claude Code finds a session to `--resume` by the working directory,
+        # so the journal and sidecar re-ask turns, which resume the synthesis
+        # session, must start where it started.
+        cwds = await self._spawn_cwds(tmp_path, monkeypatch, calls=2)
+        assert cwds[0] is not None
+        assert cwds[0] == cwds[1]

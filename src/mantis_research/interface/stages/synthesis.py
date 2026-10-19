@@ -362,6 +362,7 @@ class SynthesisStage:
                     dirs.output('openrouter'),
                     synthesis_dir,
                     journal_dir,
+                    *ctx.context_dirs,
                 ),
                 allowed_tools=('Read', 'Write'),
             )
@@ -425,6 +426,7 @@ class SynthesisStage:
                     effort=effort,
                     ts=ts,
                     state=state,
+                    context_dirs=ctx.context_dirs,
                 )
             except SidecarContractError as exc:
                 # The runner-authored zone is incomplete. Still loud, and still
@@ -471,7 +473,7 @@ class SynthesisStage:
             seat_owner=ctx.seat_owner('synthesis-journal', topic_id),
             on_event=ctx.on_event,
             allowed_tools=('Read', 'Write'),
-            add_dirs=(synthesis_dir, journal_dir),
+            add_dirs=(synthesis_dir, journal_dir, *ctx.context_dirs),
         )
         t2 = await self._adapter.run(
             prompt=journal_prompt,
@@ -512,6 +514,7 @@ class SynthesisStage:
         effort: str,
         ts: str,
         state: SynthesisState,
+        context_dirs: tuple[Path, ...] = (),
     ) -> str | None:
         """Emit + validate the epistemic sidecar with bounded re-asks (§14).
 
@@ -560,7 +563,7 @@ class SynthesisStage:
                 session_id=sidecar_session if first else None,
                 resume_session_id=None if first else sidecar_session,
                 name=f'sidecar-topic-{topic.id}',
-                add_dirs=(dirs.output('synthesis'), *brief_dirs),
+                add_dirs=(dirs.output('synthesis'), *brief_dirs, *context_dirs),
                 allowed_tools=('Read', 'Write'),
             )
             transcript = dirs.transcripts() / f'{stem}-{ts}-sidecar-{attempt + 1}.log'
