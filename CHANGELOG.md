@@ -50,6 +50,11 @@ releases (starting with 0.1.0).
   its topic record gives, such as `blocked_upstream: missing primary brief
   (openrouter:openai)`. The record used to say only the exit code. What `ok`,
   the exit codes and the incomplete-run refusal mean is unchanged.
+- **A run with the journal turn off no longer leaves an empty `journals/`
+  directory.** The synthesis stage created the journals directory and granted it
+  to the synthesis turn even when the journal turn was disabled, which is the
+  default for a request-level run. The directory is now created, and granted,
+  only when the journal turn runs; a batch config that leaves it on is unchanged.
 
 ## [0.7.1] - 2026-10-08
 

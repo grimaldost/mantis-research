@@ -538,7 +538,8 @@ the agent lacks, which is a measured harm, not a neutral no-op. ADR-0002 had
 already demoted journal ingestion to an optional sink. **Replaced by:** direct
 ingestion of the synthesis markdown and the sidecar by the downstream memory
 corpus, which owns the ingestion contract and the skill. Make the `mkdir`
-conditional in the same change so runs stop littering. **S** · *review*
+conditional in the same change so runs stop littering. The conditional `mkdir`
+landed in PR #51; the retirement itself remains open. **S** · *review*
 
 ### MANT-B41 — Retire the journal-passes stage and its augmentation template
 
