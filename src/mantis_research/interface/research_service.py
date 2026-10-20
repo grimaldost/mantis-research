@@ -72,9 +72,11 @@ LOCAL_SEAT_STAGES = frozenset(
 )
 
 
-#: Observed wall-clock of the research stage, in minutes (low, high): the
-#: substrates run concurrently, so it tracks the slowest. ``skills/research``
-#: states these figures and a doc-consistency test holds the prose to them.
+#: Observed wall-clock of the research stage, in minutes (low, high), for the
+#: default three substrates. A topic's substrates run one after another, so
+#: the figure is the measured sum of their durations and each added substrate
+#: adds its own. ``skills/research`` states these figures and a
+#: doc-consistency test holds the prose to them.
 RESEARCH_STAGE_MINUTES = (5, 10)
 
 #: Median length of one local-seat Claude turn, in minutes (observed range 131 s
