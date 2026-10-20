@@ -1,17 +1,5 @@
 #!/bin/sh
-# Pre-commit gate, in the form that runs on this machine.
-#
-# `pre-commit install` writes a hook that shells out to the bare `pre-commit`
-# executable shim; Application Control blocks bare `.exe` shims here, so that
-# hook silently never ran and `.git/hooks/` held nothing but the stock samples.
-# Going through `uv run python -m pre_commit` uses the project's own pinned
-# interpreter and dependencies and avoids the shim entirely.
-#
-# Install (one-off, per clone):
-#     git config core.hooksPath scripts/git-hooks
-#
-# Bypass for a single commit with `git commit --no-verify` — and then fix what
-# it would have caught before pushing; hosted CI runs the same battery behind
-# this and will red the push otherwise.
-set -e
-exec uv run python -m pre_commit run --config .pre-commit-config.yaml --hook-stage pre-commit
+# Written by railform adopt: the git hooks of this repository moved, and this stub stays for one
+# release so that a clone still armed to this directory fails until it is armed again.
+printf '%s\n' 'railform: the git hooks of this repository moved to .githooks; arm this clone with `railform arm` (or: git config core.hooksPath .githooks)' >&2
+exit 1

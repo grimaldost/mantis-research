@@ -7,6 +7,24 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+### Changed
+
+- **Repository mechanics come from railform, pinned at one commit.** CI is now a call to
+  railform's reusable workflow (`grimaldost/railform`, 0.1.0) plus one `gate` job, which is the
+  status the branch ruleset should require. The workflow runs the same pipeline as before (lock
+  check, sync, format, lint, `ty`, the suite, on Ubuntu and Windows, Python 3.13), now over the
+  whole tree for format and lint, and adds the private-reference and version-site checks, the
+  branch-name rail on pull requests and the hook-wrapper check, and keeps zizmor. The hand-copied
+  `scripts/changelog_currency.py` and `scripts/check_commit_message.py`, their tests and the
+  `conventional-pre-commit` hook are replaced by `railform changelog-gate` and `railform
+  commit-msg`/`commit-range`. The core-purity script stays as a pre-commit hook and as a kept
+  `core-purity` job in `ci.yml`, which `gate` needs.
+- **The git hooks moved to `.githooks/`** (mode `100755`, railform's wrappers). Arm each clone
+  once with `railform arm`; a clone still armed to `scripts/git-hooks` fails its commits there,
+  where stubs say so. The test suite no longer runs on every commit; CI runs it.
+- **Release tags are judged daily and on every tag push** by `railform-tag-watch.yml`, beside
+  the existing `tag-watch.yml`: annotated, on the release PR's merge commit, from `v0.7.2` on.
+
 ### Fixed
 
 - **The latency figure no longer says a topic's substrates run concurrently.**

@@ -11,8 +11,14 @@ mechanics of making a change land cleanly.
 git clone https://github.com/grimaldost/mantis-research
 cd mantis-research
 uv sync                                    # installs the dev dependency group
-git config core.hooksPath scripts/git-hooks # wire the local hooks
+uvx --from git+https://github.com/grimaldost/railform@<pin> railform arm   # wire the local hooks
 ```
+
+`<pin>` is the commit `ci.yml` names in its `railform` job (one pin, also in
+`.pre-commit-config.yaml`, `railform-tag-watch.yml` and `railform-sha`). Run `railform arm` once
+in each clone: it sets `core.hooksPath` to `.githooks`, and worktrees share the clone's setting.
+A clone still armed to the old `scripts/git-hooks` directory fails its commits with a message
+that says to run `railform arm`; the stubs are removed in a later cleanup.
 
 Python ≥ 3.13; [uv](https://docs.astral.sh/uv/) provisions it. Run Python
 through `uv run` so the pinned interpreter and dependencies apply.
@@ -21,23 +27,30 @@ through `uv run` so the pinned interpreter and dependencies apply.
 `pre-commit install` writes calls the bare `pre-commit` executable shim, and
 bare `.exe` shims are blocked by Application Control on the machine this
 project is developed on — so that hook is written, never runs, and the gate
-quietly becomes advisory. `scripts/git-hooks/pre-commit` is the same gate
-invoked as `uv run python -m pre_commit`, which uses the project's own pinned
-interpreter and needs no shim. It is a checked-in file, so a fresh clone gets
-it with one `git config` rather than a remembered convention.
+quietly becomes advisory. The wrappers tracked in `.githooks/` are railform's
+(mode `100755`, text fixed by a template, checked by `railform hooks-check`): each runs the
+same gate as `uv run --frozen python -m pre_commit`, which uses the project's own pinned
+interpreter and needs no shim. They are checked-in files, so a fresh clone gets
+them with one `railform arm` rather than a remembered convention.
 
 ## Gates
 
-Hosted CI (`.github/workflows/ci.yml`) runs the gate battery on every push to
-main and every pull request, on Ubuntu and Windows. The pre-commit hooks are
-the local first line — formatting, lint, the core-purity gate and the test
-suite run on every commit, and the commit-msg hook holds the message to
-Conventional Commits and rejects AI-attribution lines. Keep these commands
+Hosted CI (`.github/workflows/ci.yml`) calls railform's reusable workflow, pinned to one
+commit, on every push to main and every pull request, on Ubuntu and Windows: the type's pipeline
+(lock check, sync, format check, lint, `ty`, the test suite), the private-reference and
+version-site checks, the commit lane (Conventional Commits, no AI-attribution lines, a branch
+name of the form `category/slug`), the changelog gate, the hook-wrapper and `railform adopt
+--check` checks, and zizmor. A kept `core-purity` job runs `scripts/check_core_purity.py`
+(invariant I1). Its `gate` job, which needs the railform job and `core-purity`, is the one
+status the branch ruleset requires.
+The pre-commit hooks are the local first line — hygiene, formatting, lint and the core-purity
+gate run on every commit, and the commit-msg hook holds the message to Conventional Commits and
+rejects AI-attribution lines. The test suite runs in CI, not at commit time. Keep these commands
 green locally before pushing:
 
 ```bash
-uv run ruff format --check src tests        # formatting
-uv run ruff check src tests                 # lint
+uv run ruff format --check .                # formatting
+uv run ruff check .                         # lint
 uv run ty check src                         # types (primary checker)
 uv run python -m pytest -q                  # tests
 uv run python scripts/check_core_purity.py  # invariant I1 gate
@@ -107,9 +120,10 @@ artifact trees stay readable. Details and enforcement:
   Definition-of-Ready checklist in [docs/method/](docs/method/README.md).
 - Every user-visible change appends to `CHANGELOG.md` under **Unreleased**
   (Keep a Changelog format), in the same change that lands it. CI enforces
-  this on pull requests (`scripts/changelog_currency.py`): a diff touching
-  `src/`, `scripts/` or `skills/` with no `CHANGELOG.md` edit fails, unless a commit in
-  the range declares `Changelog: none (<reason>)`.
+  this on pull requests (`railform changelog-gate`, the `changelog` job): a commit touching
+  `src/`, `scripts/` or `skills/` fails unless the range edits `CHANGELOG.md` or that commit
+  itself declares `Changelog: none (<reason>)`. The paths watched are the `changelog.records`
+  rows of `railform.toml`.
 
 ## Releases
 
@@ -135,5 +149,9 @@ a whole feature; this rule is what that taught).
    `git tag -a vX.Y.Z <release-merge-commit> -m 'mantis-research X.Y.Z'` —
    and push the tag. Annotated, so the tag carries its own tagger date; the
    merge commit, never main's later tip, so the tag names exactly what the
-   release PR reviewed. The documented install paths (`uv tool install
-   git+…`, the plugin marketplace) pick releases up from GitHub.
+   release PR reviewed. The release PR's branch is `release/X.Y.Z`, which is
+   what `railform release-check` (the `railform-tag-watch` workflow, on every
+   tag push and daily) uses to find the PR a tag belongs to; it judges only
+   tags from `v0.7.2` on (`release.since` in `railform.toml`). The documented
+   install paths (`uv tool install git+…`, the plugin marketplace) pick
+   releases up from GitHub.

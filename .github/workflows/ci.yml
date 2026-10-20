@@ -3,60 +3,15 @@ on:
   push:
     branches: [main]
   pull_request:
-# Both jobs only check out the repo and run local commands, so the workflow
-# token needs nothing beyond reading contents.
+    types: [opened, synchronize, reopened, edited]
+# The gate battery is railform's reusable workflow, pinned below; the `gate` job is the one
+# status the branch ruleset requires. The workflow token needs nothing beyond reading contents.
 permissions:
   contents: read
 jobs:
-  check:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-      # The committed uv.lock (which also records the root package's version)
-      # must be current; a stale lock reds CI. This must run before any
-      # `uv sync`/`uv run`, which would quietly re-lock first.
-      - run: uv lock --check
-      - run: uv sync
-      - run: uv run ruff format --check src tests
-      - run: uv run ruff check src tests
-      - run: uv run ty check src
-      - run: uv run python -m pytest -q
-      - run: uv run python scripts/check_core_purity.py
-
-  changelog-currency:
-    # CONTRIBUTING's changelog rule, machine-enforced: a diff that ships source
-    # while CHANGELOG.md stays untouched — and no commit declares
-    # `Changelog: none (<reason>)` — is an unrecorded change. PR-only: the base
-    # ref is what makes the diff meaningful.
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0 # the merge-base with the target branch has to exist locally
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-      - run: |
-          git log --format=%B "origin/${GITHUB_BASE_REF}..HEAD" > "${RUNNER_TEMP}/commit-messages.txt"
-          git diff --name-only "origin/${GITHUB_BASE_REF}...HEAD" \
-            | uv run --no-project python scripts/changelog_currency.py --messages "${RUNNER_TEMP}/commit-messages.txt"
-      # Version arm: a PR that cuts a new release heading must move the newest version strictly
-      # forward; the version-site equality tests in the `check` job hold every site to that
-      # same heading.
-      - run: |
-          git show "origin/${GITHUB_BASE_REF}:CHANGELOG.md" > "${RUNNER_TEMP}/base-changelog.md"
-          uv run --no-project python scripts/changelog_currency.py --headings "${RUNNER_TEMP}/base-changelog.md" CHANGELOG.md
-
-  zizmor:
-    # Security audit of GitHub Actions workflows: check for impostor refs,
-    # dependency confusion, and stale action versions via zizmor.
+  # Invariant I1 (no I/O imports in core/) stays a CI job of its own: the previous `check` job ran
+  # it after the suite, and `gate` now needs it. The script reads only the standard library.
+  core-purity:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -65,6 +20,22 @@ jobs:
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-      - run: uvx zizmor==1.30.0 --min-severity high .github/workflows
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - run: uv run --no-project python scripts/check_core_purity.py
+  # >>> railform: owned by `railform adopt`; `railform adopt --check` fails on any edit
+  railform:
+    uses: grimaldost/railform/.github/workflows/python-ci.yml@65bf54ae6f4ed7bd027fee9e0806d9dfa2df3c48
+    permissions:
+      contents: read
+    with:
+      railform-sha: 65bf54ae6f4ed7bd027fee9e0806d9dfa2df3c48
+  gate:
+    if: always()
+    needs: [railform, core-purity]
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Fail when a needed job failed or was cancelled
+        if: always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+        shell: bash
+        run: exit 1
+  # <<< railform
