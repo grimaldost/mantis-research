@@ -113,3 +113,27 @@ class TestJournalGating:
         adapter = CountingAdapter()
         await _run(_config(journal_enabled=True), adapter, briefs_dir)
         assert len(adapter.calls) == 2
+
+
+class TestJournalDirectory:
+    """The journals directory exists only for a run that uses it."""
+
+    async def test_journal_off_creates_no_journal_directory(self, briefs_dir: Path) -> None:
+        adapter = CountingAdapter()
+        await _run(_config(journal_enabled=False), adapter, briefs_dir)
+        journal_dir = briefs_dir / 'jtest' / 'journals'
+        assert not journal_dir.exists()
+        assert len(adapter.calls) == 1
+        assert journal_dir not in adapter.calls[0].add_dirs
+
+    @pytest.mark.parametrize('enabled', [None, True])
+    async def test_journal_on_still_creates_its_directory(
+        self, briefs_dir: Path, enabled: bool | None
+    ) -> None:
+        adapter = CountingAdapter()
+        await _run(_config(journal_enabled=enabled), adapter, briefs_dir)
+        journal_dir = briefs_dir / 'jtest' / 'journals'
+        assert journal_dir.is_dir()
+        assert len(adapter.calls) == 2
+        assert journal_dir in adapter.calls[0].add_dirs
+        assert journal_dir in adapter.calls[1].add_dirs

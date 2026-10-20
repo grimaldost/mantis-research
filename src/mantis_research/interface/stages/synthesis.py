@@ -305,8 +305,14 @@ class SynthesisStage:
         dirs = RunDirs(ctx.batch.runner.layout, ctx.batch.batch_name)
         synthesis_dir = dirs.output('synthesis')
         journal_dir = dirs.output('journals')
+        # Journal (Turn 2) is optional: stages.journal.enabled=False skips it and
+        # the attempt succeeds on synthesis alone. None/True keep it on — the
+        # batch default stays journal-on (ADR-0002). The journals directory is
+        # created, and granted to the model, only when the turn will run.
+        journal_enabled = topic.stages.journal.enabled is not False
         synthesis_dir.mkdir(parents=True, exist_ok=True)
-        journal_dir.mkdir(parents=True, exist_ok=True)
+        if journal_enabled:
+            journal_dir.mkdir(parents=True, exist_ok=True)
         synthesis_path = synthesis_dir / f'{stem}.md'
         sidecar_path = synthesis_dir / f'{stem}.sidecar.json'
         # The model writes here; the runner publishes the merged document onto
@@ -361,7 +367,7 @@ class SynthesisStage:
                     dirs.output('gemini'),
                     dirs.output('openrouter'),
                     synthesis_dir,
-                    journal_dir,
+                    *((journal_dir,) if journal_enabled else ()),
                     *ctx.context_dirs,
                 ),
                 allowed_tools=('Read', 'Write'),
@@ -442,10 +448,7 @@ class SynthesisStage:
                 state.sidecar_error = failure
             state.sidecar_bytes = sidecar_path.stat().st_size if sidecar_path.exists() else None
 
-        # Journal (Turn 2) is optional: stages.journal.enabled=False skips it and
-        # the attempt succeeds on synthesis alone. None/True keep it on — the
-        # batch default stays journal-on (ADR-0002).
-        if topic.stages.journal.enabled is False:
+        if not journal_enabled:
             state.journal_bytes = None
             return _succeeded(state)
 
