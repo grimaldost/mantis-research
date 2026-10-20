@@ -40,7 +40,9 @@ commit, on every push to main and every pull request, on Ubuntu and Windows: the
 (lock check, sync, format check, lint, `ty`, the test suite), the private-reference and
 version-site checks, the commit lane (Conventional Commits, no AI-attribution lines, a branch
 name of the form `category/slug`), the changelog gate, the hook-wrapper and `railform adopt
---check` checks, and zizmor. Its `gate` job is the one status the branch ruleset requires.
+--check` checks, and zizmor. A kept `core-purity` job runs `scripts/check_core_purity.py`
+(invariant I1). Its `gate` job, which needs the railform job and `core-purity`, is the one
+status the branch ruleset requires.
 The pre-commit hooks are the local first line — hygiene, formatting, lint and the core-purity
 gate run on every commit, and the commit-msg hook holds the message to Conventional Commits and
 rejects AI-attribution lines. The test suite runs in CI, not at commit time. Keep these commands

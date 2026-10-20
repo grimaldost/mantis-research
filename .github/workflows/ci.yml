@@ -9,6 +9,18 @@ on:
 permissions:
   contents: read
 jobs:
+  # Invariant I1 (no I/O imports in core/) stays a CI job of its own: the previous `check` job ran
+  # it after the suite, and `gate` now needs it. The script reads only the standard library.
+  core-purity:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - run: uv run --no-project python scripts/check_core_purity.py
   # >>> railform: owned by `railform adopt`; `railform adopt --check` fails on any edit
   railform:
     uses: grimaldost/railform/.github/workflows/python-ci.yml@65bf54ae6f4ed7bd027fee9e0806d9dfa2df3c48
@@ -18,7 +30,7 @@ jobs:
       railform-sha: 65bf54ae6f4ed7bd027fee9e0806d9dfa2df3c48
   gate:
     if: always()
-    needs: [railform]
+    needs: [railform, core-purity]
     runs-on: ubuntu-latest
     permissions: {}
     steps:

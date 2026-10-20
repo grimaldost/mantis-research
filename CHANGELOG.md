@@ -17,8 +17,8 @@ releases (starting with 0.1.0).
   branch-name rail on pull requests and the hook-wrapper check, and keeps zizmor. The hand-copied
   `scripts/changelog_currency.py` and `scripts/check_commit_message.py`, their tests and the
   `conventional-pre-commit` hook are replaced by `railform changelog-gate` and `railform
-  commit-msg`/`commit-range`. The core-purity script stays as a pre-commit hook and is run in CI
-  by `test_real_core_tree_is_pure`.
+  commit-msg`/`commit-range`. The core-purity script stays as a pre-commit hook and as a kept
+  `core-purity` job in `ci.yml`, which `gate` needs.
 - **The git hooks moved to `.githooks/`** (mode `100755`, railform's wrappers). Arm each clone
   once with `railform arm`; a clone still armed to `scripts/git-hooks` fails its commits there,
   where stubs say so. The test suite no longer runs on every commit; CI runs it.
