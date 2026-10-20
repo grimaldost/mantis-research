@@ -9,6 +9,12 @@ releases (starting with 0.1.0).
 
 ### Fixed
 
+- **The latency figure no longer says a topic's substrates run concurrently.**
+  The `research` skill and a code comment said the substrates run concurrently,
+  so the research stage tracks the slowest one. They run one after another, so
+  the stage takes about the sum of their durations (5–10 min for the default
+  three) and each added substrate adds its own. Three field runs' timing tables
+  agree. Only the wording changes; the stage still awaits each substrate in turn.
 - **A real run after a same-name dry run runs every substrate.** In 0.7.1 a
   `research(dry_run=true, name=X)` followed by `research(name=X)` returned a
   run whose research stage exited 0 in under two seconds with no briefs and no

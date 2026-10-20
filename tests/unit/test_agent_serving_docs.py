@@ -130,6 +130,12 @@ class TestTheLatencyBulletCountsTurnsAndNamesTheQueue:
         bullet = _latency_bullet()
         assert 'sidecar turn currently does not' in bullet
 
+    def test_the_bullet_says_substrates_run_one_after_another(self) -> None:
+        bullet = _latency_bullet()
+        assert 'one after another' in bullet
+        assert 'concurrently' not in bullet
+        assert 'tracks the slowest' not in bullet
+
     def test_the_bullet_cites_the_constants_the_code_exports(self) -> None:
         from mantis_research.interface.research_service import (
             LOCAL_SEAT_TURN_MEDIAN_MINUTES,
