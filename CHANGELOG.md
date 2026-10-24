@@ -7,6 +7,8 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-24
+
 ### Changed
 
 - **Repository mechanics come from railform, pinned at one commit.** CI is now a call to
