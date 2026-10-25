@@ -3,7 +3,7 @@
 *.md text
 *.json text
 *.toml text
-# The git hooks are executed by sh; a CRLF checkout puts a stray \r in the
-# shebang and the hook dies before it runs the gate.
+# >>> railform: owned by `railform adopt`; `railform adopt --check` fails on any edit
 .githooks/** text eol=lf
 scripts/git-hooks/** text eol=lf
+# <<< railform
