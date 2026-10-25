@@ -7,6 +7,15 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+### Changed
+
+- **railform moves to the 0.3.0 release pin.** The `ci.yml`, `railform-tag-watch.yml` and
+  `.pre-commit-config.yaml` pins name the commit the `v0.3.0` tag points at. The stubs in
+  `scripts/git-hooks/` now also give the one-shot form (`git -c core.hooksPath=.githooks
+  <command>`), and `.gitattributes` holds the marked region `railform adopt` owns (`.githooks/**`
+  and `scripts/git-hooks/**` as `text eol=lf`), which replaces the two hand-written lines it
+  repeats. The frame needs no new row.
+
 ## [0.8.0] - 2026-10-24
 
 ### Changed
@@ -26,12 +35,6 @@ releases (starting with 0.1.0).
   where stubs say so. The test suite no longer runs on every commit; CI runs it.
 - **Release tags are judged daily and on every tag push** by `railform-tag-watch.yml`, beside
   the existing `tag-watch.yml`: annotated, on the release PR's merge commit, from `v0.7.2` on.
-- **railform moves to the 0.3.0 release pin.** The `ci.yml`, `railform-tag-watch.yml` and
-  `.pre-commit-config.yaml` pins name the commit the `v0.3.0` tag points at. The stubs in
-  `scripts/git-hooks/` now also give the one-shot form (`git -c core.hooksPath=.githooks
-  <command>`), and `.gitattributes` holds the marked region `railform adopt` owns (`.githooks/**`
-  and `scripts/git-hooks/**` as `text eol=lf`), which replaces the two hand-written lines it
-  repeats. The frame needs no new row.
 
 ### Fixed
 
