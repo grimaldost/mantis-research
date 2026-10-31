@@ -111,6 +111,8 @@ class FrontierSpec:
 #: before ``/`` in a model id). Verified on 2026-06-27 against the live
 #: ``/api/v1/models`` catalog: each ``require``/``demote`` pair selects the
 #: vendor's current flagship, and each ``pinned`` id exists in the catalog.
+#: The ``openai`` row was re-verified on 2026-10-31: GPT-5.6 ships in three
+#: tiers, Sol (the flagship), Terra and Luna, so the two smaller tiers are demoted.
 #:
 #: Maintenance: when a vendor renames its flagship family (e.g. a future
 #: ``gpt-6`` or ``gemini-4``), update that row's ``require`` tokens and
@@ -120,9 +122,19 @@ class FrontierSpec:
 #: ``EXCLUDED_VARIANTS`` instead, once, rather than in every vendor's demote list.
 OPENROUTER_FRONTIER: dict[str, FrontierSpec] = {
     'openai': FrontierSpec(
-        pinned='openai/gpt-5.5-pro',
+        pinned='openai/gpt-5.6-sol-pro',
         require=('gpt-5',),
-        demote=('-mini', '-nano', '-image', '-audio', '-chat', '-codex', 'chat-latest'),
+        demote=(
+            '-mini',
+            '-nano',
+            '-image',
+            '-audio',
+            '-chat',
+            '-codex',
+            'chat-latest',
+            '-terra',
+            '-luna',
+        ),
     ),
     'google': FrontierSpec(
         pinned='google/gemini-3.1-pro-preview',

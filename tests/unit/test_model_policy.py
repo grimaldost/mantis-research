@@ -99,6 +99,21 @@ class TestSelectOpenRouterFrontier:
         ]
         assert mp.select_openrouter_frontier('openai', catalog) == 'openai/gpt-5.5-pro'
 
+    def test_gpt_5_6_resolves_to_the_sol_tier(self) -> None:
+        # The live catalog (2026-10-31) lists GPT-5.6 in three tiers created seconds apart:
+        # Sol (the flagship), Terra and Luna, with Luna newest. Terra and Luna are smaller
+        # tiers, so auto:openai must land on Sol; sol-pro is the newest Sol entry.
+        catalog = [
+            {'id': 'openai/gpt-5.6-sol', 'created': 1783590850},
+            {'id': 'openai/gpt-5.6-sol-pro', 'created': 1783590854},
+            {'id': 'openai/gpt-5.6-sol-pro:batch', 'created': 1783590854},
+            {'id': 'openai/gpt-5.6-terra', 'created': 1783590857},
+            {'id': 'openai/gpt-5.6-terra-pro', 'created': 1783590861},
+            {'id': 'openai/gpt-5.6-luna', 'created': 1783590864},
+            {'id': 'openai/gpt-5.6-luna-pro', 'created': 1783590867},
+        ]
+        assert mp.select_openrouter_frontier('openai', catalog) == 'openai/gpt-5.6-sol-pro'
+
 
 class TestPinnedFallbacks:
     def test_every_vendor_has_a_self_consistent_pin(self) -> None:
@@ -107,7 +122,7 @@ class TestPinnedFallbacks:
             assert spec.pinned.startswith(f'{vendor}/'), (vendor, spec.pinned)
 
     def test_pinned_lookup(self) -> None:
-        assert mp.pinned_openrouter_frontier('openai') == 'openai/gpt-5.5-pro'
+        assert mp.pinned_openrouter_frontier('openai') == 'openai/gpt-5.6-sol-pro'
         assert mp.pinned_openrouter_frontier('acme') is None
 
 
