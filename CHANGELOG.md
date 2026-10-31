@@ -16,6 +16,15 @@ releases (starting with 0.1.0).
   and `scripts/git-hooks/**` as `text eol=lf`), which replaces the two hand-written lines it
   repeats. The frame needs no new row.
 
+### Fixed
+
+- **`auto:openai` resolves to OpenAI's flagship tier, GPT-5.6 Sol.** The live OpenRouter catalog
+  lists GPT-5.6 in three tiers created seconds apart: Sol (the flagship), Terra and Luna. The
+  newest-`created` rule picked `openai/gpt-5.6-luna-pro`, the cost-efficient tier. The `openai`
+  row of `OPENROUTER_FRONTIER` now demotes `-terra` and `-luna`, so the pick is
+  `openai/gpt-5.6-sol-pro`, and the offline fallback pin moves from `openai/gpt-5.5-pro` to
+  `openai/gpt-5.6-sol-pro`.
+
 ## [0.8.0] - 2026-10-24
 
 ### Changed
