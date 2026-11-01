@@ -7,6 +7,17 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+### Changed
+
+- **railform moves to the 0.4.0 release pin.** The `ci.yml`, `railform-tag-watch.yml` and
+  `.pre-commit-config.yaml` pins name the commit the `v0.4.0` tag points at, the `.githooks/`
+  wrappers are the 0.4.0 ones, and the `gate` job's `runs-on` line is the one `railform adopt`
+  writes. The frame needs no new row: this repository sets neither key 0.4.0 removed
+  (`private_refs.names_enabled`, `private_refs.names_file_env`). From this pin `railform
+  private-refs`, in the hook and in CI, judges home-directory paths only: no project gate checks
+  names, and that check takes an environment's egress hook, which railform does not ship. The new
+  `pr-text` findings `unclosed-fence` and `carriage-return` apply to pull request bodies.
+
 ## [0.8.1] - 2026-11-01
 
 ### Security
