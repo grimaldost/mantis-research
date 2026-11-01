@@ -7,6 +7,18 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-01
+
+### Security
+
+- **The lock moves past its open security advisories.** certifi 2026.10.19 fixes the critical
+  GHSA-6q48-6c7w-9gw2 (bundled emSign root certificates whose intermediate keys were compromised).
+  It reaches a running copy: the MCP server runs on this lock, and its OpenRouter calls go through
+  `httpx`, which verifies with certifi. msgpack 1.2.3 (GHSA-j586-36cw-2gc2, high), filelock 4.2.4
+  and virtualenv 21.14.13 close the other open alerts; those three reach only the development
+  tools. The same change takes pydantic 2.14.1, pytest-asyncio 1.4.0, ruff 0.17.1 and hypothesis
+  6.170.1, and moves the `core-purity` job's setup-uv pin to v10.3.3.
+
 ### Changed
 
 - **railform moves to the 0.3.0 release pin.** The `ci.yml`, `railform-tag-watch.yml` and
