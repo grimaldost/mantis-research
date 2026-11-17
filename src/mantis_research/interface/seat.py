@@ -38,7 +38,7 @@ import structlog
 from mantis_research.core.progress import RunEvent, emit
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
+    from collections.abc import AsyncGenerator, Generator
     from pathlib import Path
 
     from mantis_research.core.progress import ProgressCallback
@@ -300,7 +300,7 @@ def seat_lock(
     *,
     poll_seconds: float = 5.0,
     on_event: ProgressCallback | None = None,
-) -> Iterator[SeatHolder]:
+) -> Generator[SeatHolder]:
     """Hold the local Claude seat for the duration of the block (synchronous).
 
     Blocks while a *live* owner holds it, saying so on every poll — waiting for
@@ -336,7 +336,7 @@ async def async_seat_lock(
     *,
     poll_seconds: float = 5.0,
     on_event: ProgressCallback | None = None,
-) -> AsyncIterator[SeatHolder]:
+) -> AsyncGenerator[SeatHolder]:
     """:func:`seat_lock` for an adapter running on the event loop.
 
     Same contract, ticket included; the wait yields to the loop instead of

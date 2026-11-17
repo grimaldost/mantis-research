@@ -122,7 +122,7 @@ def _total_bytes(t: dict[str, object]) -> int:
         total = 0
         for s in subsessions:
             if isinstance(s, dict):
-                ob = s.get('output_bytes')  # ty: ignore[invalid-argument-type]
+                ob = s.get('output_bytes')
                 total += int(ob or 0)
         return total
     for key in (
