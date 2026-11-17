@@ -7,6 +7,14 @@ releases (starting with 0.1.0).
 
 ## [Unreleased]
 
+### Security
+
+- **The lock takes opentelemetry-api 1.45.2**, which fixes the medium-severity advisory behind Dependabot
+  alert #56. The development lock also takes ty 0.0.94; `seat_lock` and `async_seat_lock` are annotated
+  `Generator[SeatHolder]` and `AsyncGenerator[SeatHolder]` instead of the deprecated
+  `Iterator`/`AsyncIterator` forms, and an unused `ty: ignore` in `interface/cli/monitor.py` is removed.
+  No behaviour changes.
+
 ### Changed
 
 - **railform moves to the 0.4.0 release pin.** The `ci.yml`, `railform-tag-watch.yml` and
