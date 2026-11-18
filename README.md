@@ -42,7 +42,9 @@ uv tool install git+https://github.com/grimaldost/mantis-research
 ```
 
 This puts two commands on your `PATH`: **`mantis`** (the CLI) and **`mantis-mcp`**
-(the stdio MCP server agents connect to). Or run it without installing:
+(the stdio MCP server agents connect to). A `uv tool` install does not update itself: to move to a
+release, reinstall with `uv tool install --force git+https://github.com/grimaldost/mantis-research@vX.Y.Z`
+(or `uv tool upgrade mantis-research` for the unpinned form shown). Or run it without installing:
 
 ```bash
 uvx --from git+https://github.com/grimaldost/mantis-research mantis research "…"
