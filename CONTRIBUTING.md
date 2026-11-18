@@ -152,6 +152,9 @@ a whole feature; this rule is what that taught).
    release PR reviewed. The release PR's branch is `release/X.Y.Z`, which is
    what `railform release-check` (the `railform-tag-watch` workflow, on every
    tag push and daily) uses to find the PR a tag belongs to; it judges only
-   tags from `v0.7.2` on (`release.since` in `railform.toml`). The documented
-   install paths (`uv tool install git+…`, the plugin marketplace) pick
-   releases up from GitHub.
+   tags from `v0.7.2` on (`release.since` in `railform.toml`). The plugin
+   marketplace picks a release up at the next session start; a `uv tool` copy
+   moves only when reinstalled at the new tag (`uv tool install --force
+   git+https://github.com/grimaldost/mantis-research@vX.Y.Z`), and it
+   resolves its own dependencies rather than reading `uv.lock`, so a security
+   release ends with that reinstall.
